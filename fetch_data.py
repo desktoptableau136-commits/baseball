@@ -938,7 +938,7 @@ def fetch_recent_hitter_stats(days: int = 7) -> list:
             df[c] = pd.to_numeric(df[c], errors="coerce")
         df.dropna(subset=["PlayerName"], inplace=True)
         df["PlayerName"] = df["PlayerName"].str.strip()
-        log(f"  Recent hitter stats ({start_dt} â†’ {end_dt}): {len(df)} rows")
+        log(f"  Recent hitter stats ({start_dt} to {end_dt}): {len(df)} rows")
         return df.to_dict(orient="records")
     except Exception as e:
         log(f"  Recent hitter stats FAILED: {e}")
@@ -1034,29 +1034,29 @@ def main():
     print(f"  {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print("=" * 60)
 
-    print("\n[1/9] Connecting to ESPNâ€¦")
+    print("\n[1/10] Connecting to ESPN...")
     league = connect_espn()
     if not league:
         sys.exit("Could not connect to ESPN â€” check credentials in ESPN_CONFIG.")
 
-    print("\n[2/9] Building pitcher data (FantasyPros + ESPN + FanGraphs advanced)â€¦")
+    print("\n[2/10] Building pitcher data (FantasyPros + ESPN + FanGraphs advanced)...")
     pitchers = build_pitcher_data(league)
     print(f"       {len(pitchers)} pitcher rows")
 
-    print("\n[3/9] Building hitter data (FantasyPros + ESPN + FanGraphs + Statcast)â€¦")
+    print("\n[3/10] Building hitter data (FantasyPros + ESPN + FanGraphs + Statcast)...")
     hitters = build_hitter_data(league)
     print(f"       {len(hitters)} hitter rows")
 
-    print("\n[4/9] Pulling roto scores...")
+    print("\n[4/10] Pulling roto scores...")
     roto = get_all_roto(league)
     weekly_results = get_weekly_matchup_results(league)
     print(f"       {len(roto)} roto rows, {len(weekly_results)} weeks of matchup results")
 
-    print("\n[5/9] Pulling transactionsâ€¦")
+    print("\n[5/10] Pulling transactions...")
     transactions = get_transactions(league)
     print(f"       {len(transactions)} transaction rows")
 
-    print("\n[6/9] Pulling standingsâ€¦")
+    print("\n[6/10] Pulling standings...")
     standings = get_standings(league)
     print(f"       {len(standings)} teams")
 
@@ -1064,22 +1064,22 @@ def main():
     normalized = {" ".join(n.split()): n for n in espn_names}
     my_team = normalized.get(" ".join(MY_TEAM_NAME.split())) or MY_TEAM_NAME or (espn_names[0] if espn_names else "")
 
-    print("\n[7/9] Pulling current week matchupâ€¦")
+    print("\n[7/10] Pulling current week matchup...")
     current_matchup = get_current_matchup(league, my_team)
     if current_matchup:
         print(f"       Week {current_matchup['week']}: {my_team} vs {current_matchup['opp_team']} ({current_matchup['wins']}-{current_matchup['losses']})")
     else:
         print("       No active matchup found.")
 
-    print("\n[8/10] Fetching last-7-day hitter statsâ€¦")
+    print("\n[8/10] Fetching last-7-day hitter stats...")
     recent_hitting = fetch_recent_hitter_stats(days=7)
     print(f"       {len(recent_hitting)} hitters with recent stats")
 
-    print("\n[9/10] Fetching last-7-day pitcher stats")
+    print("\n[9/10] Fetching last-7-day pitcher stats...")
     recent_pitching = fetch_recent_pitcher_stats(days=7)
     print(f"       {len(recent_pitching)} pitchers with recent stats")
 
-    print("\n[10/10] Writing snapshotâ€¦")
+    print("\n[10/10] Writing snapshot...")
     snapshot = {
         "refreshed_at":    datetime.now().isoformat(),
         "my_team":         my_team,

@@ -526,7 +526,8 @@ def section_head(title, sub=""):
 def make_sparkline(roto, my_team, current_week, n=99, weekly_results=None):
     """
     SVG line chart scaled against the league-wide 5th/95th percentile.
-    Dots: green filled = peak week, green ring = matchup win, grey = loss/unknown.
+    Dots: medal (🏅) = ranked #1 roto that week among all 12 teams (appears above dot);
+          green filled circle = personal peak week; grey = everything else.
     Returns (svg_html, peak_label) tuple.
     """
     my_key = " ".join(my_team.split())
@@ -585,7 +586,7 @@ def make_sparkline(roto, my_team, current_week, n=99, weekly_results=None):
             )
         elif is_first:
             dots.append(
-                f'<circle cx="{cx:.1f}" cy="{cy:.1f}" r="2" fill="#f59e0b"/>'
+                f'<circle cx="{cx:.1f}" cy="{cy:.1f}" r="2" fill="{YELLOW}"/>'
                 f'<text x="{cx:.1f}" y="{cy - 4:.1f}" text-anchor="middle" font-size="9">&#127941;</text>'
             )
         else:
@@ -666,7 +667,7 @@ def build_matchup_section(matchup, logos=None):
         f'border-radius:6px;margin-bottom:12px;">'
         f'<tr>'
         f'<td style="width:42%;padding:12px 16px;font-size:13px;font-weight:800;color:{ACCENT};text-align:center;">'
-        f'{my_logo_html}Guerrero Warfare &#8592;</td>'
+        f'{my_logo_html}{MY_TEAM} &#8592;</td>'
         f'<td style="width:16%;text-align:center;padding:12px 8px;">'
         f'<div style="font-size:24px;font-weight:900;color:{score_color};">{score_str}</div>'
         f'<div style="font-size:10px;color:{MUTED};text-transform:uppercase;letter-spacing:.5px;">{status}</div>'
@@ -712,7 +713,7 @@ def build_matchup_section(matchup, logos=None):
     table = (
         f'<table style="width:100%;border-collapse:collapse;margin-bottom:24px;font-size:13px;">'
         f'<thead><tr>'
-        f'<th style="{TH_S}width:42%;text-align:center;">Guerrero Warfare</th>'
+        f'<th style="{TH_S}width:42%;text-align:center;">{MY_TEAM}</th>'
         f'<th style="{TH_S}width:16%;text-align:center;"></th>'
         f'<th style="{TH_S}width:42%;text-align:center;">{opp_short}</th>'
         f'</tr></thead><tbody>{rows}</tbody></table>'
@@ -1048,7 +1049,6 @@ def build_email(snap):
 
     # Build per-week roto scores and rank-based results (used by sparkline + KPI stats)
     my_key = " ".join(my_team.split())
-    my_key_norm = my_key
     week_scores = {}
     for row in roto:
         t = " ".join((row.get("Team") or "").split())
@@ -1059,21 +1059,22 @@ def build_email(snap):
     wk_ranks = []; wk_pts = []
     roto_week_results = {}
     for wk in sorted(week_scores):
+        if wk >= current_week_num:   # skip current (partial) week
+            continue
         scores = week_scores[wk]
-        if my_key_norm not in scores:
+        if my_key not in scores:
             continue
         ranked = sorted(scores.items(), key=lambda x: -x[1])
         wk_res = {}
         for i, (t, _) in enumerate(ranked):
             wk_res[t] = 'W' if i == 0 else 'L'
         roto_week_results[wk] = wk_res
-        my_rank = next((i + 1 for i, (t, _) in enumerate(ranked) if t == my_key_norm), None)
+        my_rank = next((i + 1 for i, (t, _) in enumerate(ranked) if t == my_key), None)
         if my_rank:
             wk_ranks.append(my_rank)
-            wk_pts.append(scores[my_key_norm])
+            wk_pts.append(scores[my_key])
 
-    spark_result = make_sparkline(roto, my_team, current_week_num, weekly_results=roto_week_results)
-    sparkline, peak_label = spark_result if spark_result else ("", "")
+    sparkline, peak_label = make_sparkline(roto, my_team, current_week_num, weekly_results=roto_week_results)
     spark_trend = ""
     trend_scores = []
     for row in roto:
@@ -1121,7 +1122,7 @@ def build_email(snap):
     header = f"""
 <div style="background:linear-gradient(135deg,#0b1a38 0%,#0f172a 100%);padding:22px 28px;border-bottom:2px solid {BORDER};">
   <div style="color:{MUTED};font-size:10px;text-transform:uppercase;letter-spacing:1px;">{today}</div>
-  <div style="margin-top:6px;vertical-align:middle;">{my_logo_html}<span style="color:{TEXT};font-size:24px;font-weight:900;letter-spacing:-1px;vertical-align:middle;">Guerrero Warfare</span></div>
+  <div style="margin-top:6px;vertical-align:middle;">{my_logo_html}<span style="color:{TEXT};font-size:24px;font-weight:900;letter-spacing:-1px;vertical-align:middle;">{my_team}</span></div>
   <div style="color:#4b7bc4;font-size:11px;letter-spacing:.8px;margin-top:4px;text-transform:uppercase;">Daily Fantasy Digest</div>
 </div>"""
 
