@@ -1,6 +1,6 @@
 # Fantasy Baseball — Daily Digest
 
-Automated morning email digest for ESPN fantasy league 277836. No cloud auth. No manual logins. Runs daily at 7 AM via Windows Task Scheduler.
+Automated morning email digest for ESPN fantasy league 277836. No cloud auth. No manual logins. Runs daily at 7 AM via GitHub Actions.
 
 ---
 
@@ -61,14 +61,18 @@ Open `digest_preview.html` in a browser to inspect the output locally.
 
 ### Automation
 
-Windows Task Scheduler task **GuerreroDailyDigest** runs `run_digest.bat` every day at 7:00 AM.
-`WakeToRun` and `StartWhenAvailable` are enabled so it fires even if the laptop was asleep.
+GitHub Actions runs `.github/workflows/daily-digest.yml` every day at 7:00 AM EDT (11:00 UTC).
+Trigger a manual run anytime from the **Actions** tab → **Daily Fantasy Baseball Digest** → **Run workflow**.
 
-```bash
-schtasks /query /tn "GuerreroDailyDigest"    # verify it's scheduled
-```
+Required repository secrets (Settings → Secrets → Actions):
 
-Logs are written to `logs\digest.log` after each run.
+| Secret | Value |
+|--------|-------|
+| `GMAIL_APP_PASSWORD` | 16-char Google App Password |
+| `ESPN_SWID` | ESPN swid cookie value |
+| `ESPN_S2` | ESPN espn_s2 cookie value |
+
+Logs are written to `logs/digest.log` after each local run.
 
 ### Recipients
 
@@ -88,11 +92,13 @@ Sections appear in this order:
 | **KPI Row** | Record, standing, roto rank, upcoming starts count |
 | **This Week's Category Rankings** | Roto rank across all 12 scoring categories for the current matchup week |
 | **Current Week Matchup** | Category-by-category breakdown vs. this week's opponent; score banner with team logos |
+| **Category Pulse** | 12 visual cards (hitting + pitching) showing current value vs. opponent, a fill bar, and end-of-week projections based on each team's historical weekly averages. ⚡ = within striking distance. ▲/▼FLIP = projection flips the current result. |
+| **Roster Hot/Cold** | Your hitters sorted hottest → coldest by last-7-day OPS vs. season OPS. 🔥/↑/↓/❄ indicators. |
 | **Positional Breakdown** | Your weakest player at each position vs. best FA upgrade available (↑ = upgrade) |
 | **Roster Alerts** | Injured players on your roster (omitted when none) |
-| **FA Pickup: Starting Pitchers** | Free agents with upcoming starts, sorted by spFAScore |
-| **FA Pickup: Hitters** | Top available hitters by composite score |
-| **My Upcoming Starts** | Your pitchers with starts in the next 7 days |
+| **FA Pickup: Starting Pitchers** | Free agents with upcoming starts sorted by spFAScore. Columns: ERA + L7 ERA with hot/cold indicator. |
+| **FA Pickup: Hitters** | Top available hitters by composite score. Columns: R / HR / RBI / SB / OPS + L7 OPS with hot/cold indicator. |
+| **My Upcoming Starts** | Your pitchers with starts in the next 7 days. Columns: ERA + L7 ERA with hot/cold indicator. |
 | **My Category Rankings** | Season-to-date roto rank across all 12 categories |
 | **League Luck Standings** | Every team's W-L vs. roto rank; positive luck = overperforming |
 
@@ -122,6 +128,8 @@ Score badges: green ≥ 72 · blue ≥ 52 · yellow ≥ 32 · red < 32
 | Data | Source |
 |------|--------|
 | Pitcher / hitter stats (7d / 15d / 30d / season) | FantasyPros — public, no auth |
+| Last-7-day hitter stats (OPS, R, HR, RBI, SB) | FanGraphs via `pybaseball.batting_stats_range` |
+| Last-7-day pitcher stats (ERA, WHIP, K) | FanGraphs via `pybaseball.pitching_stats_range` |
 | Roster / FA / transactions / roto / team logos | ESPN Fantasy API (`espn_api`) |
 | Probable starters | MLB Stats API — public, no auth |
 | Opponent team OPS | MLB Stats API — public, no auth |
@@ -155,6 +163,10 @@ Projected starts show `(proj.)` in the digest. Falls back to per-game live feed 
 
 **current_matchup:** week, my_team, opp_team, wins, losses, ties, categories[]
 
+**recent_hitting:** PlayerName, G, PA, AB, R, HR, RBI, SB, OBP, SLG, OPS — last 7 days, all qualified hitters
+
+**recent_pitching:** PlayerName, G, GS, IP, ERA, WHIP, BB — last 7 days, all qualified pitchers
+
 ---
 
 ## Player Name Patches
@@ -177,14 +189,14 @@ HITTER_NAME_PATCHES = {
 
 ```
 baseball/
-├── fetch_data.py       # Data pipeline → data/snapshot.json  (~60s to run)
-├── send_digest.py      # Email builder + sender
-├── dashboard.html      # Legacy local dashboard (secondary, not actively maintained)
-├── run_digest.bat      # Task Scheduler launcher
-├── .env                # GMAIL_APP_PASSWORD (do not share)
-├── .env.example        # Template for .env
+├── fetch_data.py                        # Data pipeline → data/snapshot.json  (~90s to run)
+├── send_digest.py                       # Email builder + sender
+├── .env                                 # GMAIL_APP_PASSWORD (do not share)
+├── .env.example                         # Template for .env
+├── requirements.txt                     # pip dependencies
+├── .github/workflows/daily-digest.yml  # GitHub Actions cron schedule
 ├── data/
-│   └── snapshot.json   # ~1.2 MB data cache, refreshed daily
+│   └── snapshot.json                    # ~1.5 MB data cache, refreshed daily
 └── logs/
-    └── digest.log      # Send history
+    └── digest.log                       # Send history (local runs only)
 ```

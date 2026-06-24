@@ -470,6 +470,41 @@ def pos_stat_line(r, pos):
     return f'<div style="color:{MUTED};font-size:10px;margin-top:2px;">{line}</div>'
 
 
+def hot_cold_cell(season_val, recent_val, lower_better=False, dec=2, hot_thresh=None, warm_thresh=None):
+    """Table cell showing recent stat + hot/cold icon vs season baseline."""
+    try:
+        sv = float(season_val or 0)
+        rv = float(recent_val or 0)
+        if sv <= 0 or rv <= 0:
+            return f'<td style="{TDC}color:{MUTED};">—</td>'
+    except (TypeError, ValueError):
+        return f'<td style="{TDC}color:{MUTED};">—</td>'
+
+    ht = hot_thresh  if hot_thresh  is not None else (0.75 if lower_better else 0.050)
+    wt = warm_thresh if warm_thresh is not None else (0.25 if lower_better else 0.020)
+
+    delta = (sv - rv) if lower_better else (rv - sv)   # positive = improvement
+
+    if delta >= ht:
+        icon, color = "🔥", GREEN
+    elif delta >= wt:
+        icon, color = "↑", GREEN
+    elif delta <= -ht:
+        icon, color = "❄", RED
+    elif delta <= -wt:
+        icon, color = "↓", RED
+    else:
+        icon, color = "", MUTED
+
+    val_str = f"{rv:.{dec}f}"
+    return (
+        f'<td style="{TDC}">'
+        f'<span style="color:{color};">{val_str}</span>'
+        f'{"&nbsp;" + icon if icon else ""}'
+        f'</td>'
+    )
+
+
 def inj_tag(r):
     inj = str(r.get("FreeAgentInjuryStatus") or "").upper()
     if not inj or inj in ("", "ACTIVE"):
@@ -593,6 +628,107 @@ def build_matchup_section(matchup, logos=None):
         section_head(f"Week {week} Matchup", f"vs. {opp} · current standings") +
         score_banner +
         table
+    )
+
+
+# ── ROSTER HOT/COLD ──────────────────────────────────────────────────────────
+
+def build_hot_cold_section(hitters, recent_hitting, my_team):
+    if not recent_hitting:
+        return ""
+
+    # Index recent stats by player name
+    recent = {r["PlayerName"]: r for r in recent_hitting if r.get("PlayerName")}
+
+    # Get my rostered hitters with season OPS
+    season_year = YEAR
+    my_hitters = [
+        r for r in hitters
+        if " ".join((r.get("FantasyTeam") or "").split()) == " ".join(my_team.split())
+        and int(r.get("Dataset", 0)) == season_year
+        and float(r.get("OPS") or 0) > 0
+    ]
+    if not my_hitters:
+        return ""
+
+    rows_data = []
+    for r in my_hitters:
+        name = r["PlayerName"]
+        season_ops = float(r.get("OPS") or 0)
+        rec = recent.get(name, {})
+        recent_ops = float(rec.get("OPS") or 0) if rec else None
+        recent_g   = int(rec.get("G") or 0) if rec else 0
+
+        delta = (recent_ops - season_ops) if recent_ops else None
+        rows_data.append({
+            "name":       name,
+            "pos":        r.get("Position", ""),
+            "team":       r.get("Team", ""),
+            "season_ops": season_ops,
+            "recent_ops": recent_ops,
+            "recent_g":   recent_g,
+            "delta":      delta,
+            "inj":        inj_tag(r),
+        })
+
+    # Sort: players with recent data first (by delta desc), then no-data players
+    with_data    = sorted([r for r in rows_data if r["delta"] is not None], key=lambda x: -x["delta"])
+    without_data = [r for r in rows_data if r["delta"] is None]
+    sorted_rows  = with_data + without_data
+
+    rows_html = ""
+    for i, r in enumerate(sorted_rows):
+        bg = f"background:{SURFACE2};" if i % 2 else ""
+        delta = r["delta"]
+
+        if delta is None:
+            delta_html = f'<span style="color:{MUTED};">—</span>'
+            arrow = ""
+        elif delta >= 0.050:
+            delta_html = f'<span style="color:{GREEN};font-weight:700;">+{delta:.3f}</span>'
+            arrow = f'<span style="color:{GREEN};">🔥</span>'
+        elif delta >= 0.015:
+            delta_html = f'<span style="color:{GREEN};">+{delta:.3f}</span>'
+            arrow = f'<span style="color:{GREEN};">↑</span>'
+        elif delta <= -0.050:
+            delta_html = f'<span style="color:{RED};font-weight:700;">{delta:.3f}</span>'
+            arrow = f'<span style="color:{RED};">❄</span>'
+        elif delta <= -0.015:
+            delta_html = f'<span style="color:{RED};">{delta:.3f}</span>'
+            arrow = f'<span style="color:{RED};">↓</span>'
+        else:
+            delta_html = f'<span style="color:{MUTED};">{delta:+.3f}</span>'
+            arrow = ""
+
+        recent_str = (
+            f'{r["recent_ops"]:.3f} <span style="color:{MUTED};font-size:10px;">({r["recent_g"]}G)</span>'
+            if r["recent_ops"] else f'<span style="color:{MUTED};">—</span>'
+        )
+
+        rows_html += (
+            f'<tr style="{bg}">'
+            f'<td style="{TD_S}font-weight:600;">{team_logo(r["team"])}{r["name"]}{r["inj"]}</td>'
+            f'<td style="{TDC}color:{MUTED};">{r["pos"]}</td>'
+            f'<td style="{TDC}">{r["season_ops"]:.3f}</td>'
+            f'<td style="{TDC}">{recent_str}</td>'
+            f'<td style="{TDC}">{delta_html} {arrow}</td>'
+            f'</tr>'
+        )
+
+    n_hot  = sum(1 for r in with_data if r["delta"] >= 0.015)
+    n_cold = sum(1 for r in with_data if r["delta"] <= -0.015)
+    sub = f"{n_hot} hot · {n_cold} cold · last 7 days vs season OPS"
+
+    return (
+        section_head("Roster Hot/Cold", sub) +
+        f'<table style="width:100%;border-collapse:collapse;margin-bottom:24px;font-size:13px;">'
+        f'<thead><tr>'
+        f'<th style="{TH_S}">Hitter</th>'
+        f'<th style="{TH_S}text-align:center;">Pos</th>'
+        f'<th style="{TH_S}text-align:center;">Season OPS</th>'
+        f'<th style="{TH_S}text-align:center;">Last 7 OPS</th>'
+        f'<th style="{TH_S}text-align:center;">Δ</th>'
+        f'</tr></thead><tbody>{rows_html}</tbody></table>'
     )
 
 
@@ -782,13 +918,17 @@ def build_category_pulse(matchup, weekly_avgs=None, days_elapsed=None):
 # ── EMAIL BUILDER ─────────────────────────────────────────────────────────────
 
 def build_email(snap):
-    my_team    = snap.get("my_team", MY_TEAM)
-    pitchers   = snap.get("pitchers", [])
-    hitters    = snap.get("hitters", [])
-    roto       = snap.get("roto", [])
-    standings  = snap.get("standings", [])
-    refreshed  = snap.get("refreshed_at", "")[:10]
-    matchup    = snap.get("current_matchup", {})
+    my_team       = snap.get("my_team", MY_TEAM)
+    pitchers      = snap.get("pitchers", [])
+    hitters       = snap.get("hitters", [])
+    roto          = snap.get("roto", [])
+    standings     = snap.get("standings", [])
+    refreshed     = snap.get("refreshed_at", "")[:10]
+    matchup       = snap.get("current_matchup", {})
+    recent_hitting  = snap.get("recent_hitting",  [])
+    recent_pitching = snap.get("recent_pitching", [])
+    rec_h = {r["PlayerName"]: r for r in recent_hitting  if r.get("PlayerName")}
+    rec_p = {r["PlayerName"]: r for r in recent_pitching if r.get("PlayerName")}
 
     fa_sp     = fa_starters(pitchers)
     fa_hit    = fa_hitters(hitters)
@@ -872,6 +1012,7 @@ def build_email(snap):
                 bg = f"background:{SURFACE2};" if row_idx % 2 else ""
                 row_idx += 1
                 ha = r.get("PSP_HomeVAway", "")
+                rp = rec_p.get(r.get("PlayerName", ""), {})
                 rows += (
                     f'<tr style="{bg}">'
                     f'<td style="{TD_S}font-weight:600;">{team_logo(r.get("Team"))}{r.get("PlayerName","")}{inj_tag(r)}</td>'
@@ -879,6 +1020,7 @@ def build_email(snap):
                     f'{"&nbsp;<span style=\"color:#888;font-size:11px\">(proj.)</span>" if r.get("PSP_Projected") else ""}</td>'
                     f'<td style="{TDC}">{v(r.get("Team_OPS_Value"), 3)}</td>'
                     f'<td style="{TDC}">{v(r.get("ERA"), 2)}</td>'
+                    + hot_cold_cell(r.get("ERA"), rp.get("ERA"), lower_better=True, dec=2) +
                     f'<td style="{TDC}">{v(r.get("BarrelPctAllowed"), 1)}</td>'
                     f'<td style="{TDC}">{badge(pitcher_score(r))}</td>'
                     f'</tr>'
@@ -892,6 +1034,7 @@ def build_email(snap):
             f'<th style="{TH_S}text-align:center;">Matchup</th>'
             f'<th style="{TH_S}text-align:center;">Opp OPS</th>'
             f'<th style="{TH_S}text-align:center;">ERA</th>'
+            f'<th style="{TH_S}text-align:center;">L7 ERA</th>'
             f'<th style="{TH_S}text-align:center;">Brl%</th>'
             f'<th style="{TH_S}text-align:center;">Score</th>'
             f'</tr></thead><tbody>{rows}</tbody></table>'
@@ -907,6 +1050,7 @@ def build_email(snap):
         for i, r in enumerate(fa_sp):
             bg = f"background:{SURFACE2};" if i % 2 else ""
             ha = r.get("PSP_HomeVAway", "")
+            rp = rec_p.get(r.get("PlayerName", ""), {})
             rows += (
                 f'<tr style="{bg}">'
                 f'<td style="{TD_S}font-weight:600;">{team_logo(r.get("Team"))}{r.get("PlayerName","")}{inj_tag(r)}</td>'
@@ -916,6 +1060,7 @@ def build_email(snap):
                 f'{"&nbsp;<span style=\"color:#888;font-size:11px\">(proj.)</span>" if r.get("PSP_Projected") else ""}</td>'
                 f'<td style="{TDC}">{v(r.get("Team_OPS_Value"), 3)}</td>'
                 f'<td style="{TDC}">{v(r.get("ERA"), 2)}</td>'
+                + hot_cold_cell(r.get("ERA"), rp.get("ERA"), lower_better=True, dec=2) +
                 f'<td style="{TDC}">{v(r.get("BarrelPctAllowed"), 1)}</td>'
                 f'<td class="hide-mob" style="{TDC}">{v(r.get("K/IP"), 2)}</td>'
                 f'<td class="hide-mob" style="{TDC}">{vp(r.get("Kpct_P"))}</td>'
@@ -931,6 +1076,7 @@ def build_email(snap):
             f'<th style="{TH_S}text-align:center;">Matchup</th>'
             f'<th style="{TH_S}text-align:center;">Opp OPS</th>'
             f'<th style="{TH_S}text-align:center;">ERA</th>'
+            f'<th style="{TH_S}text-align:center;">L7 ERA</th>'
             f'<th style="{TH_S}text-align:center;">Brl%</th>'
             f'<th class="hide-mob" style="{TH_S}text-align:center;">K/IP</th>'
             f'<th class="hide-mob" style="{TH_S}text-align:center;">K%</th>'
@@ -948,16 +1094,17 @@ def build_email(snap):
         rows = ""
         for i, r in enumerate(fa_hit):
             bg = f"background:{SURFACE2};" if i % 2 else ""
+            rh = rec_h.get(r.get("PlayerName", ""), {})
             rows += (
                 f'<tr style="{bg}">'
                 f'<td style="{TD_S}font-weight:600;">{team_logo(r.get("Team"))}{r.get("PlayerName","")}{inj_tag(r)}</td>'
                 f'<td style="{TDC}color:{MUTED};">{r.get("Position","")}</td>'
-                f'<td style="{TDC}">{v(r.get("OPS"), 3)}</td>'
-                f'<td style="{TDC}">{v(r.get("wRCplus"), 0)}</td>'
-                f'<td style="{TDC}">{v(r.get("xwOBA"), 3)}</td>'
+                f'<td style="{TDC}">{v(r.get("R"), 0)}</td>'
                 f'<td style="{TDC}">{v(r.get("HR"), 0)}</td>'
+                f'<td style="{TDC}">{v(r.get("RBI"), 0)}</td>'
                 f'<td style="{TDC}">{v(r.get("SB"), 0)}</td>'
-                f'<td class="hide-mob" style="{TDC}">{v(r.get("Barrel_Pct"), 1)}</td>'
+                f'<td style="{TDC}">{v(r.get("OPS"), 3)}</td>'
+                + hot_cold_cell(r.get("OPS"), rh.get("OPS"), dec=3) +
                 f'<td style="{TDC}">{badge(r["_score"])}</td>'
                 f'</tr>'
             )
@@ -966,12 +1113,12 @@ def build_email(snap):
             f'<thead><tr>'
             f'<th style="{TH_S}">Hitter</th>'
             f'<th style="{TH_S}text-align:center;">Pos</th>'
-            f'<th style="{TH_S}text-align:center;">OPS</th>'
-            f'<th style="{TH_S}text-align:center;">wRC+</th>'
-            f'<th style="{TH_S}text-align:center;">xwOBA</th>'
+            f'<th style="{TH_S}text-align:center;">R</th>'
             f'<th style="{TH_S}text-align:center;">HR</th>'
+            f'<th style="{TH_S}text-align:center;">RBI</th>'
             f'<th style="{TH_S}text-align:center;">SB</th>'
-            f'<th class="hide-mob" style="{TH_S}text-align:center;">Brl%</th>'
+            f'<th style="{TH_S}text-align:center;">OPS</th>'
+            f'<th style="{TH_S}text-align:center;">L7 OPS</th>'
             f'<th style="{TH_S}text-align:center;">Score</th>'
             f'</tr></thead><tbody>{rows}</tbody></table>'
         )
@@ -979,7 +1126,7 @@ def build_email(snap):
     else:
         table = f'<p style="color:{MUTED};font-style:italic;margin-bottom:24px;">No FA hitters found.</p>'
 
-    fa_hit_section = section_head("FA Pickup — Hitters", "Top available hitters by composite score") + table
+    fa_hit_section = section_head("FA Pickup — Hitters", "Top available hitters · R / HR / RBI / SB / OPS · sorted by composite score") + table
 
     # ── Category Rankings ──────────────────────────────────────────────────────
     CAT_LABELS = [
@@ -1148,6 +1295,7 @@ def build_email(snap):
         week_cat_section,
         build_matchup_section(matchup, logos=team_logos),
         build_category_pulse(matchup, weekly_avgs=weekly_avgs, days_elapsed=days_elapsed),
+        build_hot_cold_section(hitters, recent_hitting, my_team),
         pos_section,
         alert_section,
         fa_sp_section,

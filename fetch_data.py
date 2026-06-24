@@ -1,7 +1,7 @@
-"""
+﻿"""
 fantasy_baseball/fetch_data.py
 ================================
-Replaces Baseball_All.ipynb — no Google Sheets, no Tableau, no manual auth.
+Replaces Baseball_All.ipynb â€” no Google Sheets, no Tableau, no manual auth.
 
 Run:  python fetch_data.py
 Output: data/snapshot.json  (consumed by send_digest.py)
@@ -24,7 +24,7 @@ import requests
 
 warnings.filterwarnings("ignore")
 
-# ── CONFIG ─────────────────────────────────────────────────────────────────────
+# â”€â”€ CONFIG â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # Credentials are read from environment variables (GitHub Actions secrets) and
 # fall back to the hardcoded values below for local development.
 _ESPN_S2_DEFAULT = (
@@ -42,12 +42,12 @@ ESPN_CONFIG = {
 }
 
 # Your team name on ESPN (used to identify your players in the digest)
-MY_TEAM_NAME = "Guerrero Warfare"   # e.g. "Sam's Sluggers" — leave blank to auto-detect first team
+MY_TEAM_NAME = "Guerrero Warfare"   # e.g. "Sam's Sluggers" â€” leave blank to auto-detect first team
 
 STAT_RANGES  = [7, 15, 30, ESPN_CONFIG["year"]]
 SP_DAYS_OUT  = 7          # how many days of probable starters to pull
 
-# Player name patches (ESPN name → FantasyPros name)
+# Player name patches (ESPN name â†’ FantasyPros name)
 PITCHER_NAME_PATCHES = {"Nestor Cortes": "Nestor Cortes Jr."}
 HITTER_NAME_PATCHES  = {
     "Cedric Mullins":  "Cedric Mullins II",
@@ -58,7 +58,7 @@ OUTPUT_DIR  = Path(__file__).parent / "data"
 OUTPUT_FILE = OUTPUT_DIR / "snapshot.json"
 CURRENT_YEAR = ESPN_CONFIG["year"]
 
-# ── HELPERS ────────────────────────────────────────────────────────────────────
+# â”€â”€ HELPERS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def innings_to_decimal(ip_str):
     try:
@@ -79,7 +79,7 @@ def extract_team(raw):
 
 
 def extract_fp_position(raw):
-    """Extract position(s) from FantasyPros player string: 'Name (TEAM - POS,POS)' → 'POS, POS'."""
+    """Extract position(s) from FantasyPros player string: 'Name (TEAM - POS,POS)' â†’ 'POS, POS'."""
     m = re.search(r"\(.*?-\s*(.*?)\)", raw)
     if not m:
         return ""
@@ -98,7 +98,7 @@ def lf_to_name(x):
     return x
 
 
-# ── ESPN CONNECTION ────────────────────────────────────────────────────────────
+# â”€â”€ ESPN CONNECTION â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def connect_espn():
     try:
@@ -109,14 +109,14 @@ def connect_espn():
             espn_s2=ESPN_CONFIG["espn_s2"],
             swid=ESPN_CONFIG["swid"],
         )
-        log(f"ESPN connected — {len(league.teams)} teams")
+        log(f"ESPN connected â€” {len(league.teams)} teams")
         return league
     except Exception as e:
         log(f"ESPN connection failed: {e}")
         return None
 
 
-# ── FANTASYPROS SCRAPER ────────────────────────────────────────────────────────
+# â”€â”€ FANTASYPROS SCRAPER â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def fetch_fantasypros(player_type: str) -> pd.DataFrame:
     """player_type: 'pitchers' or 'hitters'"""
@@ -137,7 +137,7 @@ def fetch_fantasypros(player_type: str) -> pd.DataFrame:
     return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
 
 
-# ── ESPN ROSTER / FA HELPERS ───────────────────────────────────────────────────
+# â”€â”€ ESPN ROSTER / FA HELPERS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 PITCHER_SLOTS = {"P", "SP", "RP"}
 HITTER_SLOTS  = {"C", "1B", "2B", "3B", "SS", "LF", "CF", "RF", "DH", "OF", "UTIL"}
@@ -224,10 +224,10 @@ def get_hitter_fa(league) -> pd.DataFrame:
     return pd.DataFrame(rows).drop_duplicates(subset="PlayerName")
 
 
-# ── PROBABLE STARTERS ──────────────────────────────────────────────────────────
+# â”€â”€ PROBABLE STARTERS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def _strip_accents(name: str) -> str:
-    """'Martín Pérez' → 'Martin Perez' so MLB API names match FantasyPros names."""
+    """'MartÃ­n PÃ©rez' â†’ 'Martin Perez' so MLB API names match FantasyPros names."""
     return "".join(
         c for c in unicodedata.normalize("NFD", name)
         if unicodedata.category(c) != "Mn"
@@ -236,7 +236,7 @@ def _strip_accents(name: str) -> str:
 
 def _get_last_starts(days_back: int = 12) -> dict:
     """
-    Returns {pitcher_name: (date_str, team_name)} — most recent confirmed start per pitcher
+    Returns {pitcher_name: (date_str, team_name)} â€” most recent confirmed start per pitcher
     over the past `days_back` days.  Used to project rotation turns for unannounced slots.
     """
     end_str   = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
@@ -290,17 +290,17 @@ def _get_last_starts(days_back: int = 12) -> dict:
 def get_probable_starters(days: int = SP_DAYS_OUT) -> pd.DataFrame:
     """
     Two-call strategy:
-      1. One range schedule call → all gamePks for the window
+      1. One range schedule call â†’ all gamePks for the window
       2. One batched call with ?gamePks=...&hydrate=probablePitcher
     Falls back to the per-game live-feed if the batch returns nothing.
-    Unconfirmed (TBD) slots are filled by rotation projection: last_start + 5 days ±1.
-    Names are accent-stripped so 'Martín Pérez' merges as 'Martin Perez'.
+    Unconfirmed (TBD) slots are filled by rotation projection: last_start + 5 days Â±1.
+    Names are accent-stripped so 'MartÃ­n PÃ©rez' merges as 'Martin Perez'.
     PSP_Projected=True marks rotation projections vs confirmed MLB entries.
     """
     start_str = datetime.now().strftime("%Y-%m-%d")
     end_str   = (datetime.now() + timedelta(days=days - 1)).strftime("%Y-%m-%d")
 
-    # Step 1 — one call for all gamePks in the window
+    # Step 1 â€” one call for all gamePks in the window
     try:
         sched = requests.get(
             f"https://statsapi.mlb.com/api/v1/schedule"
@@ -323,7 +323,7 @@ def get_probable_starters(days: int = SP_DAYS_OUT) -> pd.DataFrame:
     if not game_meta:
         return pd.DataFrame(columns=["PlayerName", "PSP_HomeVAway", "PSP_Date", "PSP_Projected"])
 
-    # Step 2 — batch hydrate in chunks of 30
+    # Step 2 â€” batch hydrate in chunks of 30
     all_pks           = list(game_meta.keys())
     frames            = []
     confirmed_slots   = set()   # (team_name, date_str) that already have a named pitcher
@@ -364,10 +364,10 @@ def get_probable_starters(days: int = SP_DAYS_OUT) -> pd.DataFrame:
                         })
 
     if not frames:
-        log("  Batch probable starters returned nothing — falling back to live-feed method")
+        log("  Batch probable starters returned nothing â€” falling back to live-feed method")
         return _probable_starters_live_feed(days)
 
-    # Step 3 — rotation projection: last_start + 6 per pitcher (±1 day tolerance)
+    # Step 3 â€” rotation projection: last_start + 6 per pitcher (Â±1 day tolerance)
     # Superseded by any confirmed MLB API entry (those are already in frames).
     last_starts = _get_last_starts()
 
@@ -451,7 +451,7 @@ def _probable_starters_live_feed(days: int) -> pd.DataFrame:
     return df.drop_duplicates(subset="PlayerName", keep="first")
 
 
-# ── OPPONENT OPS ───────────────────────────────────────────────────────────────
+# â”€â”€ OPPONENT OPS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def get_opponent_ops() -> pd.DataFrame:
     frames = []
@@ -494,7 +494,7 @@ def get_opponent_ops() -> pd.DataFrame:
     return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
 
 
-# ── FANGRAPHS ADVANCED STATS ───────────────────────────────────────────────────
+# â”€â”€ FANGRAPHS ADVANCED STATS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def get_savant_pitcher_contact(year: int) -> pd.DataFrame:
     """Barrel% allowed and hard-hit% allowed from Baseball Savant (via pybaseball)."""
@@ -538,7 +538,7 @@ def get_statcast_expected_stats(year: int) -> pd.DataFrame:
 
 
 def get_sprint_speed(year: int) -> pd.DataFrame:
-    """Statcast sprint speed — best SB predictor."""
+    """Statcast sprint speed â€” best SB predictor."""
     try:
         from pybaseball import statcast_sprint_speed
         df = statcast_sprint_speed(year, min_opp=10)
@@ -561,7 +561,7 @@ def get_sprint_speed(year: int) -> pd.DataFrame:
         return pd.DataFrame(columns=["PlayerName", "SprintSpeed"])
 
 
-# ── ROTO SCORES ────────────────────────────────────────────────────────────────
+# â”€â”€ ROTO SCORES â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 HITTER_CATS  = ["R", "HR", "RBI", "B_SO", "SB", "OPS"]
 PITCHER_CATS = ["K", "QS", "W", "ERA", "WHIP", "SVHD"]
@@ -620,7 +620,7 @@ def get_all_roto(league) -> list:
     return combined.to_dict(orient="records")
 
 
-# ── HR PROBABILITY ─────────────────────────────────────────────────────────────
+# â”€â”€ HR PROBABILITY â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def compute_hr_probability(row) -> float:
     status = row.get("ESPN_Status", "")
@@ -660,7 +660,7 @@ def get_statcast_contact() -> pd.DataFrame:
         return pd.DataFrame(columns=["PlayerName", "Barrel_Pct", "HardHit_Pct", "MaxEV", "Avg_LA"])
 
 
-# ── TRANSACTIONS ───────────────────────────────────────────────────────────────
+# â”€â”€ TRANSACTIONS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def get_transactions(league) -> list:
     try:
@@ -683,10 +683,10 @@ def get_transactions(league) -> list:
     return rows
 
 
-# ── PITCHER PIPELINE ───────────────────────────────────────────────────────────
+# â”€â”€ PITCHER PIPELINE â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def build_pitcher_data(league) -> list:
-    log("Fetching pitcher stats from FantasyPros…")
+    log("Fetching pitcher stats from FantasyProsâ€¦")
     fp = fetch_fantasypros("pitchers")
     if fp.empty:
         return []
@@ -703,7 +703,7 @@ def build_pitcher_data(league) -> list:
     fp["HLD"]  = pd.to_numeric(fp["HLD"], errors="coerce").fillna(0)
     fp["SVHD"] = fp["SV"] + fp["HLD"]
 
-    log("Getting pitcher roster from ESPN…")
+    log("Getting pitcher roster from ESPNâ€¦")
     roster_df = get_pitcher_roster(league)
     fa_df     = get_pitcher_fa(league)
 
@@ -712,7 +712,7 @@ def build_pitcher_data(league) -> list:
     merged = fp.merge(roster_df[["PlayerName", "FantasyTeam", "Position"]], on="PlayerName", how="left")
     merged = merged.merge(fa_df[["PlayerName", "FreeAgentInjuryStatus", "FA_Position"]], on="PlayerName", how="left")
 
-    # Coalesce position: ESPN roster → ESPN FA → FantasyPros player string
+    # Coalesce position: ESPN roster â†’ ESPN FA â†’ FantasyPros player string
     merged["Position"] = merged["Position"].fillna("").str.strip()
     fa_pos = merged.get("FA_Position", pd.Series("", index=merged.index)).fillna("").str.strip()
     merged["Position"] = merged.apply(lambda r: r["Position"] if r["Position"] else fa_pos.loc[r.name], axis=1)
@@ -725,14 +725,14 @@ def build_pitcher_data(league) -> list:
     merged["FantasyTeam"] = merged["FantasyTeam"].fillna("")
     merged["RosterStatus"] = merged["FreeAgentInjuryStatus"].astype(str) + merged["FantasyTeam"].astype(str)
 
-    log("Fetching probable starters…")
+    log("Fetching probable startersâ€¦")
     sp = get_probable_starters()
     merged = merged.merge(sp, on="PlayerName", how="left")
     merged["PSP_Date"]      = merged["PSP_Date"].fillna("1999-01-01")
     merged["PSP_HomeVAway"] = merged["PSP_HomeVAway"].fillna("")
     merged["PSP_Projected"] = merged["PSP_Projected"].fillna(False)
 
-    log("Fetching opponent OPS…")
+    log("Fetching opponent OPSâ€¦")
     opp_ops = get_opponent_ops()
     if not opp_ops.empty:
         merged["OpponentTeam_temp"] = merged["PSP_HomeVAway"].str.split(" ").str[1:].str.join(" ")
@@ -746,7 +746,7 @@ def build_pitcher_data(league) -> list:
             if col in merged.columns:
                 merged.drop(columns=[col], inplace=True)
 
-    log("Fetching Baseball Savant pitcher contact quality (Barrel% allowed, HardHit% allowed)…")
+    log("Fetching Baseball Savant pitcher contact quality (Barrel% allowed, HardHit% allowed)â€¦")
     sc_p = get_savant_pitcher_contact(CURRENT_YEAR)
     if not sc_p.empty:
         merged = merged.merge(sc_p, on="PlayerName", how="left")
@@ -772,15 +772,15 @@ def build_pitcher_data(league) -> list:
     return merged.to_dict(orient="records")
 
 
-# ── HITTER PIPELINE ────────────────────────────────────────────────────────────
+# â”€â”€ HITTER PIPELINE â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def build_hitter_data(league) -> list:
-    log("Fetching hitter stats from FantasyPros…")
+    log("Fetching hitter stats from FantasyProsâ€¦")
     fp = fetch_fantasypros("hitters")
     if fp.empty:
         return []
 
-    log("Getting hitter roster from ESPN…")
+    log("Getting hitter roster from ESPNâ€¦")
     roster_df = get_hitter_roster(league)
     fa_df     = get_hitter_fa(league)
 
@@ -800,19 +800,19 @@ def build_hitter_data(league) -> list:
     merged["FantasyTeam"] = merged["FantasyTeam"].fillna("")
     merged["RosterStatus"] = merged["FreeAgentInjuryStatus"].astype(str) + merged["FantasyTeam"].astype(str)
 
-    # ── wRC+ approximation from OPS (lgOPS ≈ 0.720 in 2026) ──────────────────
+    # â”€â”€ wRC+ approximation from OPS (lgOPS â‰ˆ 0.720 in 2026) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     LG_OPS = 0.720
     ops_num = pd.to_numeric(merged["OPS"], errors="coerce").fillna(0)
     merged["wRCplus"] = ((ops_num / LG_OPS) * 100).where(ops_num > 0, -1).round(0).astype(int)
 
-    # ── Statcast data (season rows only) ──────────────────────────────────────
-    log("Fetching Statcast contact data for HR probability…")
+    # â”€â”€ Statcast data (season rows only) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    log("Fetching Statcast contact data for HR probabilityâ€¦")
     sc = get_statcast_contact()
 
-    log("Fetching Statcast expected stats (xBA, xSLG, xwOBA)…")
+    log("Fetching Statcast expected stats (xBA, xSLG, xwOBA)â€¦")
     sc_exp = get_statcast_expected_stats(CURRENT_YEAR)
 
-    log("Fetching sprint speed (SB predictor)…")
+    log("Fetching sprint speed (SB predictor)â€¦")
     sprint = get_sprint_speed(CURRENT_YEAR)
 
     try:
@@ -863,7 +863,60 @@ def build_hitter_data(league) -> list:
     return merged.to_dict(orient="records")
 
 
-# ── STANDINGS ──────────────────────────────────────────────────────────────────
+# â”€â”€ RECENT HITTER STATS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+def fetch_recent_pitcher_stats(days: int = 7) -> list:
+    """Pull last N days of pitcher stats from FanGraphs via pybaseball."""
+    try:
+        from pybaseball import pitching_stats_range
+        end_dt   = datetime.now().strftime("%Y-%m-%d")
+        start_dt = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+        df = pitching_stats_range(start_dt, end_dt)
+        if df is None or df.empty:
+            return []
+        name_col = next((c for c in df.columns if c.lower() in ("name", "playername")), None)
+        if name_col and name_col != "PlayerName":
+            df = df.rename(columns={name_col: "PlayerName"})
+        keep = [c for c in ["PlayerName", "G", "GS", "IP", "ERA", "WHIP", "K", "BB"] if c in df.columns]
+        df = df[keep].copy()
+        for c in keep[1:]:
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+        df.dropna(subset=["PlayerName"], inplace=True)
+        df["PlayerName"] = df["PlayerName"].str.strip()
+        log(f"  Recent pitcher stats ({start_dt} to {end_dt}): {len(df)} rows")
+        return df.to_dict(orient="records")
+    except Exception as e:
+        log(f"  Recent pitcher stats FAILED: {e}")
+        return []
+
+
+def fetch_recent_hitter_stats(days: int = 7) -> list:
+    """Pull last N days of hitter stats from FanGraphs via pybaseball."""
+    try:
+        from pybaseball import batting_stats_range
+        end_dt   = datetime.now().strftime("%Y-%m-%d")
+        start_dt = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+        df = batting_stats_range(start_dt, end_dt)
+        if df is None or df.empty:
+            return []
+        # Normalize name column (FanGraphs uses 'Name')
+        name_col = next((c for c in df.columns if c.lower() in ("name", "playername")), None)
+        if name_col and name_col != "PlayerName":
+            df = df.rename(columns={name_col: "PlayerName"})
+        keep = [c for c in ["PlayerName", "G", "PA", "AB", "R", "HR", "RBI", "SB", "AVG", "OBP", "SLG", "OPS"] if c in df.columns]
+        df = df[keep].copy()
+        for c in keep[1:]:
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+        df.dropna(subset=["PlayerName"], inplace=True)
+        df["PlayerName"] = df["PlayerName"].str.strip()
+        log(f"  Recent hitter stats ({start_dt} â†’ {end_dt}): {len(df)} rows")
+        return df.to_dict(orient="records")
+    except Exception as e:
+        log(f"  Recent hitter stats FAILED: {e}")
+        return []
+
+
+# â”€â”€ STANDINGS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def get_standings(league) -> list:
     rows = []
@@ -878,7 +931,7 @@ def get_standings(league) -> list:
     return sorted(rows, key=lambda r: r["standing"])
 
 
-# ── CURRENT WEEK MATCHUP ──────────────────────────────────────────────────────
+# â”€â”€ CURRENT WEEK MATCHUP â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def get_current_matchup(league, my_team_name: str) -> dict:
     current_week = getattr(league, "currentMatchupPeriod", None)
@@ -941,7 +994,7 @@ def get_current_matchup(league, my_team_name: str) -> dict:
     return {}
 
 
-# ── MAIN ───────────────────────────────────────────────────────────────────────
+# â”€â”€ MAIN â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def main():
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -951,28 +1004,28 @@ def main():
     print(f"  {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print("=" * 60)
 
-    print("\n[1/8] Connecting to ESPN…")
+    print("\n[1/9] Connecting to ESPNâ€¦")
     league = connect_espn()
     if not league:
-        sys.exit("Could not connect to ESPN — check credentials in ESPN_CONFIG.")
+        sys.exit("Could not connect to ESPN â€” check credentials in ESPN_CONFIG.")
 
-    print("\n[2/8] Building pitcher data (FantasyPros + ESPN + FanGraphs advanced)…")
+    print("\n[2/9] Building pitcher data (FantasyPros + ESPN + FanGraphs advanced)â€¦")
     pitchers = build_pitcher_data(league)
     print(f"       {len(pitchers)} pitcher rows")
 
-    print("\n[3/8] Building hitter data (FantasyPros + ESPN + FanGraphs + Statcast)…")
+    print("\n[3/9] Building hitter data (FantasyPros + ESPN + FanGraphs + Statcast)â€¦")
     hitters = build_hitter_data(league)
     print(f"       {len(hitters)} hitter rows")
 
-    print("\n[4/8] Pulling roto scores…")
+    print("\n[4/9] Pulling roto scoresâ€¦")
     roto = get_all_roto(league)
     print(f"       {len(roto)} roto rows")
 
-    print("\n[5/8] Pulling transactions…")
+    print("\n[5/9] Pulling transactionsâ€¦")
     transactions = get_transactions(league)
     print(f"       {len(transactions)} transaction rows")
 
-    print("\n[6/8] Pulling standings…")
+    print("\n[6/9] Pulling standingsâ€¦")
     standings = get_standings(league)
     print(f"       {len(standings)} teams")
 
@@ -980,14 +1033,22 @@ def main():
     normalized = {" ".join(n.split()): n for n in espn_names}
     my_team = normalized.get(" ".join(MY_TEAM_NAME.split())) or MY_TEAM_NAME or (espn_names[0] if espn_names else "")
 
-    print("\n[7/8] Pulling current week matchup…")
+    print("\n[7/9] Pulling current week matchupâ€¦")
     current_matchup = get_current_matchup(league, my_team)
     if current_matchup:
         print(f"       Week {current_matchup['week']}: {my_team} vs {current_matchup['opp_team']} ({current_matchup['wins']}-{current_matchup['losses']})")
     else:
         print("       No active matchup found.")
 
-    print("\n[8/8] Writing snapshot…")
+    print("\n[8/10] Fetching last-7-day hitter statsâ€¦")
+    recent_hitting = fetch_recent_hitter_stats(days=7)
+    print(f"       {len(recent_hitting)} hitters with recent stats")
+
+    print("\n[9/10] Fetching last-7-day pitcher stats")
+    recent_pitching = fetch_recent_pitcher_stats(days=7)
+    print(f"       {len(recent_pitching)} pitchers with recent stats")
+
+    print("\n[10/10] Writing snapshotâ€¦")
     snapshot = {
         "refreshed_at":    datetime.now().isoformat(),
         "my_team":         my_team,
@@ -998,6 +1059,8 @@ def main():
         "roto":            roto,
         "transactions":    transactions,
         "current_matchup": current_matchup,
+        "recent_hitting":  recent_hitting,
+        "recent_pitching": recent_pitching,
     }
 
     with open(OUTPUT_FILE, "w") as f:
