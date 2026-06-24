@@ -191,6 +191,7 @@ def luck_standings(roto_rows, standings):
             "team":      t,
             "wins":      s["wins"],
             "losses":    s["losses"],
+            "ties":      s.get("ties", 0),
             "standing":  s["standing"],
             "roto_pts":  round(totals.get(t, 0), 1),
             "roto_rank": rr,
@@ -522,11 +523,103 @@ def section_head(title, sub=""):
     )
 
 
+def make_sparkline(roto, my_team, current_week, n=99, weekly_results=None):
+    """
+    SVG line chart scaled against the league-wide 5th/95th percentile.
+    Dots: green filled = peak week, green ring = matchup win, grey = loss/unknown.
+    Returns (svg_html, peak_label) tuple.
+    """
+    my_key = " ".join(my_team.split())
+    wr = weekly_results or {}
+
+    my_scores = {}
+    league_vals = []
+    for row in roto:
+        wk = int(row.get("Week", 0))
+        if wk >= current_week:
+            continue
+        val = float(row.get("Roto_Score") or 0)
+        league_vals.append(val)
+        t = " ".join((row.get("Team") or "").split())
+        if t == my_key:
+            my_scores[wk] = val
+
+    past = sorted(my_scores.keys())[-n:]
+    if len(past) < 2:
+        return ("", "")
+
+    league_vals.sort()
+    trim = max(1, len(league_vals) // 20)
+    lo = league_vals[trim]
+    hi = league_vals[-trim]
+    rng = hi - lo or 1
+
+    vals  = [my_scores[w] for w in past]
+    weeks = list(past)
+    peak_wk = weeks[vals.index(max(vals))]
+
+    # SVG geometry — scale width to number of points (min 130)
+    n_pts = len(vals)
+    SW, SH, PAD = max(130, n_pts * 14), 36, 5
+
+    def sx(i):
+        return PAD + (i / max(n_pts - 1, 1)) * (SW - 2 * PAD)
+
+    def sy(v):
+        norm = max(0.0, min(1.0, (v - lo) / rng))
+        return SH - PAD - norm * (SH - 2 * PAD)
+
+    pts  = [(sx(i), sy(v)) for i, v in enumerate(vals)]
+    line = " ".join(f"{px:.1f},{py:.1f}" for px, py in pts)
+    fill = f"{pts[0][0]:.1f},{SH} " + line + f" {pts[-1][0]:.1f},{SH}"
+
+    dots = []
+    for i, (wk, v) in enumerate(zip(weeks, vals)):
+        cx, cy = pts[i]
+        wk_res = wr.get(wk) or wr.get(str(wk), {})
+        is_first = (wk_res.get(my_key) or wk_res.get(my_team, "")) == "W"
+        if wk == peak_wk:
+            medal = f'<text x="{cx:.1f}" y="{cy - 4:.1f}" text-anchor="middle" font-size="9">&#127941;</text>' if is_first else ""
+            dots.append(
+                f'{medal}<circle cx="{cx:.1f}" cy="{cy:.1f}" r="3.5" fill="{GREEN}" stroke="#0d1424" stroke-width="1"/>'
+            )
+        elif is_first:
+            dots.append(
+                f'<circle cx="{cx:.1f}" cy="{cy:.1f}" r="2" fill="#f59e0b"/>'
+                f'<text x="{cx:.1f}" y="{cy - 4:.1f}" text-anchor="middle" font-size="9">&#127941;</text>'
+            )
+        else:
+            dots.append(
+                f'<circle cx="{cx:.1f}" cy="{cy:.1f}" r="1.8" fill="#4b5563"/>'
+            )
+
+    svg = (
+        f'<svg width="{SW}" height="{SH}" style="display:inline-block;vertical-align:middle;overflow:visible;" xmlns="http://www.w3.org/2000/svg">'
+        f'<polygon points="{fill}" fill="{ACCENT}" opacity="0.12"/>'
+        f'<polyline points="{line}" fill="none" stroke="{ACCENT}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>'
+        f'{"".join(dots)}'
+        f'</svg>'
+    )
+
+    peak_label = f'<div style="color:{GREEN};font-size:9px;margin-top:2px;">Peak Wk {peak_wk}</div>'
+    return svg, peak_label
+
+
 def kpi_cell(label, value):
     return (
         f'<td class="kpi-cell" style="text-align:center;padding:14px 8px;border-right:1px solid {BORDER};">'
         f'<div style="color:{MUTED};font-size:10px;text-transform:uppercase;letter-spacing:.7px;">{label}</div>'
         f'<div style="color:{TEXT};font-size:20px;font-weight:800;margin-top:3px;">{value}</div>'
+        f'</td>'
+    )
+
+
+def kpi_cell_sm(label, value, color=None, font_size="20px", font_weight="800"):
+    val_color = color or TEXT
+    return (
+        f'<td class="kpi-cell" style="text-align:center;padding:8px 8px 10px;border-right:1px solid {BORDER};">'
+        f'<div style="color:{MUTED};font-size:9px;text-transform:uppercase;letter-spacing:.7px;">{label}</div>'
+        f'<div style="color:{val_color};font-size:{font_size};font-weight:{font_weight};margin-top:3px;">{value}</div>'
         f'</td>'
     )
 
@@ -928,6 +1021,7 @@ def build_email(snap):
     matchup       = snap.get("current_matchup", {})
     recent_hitting  = snap.get("recent_hitting",  [])
     recent_pitching = snap.get("recent_pitching", [])
+    weekly_results  = snap.get("weekly_results",  {})
     rec_h = {r["PlayerName"]: r for r in recent_hitting  if r.get("PlayerName")}
     rec_p = {r["PlayerName"]: r for r in recent_pitching if r.get("PlayerName")}
 
@@ -948,23 +1042,139 @@ def build_email(snap):
     my_row = next((r for r in luck if r["team"] == my_team), {})
     today  = datetime.now().strftime("%A, %B %d, %Y")
 
+    # ── Derived KPI values ─────────────────────────────────────────────────────
+    my_logo_url = team_logos.get(" ".join(my_team.split()), "")
+    my_logo_html = fantasy_logo(my_logo_url, size=36, team_name=my_team)
+
+    # Build per-week roto scores and rank-based results (used by sparkline + KPI stats)
+    my_key = " ".join(my_team.split())
+    my_key_norm = my_key
+    week_scores = {}
+    for row in roto:
+        t = " ".join((row.get("Team") or "").split())
+        wk = int(row.get("Week", 0))
+        if wk not in week_scores:
+            week_scores[wk] = {}
+        week_scores[wk][t] = float(row.get("Roto_Score") or 0)
+    wk_ranks = []; wk_pts = []
+    roto_week_results = {}
+    for wk in sorted(week_scores):
+        scores = week_scores[wk]
+        if my_key_norm not in scores:
+            continue
+        ranked = sorted(scores.items(), key=lambda x: -x[1])
+        wk_res = {}
+        for i, (t, _) in enumerate(ranked):
+            wk_res[t] = 'W' if i == 0 else 'L'
+        roto_week_results[wk] = wk_res
+        my_rank = next((i + 1 for i, (t, _) in enumerate(ranked) if t == my_key_norm), None)
+        if my_rank:
+            wk_ranks.append(my_rank)
+            wk_pts.append(scores[my_key_norm])
+
+    spark_result = make_sparkline(roto, my_team, current_week_num, weekly_results=roto_week_results)
+    sparkline, peak_label = spark_result if spark_result else ("", "")
+    spark_trend = ""
+    trend_scores = []
+    for row in roto:
+        if " ".join((row.get("Team") or "").split()) == my_key and int(row.get("Week", 0)) < current_week_num:
+            trend_scores.append((int(row.get("Week", 0)), float(row.get("Roto_Score") or 0)))
+    trend_scores.sort()
+    if len(trend_scores) >= 4:
+        recent_avg = sum(s for _, s in trend_scores[-3:]) / 3
+        early_avg  = sum(s for _, s in trend_scores[:3])  / 3
+        spark_trend = (
+            f'&nbsp;<span style="color:{GREEN};font-size:10px;">&#9650;</span>'
+            if recent_avg > early_avg else
+            f'&nbsp;<span style="color:{RED};font-size:10px;">&#9660;</span>'
+        )
+
+    # Hot/cold counts from recent_hitting
+    n_hot = n_cold = 0
+    for r in hitters:
+        if (" ".join((r.get("FantasyTeam") or "").split()) == " ".join(my_team.split())
+                and int(r.get("Dataset", 0)) == YEAR
+                and float(r.get("OPS") or 0) > 0):
+            s_ops = float(r.get("OPS") or 0)
+            rh = rec_h.get(r.get("PlayerName", ""), {})
+            r_ops = float(rh.get("OPS") or 0) if rh else 0
+            if s_ops > 0 and r_ops > 0:
+                d = r_ops - s_ops
+                if d >= 0.015:   n_hot  += 1
+                elif d <= -0.015: n_cold += 1
+    hc_str = (
+        f'<span style="color:{GREEN};">&#128293;&nbsp;{n_hot}</span>'
+        f'<span style="color:{MUTED};margin:0 4px;">·</span>'
+        f'<span style="color:{ACCENT};">&#10052;&nbsp;{n_cold}</span>'
+    )
+
+    # Category W-L this week
+    cat_wl = f'{matchup.get("wins","—")}W · {matchup.get("losses","—")}L' if matchup else "—"
+    cat_wl_color = GREEN if matchup and matchup.get("wins", 0) > matchup.get("losses", 0) else (RED if matchup and matchup.get("losses", 0) > matchup.get("wins", 0) else YELLOW)
+
+    # Luck
+    luck_val = my_row.get("luck", 0)
+    luck_str = f"+{luck_val}" if luck_val > 0 else str(luck_val)
+    luck_color = GREEN if luck_val > 2 else (RED if luck_val < -2 else MUTED)
+
     # ── Header ─────────────────────────────────────────────────────────────────
     header = f"""
 <div style="background:linear-gradient(135deg,#0b1a38 0%,#0f172a 100%);padding:22px 28px;border-bottom:2px solid {BORDER};">
   <div style="color:{MUTED};font-size:10px;text-transform:uppercase;letter-spacing:1px;">{today}</div>
-  <div style="color:{TEXT};font-size:24px;font-weight:900;letter-spacing:-1px;margin-top:4px;">Guerrero Warfare</div>
-  <div style="color:#4b7bc4;font-size:11px;letter-spacing:.8px;margin-top:2px;text-transform:uppercase;">Daily Fantasy Digest</div>
+  <div style="margin-top:6px;vertical-align:middle;">{my_logo_html}<span style="color:{TEXT};font-size:24px;font-weight:900;letter-spacing:-1px;vertical-align:middle;">Guerrero Warfare</span></div>
+  <div style="color:#4b7bc4;font-size:11px;letter-spacing:.8px;margin-top:4px;text-transform:uppercase;">Daily Fantasy Digest</div>
 </div>"""
 
-    # ── KPI row ────────────────────────────────────────────────────────────────
-    wl = f"{my_row.get('wins','—')}-{my_row.get('losses','—')}"
+    # ── KPI row (two lines) ────────────────────────────────────────────────────
+    # Record: category W-L-T from standings
+    wl = f"{my_row.get('wins','—')}-{my_row.get('losses','—')}-{my_row.get('ties',0)}"
+
+    avg_rank = f"{sum(wk_ranks)/len(wk_ranks):.1f}" if wk_ranks else "—"
+    avg_pts  = f"{sum(wk_pts)/len(wk_pts):.0f}"   if wk_pts  else "—"
+    roto_rank_sub = (
+        f'<div style="color:{MUTED};font-size:9px;margin-top:3px;">'
+        f'avg rank #{avg_rank} &nbsp;·&nbsp; {avg_pts} pts</div>'
+    )
+
+    # Roto W-L-T per week average (category record from standings ÷ completed weeks)
+    roto_w = my_row.get('wins', 0); roto_l = my_row.get('losses', 0); roto_t = my_row.get('ties', 0)
+    completed_weeks = len(wk_ranks)
+    if completed_weeks:
+        matchup_sub = (
+            f'<div style="color:{MUTED};font-size:9px;margin-top:3px;">'
+            f'{roto_w/completed_weeks:.1f}W · {roto_l/completed_weeks:.1f}L · {roto_t/completed_weeks:.1f}T /wk</div>'
+        )
+    else:
+        matchup_sub = ''
+
+    def _dot(r, fill, stroke=None, sw=1.5):
+        sf = f' stroke="{stroke}" stroke-width="{sw}"' if stroke else ''
+        return (f'<svg width="7" height="7" style="vertical-align:middle;" xmlns="http://www.w3.org/2000/svg">'
+                f'<circle cx="3.5" cy="3.5" r="{r}" fill="{fill}"{sf}/></svg>')
+
+    spark_footer = (
+        f'<div style="font-size:9px;color:{MUTED};margin-top:2px;white-space:nowrap;">'
+        f'{peak_label.replace("<div","<span").replace("</div>","</span>")}'
+        f'&ensp;'
+        f'{_dot(3.5, GREEN)}&thinsp;peak&ensp;'
+        f'&#127941;&thinsp;#1 roto wk'
+        f'</div>'
+    )
+
+    spark_cell_val = f'{sparkline}{spark_trend}{spark_footer}'
     kpi = f"""
 <table style="width:100%;border-collapse:collapse;background:{SURFACE};border-bottom:2px solid {BORDER};">
 <tr>
   {kpi_cell("Record", wl)}
-  {kpi_cell("Standing", f"#{my_row.get('standing','—')}")}
-  {kpi_cell("Roto Rank", f"#{my_row.get('roto_rank','—')}")}
+  {kpi_cell(f"Cats Wk {current_week_num}", f'<span style="color:{cat_wl_color};">{cat_wl}</span>')}
+  {kpi_cell("Roster", hc_str)}
   {kpi_cell("Upcoming Starts", len(starts))}
+</tr>
+<tr style="border-top:1px solid {BORDER};">
+  {kpi_cell_sm("Roto Trend", spark_cell_val, font_size="inherit", font_weight="normal")}
+  {kpi_cell_sm("Standing", f'#{my_row.get("standing","—")}{matchup_sub}')}
+  {kpi_cell_sm("Roto Rank", f'#{my_row.get("roto_rank","—")}{roto_rank_sub}')}
+  {kpi_cell_sm("Luck", luck_str, color=luck_color)}
 </tr>
 </table>"""
 

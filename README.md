@@ -142,7 +142,15 @@ Go to **Settings → Secrets and variables → Actions** to view or update:
 Sections appear in this order every morning:
 
 ### KPI Row
-Four numbers at the top: current W-L record, league standing, roto rank, number of upcoming starts this week.
+Two-row panel at the top of every digest. Your team logo appears next to the team name in the header.
+
+**Top row:** Category record (W-L-T) · Category wins this week · Roster hot/cold count · Upcoming starts
+
+**Bottom row:**
+- **Roto Trend** — SVG line chart of your weekly roto score across all completed weeks. Dots are color-coded: green filled = your personal peak week, 🏅 = you ranked #1 in roto points among all 12 teams that week, grey = all other weeks. A small legend and "Peak Wk N" label sit on the same line below the chart.
+- **Standing** — Your current league standing (#N) with your average roto category W-L-T per week underneath (season totals ÷ weeks played).
+- **Roto Rank** — Season-to-date cumulative roto rank (#N) with average weekly rank and average weekly roto points underneath.
+- **Luck** — Roto rank minus record rank. Positive = your W-L is better than your underlying stats deserve; negative = underperforming your true quality.
 
 ### This Week's Category Rankings
 Your roto rank (out of 12 teams) in each of the 12 scoring categories for the **current matchup week only**. Green = top 3, red = bottom half.
@@ -338,6 +346,9 @@ Each category: `cat, my_val, opp_val, result` (W/L/T), `lower_better`
 
 **recent_pitching** (list of dicts — last 7 days, all MLB pitchers):
 `PlayerName, G, GS, IP, ERA, WHIP, BB`
+
+**weekly_results** (dict — `{"1": {"Team Name": "W"/"L"/"T", ...}, ...}`):
+Per-week head-to-head matchup results for every team. Keys are week numbers as strings. Used by `send_digest.py` to build per-week roto rank results for the sparkline.
 
 ---
 

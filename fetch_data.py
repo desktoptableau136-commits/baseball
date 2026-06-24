@@ -604,6 +604,35 @@ def roto_score_week(league, week: int) -> pd.DataFrame:
     return pivot.reset_index()
 
 
+def get_weekly_matchup_results(league) -> dict:
+    """Returns {week: {team_name: 'W'/'L'/'T'}} for all completed weeks."""
+    current_week = getattr(league, 'currentMatchupPeriod', 25)
+    weekly = {}
+    for wk in range(1, current_week):
+        try:
+            boxes = league.box_scores(wk)
+            wk_results = {}
+            for b in boxes:
+                winner = getattr(b, 'winner', None)
+                ht = getattr(b.home_team, 'team_name', '') if b.home_team else ''
+                at = getattr(b.away_team, 'team_name', '') if b.away_team else ''
+                if not ht or not at or not winner:
+                    continue
+                ht = " ".join(ht.split())
+                at = " ".join(at.split())
+                if winner == 'HOME':
+                    wk_results[ht] = 'W'; wk_results[at] = 'L'
+                elif winner == 'AWAY':
+                    wk_results[at] = 'W'; wk_results[ht] = 'L'
+                else:
+                    wk_results[ht] = 'T'; wk_results[at] = 'T'
+            if wk_results:
+                weekly[wk] = wk_results
+        except Exception:
+            pass
+    return weekly
+
+
 def get_all_roto(league) -> list:
     results = []
     current_week = getattr(league, 'currentMatchupPeriod', 25)
@@ -925,6 +954,7 @@ def get_standings(league) -> list:
             "team_name":    tm.team_name,
             "wins":         tm.wins,
             "losses":       tm.losses,
+            "ties":         getattr(tm, "ties", 0),
             "standing":     tm.standing,
             "logo_url":     getattr(tm, "logo_url", ""),
         })
@@ -1017,9 +1047,10 @@ def main():
     hitters = build_hitter_data(league)
     print(f"       {len(hitters)} hitter rows")
 
-    print("\n[4/9] Pulling roto scoresâ€¦")
+    print("\n[4/9] Pulling roto scores...")
     roto = get_all_roto(league)
-    print(f"       {len(roto)} roto rows")
+    weekly_results = get_weekly_matchup_results(league)
+    print(f"       {len(roto)} roto rows, {len(weekly_results)} weeks of matchup results")
 
     print("\n[5/9] Pulling transactionsâ€¦")
     transactions = get_transactions(league)
@@ -1057,6 +1088,7 @@ def main():
         "pitchers":        pitchers,
         "hitters":         hitters,
         "roto":            roto,
+        "weekly_results":  {str(k): v for k, v in weekly_results.items()},
         "transactions":    transactions,
         "current_matchup": current_matchup,
         "recent_hitting":  recent_hitting,
