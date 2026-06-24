@@ -1,0 +1,5 @@
+pandas
+requests
+espn_api
+pybaseball
+python-dotenv

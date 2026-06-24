@@ -1,0 +1,2079 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Fantasy Baseball Dashboard</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+  :root {
+    --bg:#0d1117; --surface:#161b22; --surface2:#1c2330; --border:#30363d;
+    --text:#e6edf3; --muted:#7d8590; --green:#3fb950; --red:#f85149;
+    --yellow:#d29922; --blue:#58a6ff; --purple:#bc8cff; --orange:#ffa657;
+    --accent:#1f6feb; --my-team:rgba(31,111,235,0.15); --radius:8px;
+  }
+  *{box-sizing:border-box;margin:0;padding:0;}
+  body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--text);min-height:100vh;font-size:13px;}
+
+  /* HEADER */
+  header{background:var(--surface);border-bottom:1px solid var(--border);padding:0 24px;display:flex;align-items:center;gap:20px;height:56px;position:sticky;top:0;z-index:100;}
+  .logo{font-size:18px;font-weight:700;color:var(--text);letter-spacing:-0.5px;}
+  .logo span{color:var(--green);}
+  .refresh-info{color:var(--muted);font-size:11px;margin-left:auto;}
+  .refresh-btn{background:var(--accent);color:#fff;border:none;padding:6px 14px;border-radius:6px;cursor:pointer;font-size:12px;font-weight:500;}
+  .refresh-btn:hover{opacity:.85;}
+
+  /* TABS */
+  nav{background:var(--surface);border-bottom:1px solid var(--border);padding:0 24px;display:flex;gap:0;overflow-x:auto;}
+  .tab{padding:12px 16px;cursor:pointer;color:var(--muted);font-size:13px;font-weight:500;border-bottom:2px solid transparent;transition:all .15s;white-space:nowrap;}
+  .tab:hover{color:var(--text);}
+  .tab.active{color:var(--text);border-bottom-color:var(--accent);}
+
+  /* LAYOUT */
+  main{padding:20px 24px;max-width:1700px;}
+  .page{display:none;}
+  .page.active{display:block;}
+  .grid-2{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;}
+  .grid-3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;margin-bottom:16px;}
+  .grid-4{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:16px;}
+
+  /* CARDS */
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;}
+  .card-header{padding:14px 16px 10px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px;}
+  .card-title{font-size:13px;font-weight:600;}
+  .card-badge{background:var(--surface2);color:var(--muted);font-size:10px;padding:2px 7px;border-radius:10px;border:1px solid var(--border);}
+  .card-body{padding:14px 16px;}
+
+  /* STAT TILES */
+  .stat-tile{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px;}
+  .stat-label{color:var(--muted);font-size:11px;font-weight:500;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px;}
+  .stat-value{font-size:28px;font-weight:700;color:var(--text);line-height:1;}
+  .stat-sub{color:var(--muted);font-size:11px;margin-top:4px;}
+
+  /* TABLES */
+  .tbl-wrap{overflow-x:auto;}
+  table{width:100%;border-collapse:collapse;font-size:12px;}
+  th{background:var(--surface2);color:var(--muted);font-weight:500;text-align:left;padding:8px 10px;position:sticky;top:0;cursor:pointer;user-select:none;white-space:nowrap;font-size:11px;text-transform:uppercase;letter-spacing:.3px;}
+  th:hover{color:var(--text);}
+  tr{border-bottom:1px solid var(--border);}
+  tr:last-child{border-bottom:none;}
+  td{padding:7px 10px;}
+  tbody tr:hover{background:rgba(255,255,255,.03);}
+  .my-team-row{background:var(--my-team)!important;}
+
+  /* BADGES */
+  .badge{display:inline-block;padding:1px 7px;border-radius:10px;font-size:10px;font-weight:600;}
+  .badge-fa{background:rgba(63,185,80,.15);color:var(--green);border:1px solid rgba(63,185,80,.3);}
+  .badge-mine{background:rgba(88,166,255,.15);color:var(--blue);border:1px solid rgba(88,166,255,.3);}
+  .badge-other{background:rgba(125,133,144,.1);color:var(--muted);border:1px solid var(--border);}
+  .badge-il{background:rgba(248,81,73,.12);color:var(--red);border:1px solid rgba(248,81,73,.3);}
+  .badge-dtd{background:rgba(210,153,34,.12);color:var(--yellow);border:1px solid rgba(210,153,34,.3);}
+
+  /* PILLS */
+  .range-pills{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px;}
+  .pill{padding:4px 12px;border-radius:20px;border:1px solid var(--border);background:var(--surface2);color:var(--muted);cursor:pointer;font-size:11px;font-weight:500;transition:all .15s;}
+  .pill.active{background:var(--accent);border-color:var(--accent);color:#fff;}
+  .pill:hover:not(.active){border-color:var(--muted);color:var(--text);}
+
+  /* FILTERS */
+  .filters{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px;align-items:center;}
+  .search-input{background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:6px 12px;border-radius:6px;font-size:12px;width:200px;}
+  .search-input:focus{outline:none;border-color:var(--accent);}
+  select.filter-sel{background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:6px;font-size:12px;cursor:pointer;}
+  select.filter-sel:focus{outline:none;}
+  .filter-label{color:var(--muted);font-size:11px;font-weight:500;}
+  input[type=checkbox]{accent-color:var(--accent);margin-right:4px;}
+
+  /* MISC */
+  .roto-score{font-family:'JetBrains Mono',monospace;font-weight:600;color:var(--green);}
+  .roto-pts{color:var(--muted);font-size:11px;}
+  .tx-add{color:var(--green);font-weight:600;}
+  .tx-drop{color:var(--red);font-weight:600;}
+  .tx-trade{color:var(--blue);font-weight:600;}
+  .rank-num{font-family:'JetBrains Mono',monospace;font-weight:700;color:var(--muted);font-size:16px;}
+  .rank-1{color:var(--yellow);}
+  .rank-2{color:var(--text);}
+  .rank-3{color:var(--orange);}
+  .empty{text-align:center;color:var(--muted);padding:40px 20px;font-size:13px;}
+  .start-chip{font-size:10px;padding:2px 7px;border-radius:10px;background:rgba(88,166,255,.12);color:var(--blue);border:1px solid rgba(88,166,255,.25);white-space:nowrap;}
+  .section-title{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin:18px 0 10px;}
+  .prob-bar-wrap{width:70px;height:5px;background:var(--surface2);border-radius:3px;display:inline-block;vertical-align:middle;margin-left:6px;}
+
+  /* SCATTER */
+  .scatter-wrap{position:relative;}
+  .scatter-wrap svg{display:block;}
+  .scatter-tooltip{position:absolute;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:10px 12px;font-size:11px;pointer-events:none;opacity:0;transition:opacity .1s;z-index:10;min-width:160px;}
+  .scatter-tooltip b{display:block;font-size:12px;margin-bottom:4px;color:var(--text);}
+  .scatter-tooltip span{color:var(--muted);}
+  .axis text{fill:var(--muted);font-size:10px;font-family:'Inter',sans-serif;}
+  .axis line,.axis path{stroke:var(--border);}
+  .grid line{stroke:var(--border);stroke-opacity:.5;stroke-dasharray:2,4;}
+  .scatter-legend{display:flex;gap:16px;flex-wrap:wrap;padding:0 0 10px 0;font-size:11px;color:var(--muted);}
+  .legend-dot{width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:5px;vertical-align:middle;}
+
+  /* SHOULD I START */
+  .sis-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:20px;margin-bottom:12px;}
+  .sis-player{font-size:15px;font-weight:700;margin-bottom:4px;}
+  .sis-meta{color:var(--muted);font-size:11px;margin-bottom:14px;}
+  .sis-verdict{font-size:22px;font-weight:700;margin-bottom:10px;display:flex;align-items:center;gap:10px;}
+  .verdict-start{color:var(--green);}
+  .verdict-sit{color:var(--red);}
+  .verdict-lean{color:var(--yellow);}
+  .sis-factors{display:grid;grid-template-columns:1fr 1fr;gap:8px;}
+  .sis-factor{background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:10px 12px;}
+  .sis-factor-label{color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.4px;margin-bottom:3px;}
+  .sis-factor-val{font-size:13px;font-weight:600;}
+  .sis-factor-note{color:var(--muted);font-size:10px;margin-top:2px;}
+  .sis-score-bar{height:8px;border-radius:4px;background:var(--surface2);margin:12px 0 4px;overflow:hidden;}
+  .sis-score-fill{height:100%;border-radius:4px;transition:width .4s;}
+  .sis-score-label{font-size:10px;color:var(--muted);display:flex;justify-content:space-between;}
+
+  /* HR PROB PAGE */
+  .hr-tier{display:inline-block;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:600;}
+  .tier-elite{background:rgba(63,185,80,.18);color:var(--green);border:1px solid rgba(63,185,80,.35);}
+  .tier-good{background:rgba(88,166,255,.15);color:var(--blue);border:1px solid rgba(88,166,255,.3);}
+  .tier-avg{background:rgba(210,153,34,.12);color:var(--yellow);border:1px solid rgba(210,153,34,.3);}
+  .tier-low{background:rgba(125,133,144,.1);color:var(--muted);border:1px solid var(--border);}
+
+  /* LOADING */
+  #loading{position:fixed;inset:0;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;z-index:999;}
+  .spinner{width:40px;height:40px;border:3px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin .7s linear infinite;}
+  @keyframes spin{to{transform:rotate(360deg);}}
+  #loading p{color:var(--muted);font-size:13px;}
+
+  /* RANGE COMPARE */
+  .compare-row td:nth-child(n+3){font-family:'JetBrains Mono',monospace;font-size:11px;}
+  .trend-up{color:var(--green);}
+  .trend-dn{color:var(--red);}
+  .trend-flat{color:var(--muted);}
+
+  /* COMPOSITE SCORE BADGE */
+  .score-badge{display:inline-block;font-weight:700;font-size:11px;padding:2px 8px;border-radius:10px;font-family:'JetBrains Mono',monospace;min-width:34px;text-align:center;}
+  .score-hi{background:rgba(63,185,80,.2);color:var(--green);border:1px solid rgba(63,185,80,.35);}
+  .score-md{background:rgba(88,166,255,.15);color:var(--blue);border:1px solid rgba(88,166,255,.3);}
+  .score-lo{background:rgba(210,153,34,.12);color:var(--yellow);border:1px solid rgba(210,153,34,.3);}
+  .score-vl{background:rgba(248,81,73,.1);color:var(--red);border:1px solid rgba(248,81,73,.25);}
+  .pos-badge{display:inline-block;font-size:9px;font-weight:600;padding:1px 5px;border-radius:4px;background:var(--surface2);color:var(--muted);border:1px solid var(--border);margin-left:4px;vertical-align:middle;}
+
+  /* ROTO BAR CHART */
+  .roto-bar-row{margin-bottom:8px;}
+  .roto-bar-track{height:10px;background:var(--surface2);border-radius:5px;overflow:hidden;}
+  .roto-bar-fill{height:100%;border-radius:5px;}
+
+  /* WAR ROOM */
+  .wr-matchup-grade{display:inline-block;font-size:11px;font-weight:700;width:22px;text-align:center;padding:2px 0;border-radius:4px;}
+  .grade-a{color:#3fb950;background:rgba(63,185,80,.18);}
+  .grade-b{color:#58a6ff;background:rgba(88,166,255,.15);}
+  .grade-c{color:#d29922;background:rgba(210,153,34,.12);}
+  .grade-d{color:#ffa657;background:rgba(255,166,87,.12);}
+  .grade-f{color:#f85149;background:rgba(248,81,73,.12);}
+  .wr-rec{font-size:10px;font-weight:700;padding:2px 8px;border-radius:10px;text-transform:uppercase;letter-spacing:.4px;}
+  .rec-start{background:rgba(63,185,80,.18);color:var(--green);border:1px solid rgba(63,185,80,.3);}
+  .rec-sit{background:rgba(248,81,73,.12);color:var(--red);border:1px solid rgba(248,81,73,.25);}
+  .rec-lean{background:rgba(210,153,34,.12);color:var(--yellow);border:1px solid rgba(210,153,34,.25);}
+  .rec-stream{background:rgba(188,140,255,.12);color:var(--purple);border:1px solid rgba(188,140,255,.25);}
+  .hot-badge{font-size:10px;padding:1px 6px;border-radius:8px;background:rgba(255,166,87,.18);color:var(--orange);border:1px solid rgba(255,166,87,.3);}
+  .cold-badge{font-size:10px;padding:1px 6px;border-radius:8px;background:rgba(88,166,255,.12);color:var(--blue);border:1px solid rgba(88,166,255,.25);}
+  .pulse-row{display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border);}
+  .pulse-row:last-child{border-bottom:none;}
+  .trade-suggest-bar{background:rgba(210,153,34,.06);border:1px solid rgba(210,153,34,.2);border-radius:8px;padding:12px 14px;margin-bottom:12px;}
+
+  /* TRADE ANALYZER */
+  .trade-panel{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px;}
+  .trade-chip{display:inline-flex;align-items:center;gap:5px;border-radius:20px;padding:3px 10px;font-size:11px;margin:2px;cursor:pointer;}
+  .trade-chip-give{background:rgba(248,81,73,.12);color:var(--red);border:1px solid rgba(248,81,73,.3);}
+  .trade-chip-get{background:rgba(63,185,80,.12);color:var(--green);border:1px solid rgba(63,185,80,.3);}
+  .player-pick-row{display:flex;align-items:center;gap:8px;padding:6px 10px;border-radius:6px;cursor:pointer;border:1px solid transparent;transition:background .1s;margin-bottom:2px;}
+  .player-pick-row:hover{background:var(--surface2);}
+  .player-pick-row.sel-give{background:rgba(248,81,73,.08);border-color:rgba(248,81,73,.25);}
+  .player-pick-row.sel-get{background:rgba(63,185,80,.08);border-color:rgba(63,185,80,.25);}
+  .pick-name{flex:1;font-size:12px;}
+  .pick-team{color:var(--muted);font-size:10px;white-space:nowrap;}
+</style>
+</head>
+<body>
+
+<div id="loading">
+  <div class="spinner"></div>
+  <p>Loading snapshot.json…</p>
+</div>
+
+<header style="display:none" id="header">
+  <div class="logo">⚾ Fantasy <span>Baseball</span></div>
+  <div class="refresh-info" id="refresh-info"></div>
+  <button class="refresh-btn" onclick="location.reload()">↻ Refresh</button>
+</header>
+
+<nav style="display:none" id="nav">
+  <div class="tab active" onclick="showPage('overview',this)">Overview</div>
+  <div class="tab" onclick="showPage('pitchers',this)">Pitchers</div>
+  <div class="tab" onclick="showPage('hitters',this)">Hitters</div>
+  <div class="tab" onclick="showPage('faprospects',this)">Free Agents</div>
+  <div class="tab" onclick="showPage('roto',this)">Roto Scores</div>
+  <div class="tab" onclick="showPage('transactions',this)">Transactions</div>
+  <div class="tab" onclick="showPage('trade',this)">Trade Analyzer</div>
+  <div class="tab" onclick="showPage('warroom',this)">War Room</div>
+</nav>
+
+<main style="display:none" id="main">
+
+  <!-- OVERVIEW -->
+  <div class="page active" id="page-overview">
+    <div class="grid-4" id="kpi-tiles"></div>
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-header"><span class="card-title">GM Brief</span><span class="card-badge" id="gm-brief-sub"></span></div>
+      <div class="card-body" id="ov-highlights" style="padding:4px 0"></div>
+    </div>
+    <div class="grid-2">
+      <div class="card"><div class="card-header"><span class="card-title">League Standings</span></div><div class="card-body" id="standings-body"></div></div>
+      <div class="card">
+        <div class="card-header"><span class="card-title">FA Targets</span><div class="range-pills" id="fa-role-pills" style="margin-left:auto;gap:4px"></div></div>
+        <div class="card-body tbl-wrap" id="fa-role-body"></div>
+      </div>
+    </div>
+    <div class="grid-2">
+      <div class="card"><div class="card-header"><span class="card-title">My Pitchers</span></div><div class="card-body tbl-wrap" id="my-pitcher-body"></div></div>
+      <div class="card"><div class="card-header"><span class="card-title">My Hitters</span></div><div class="card-body tbl-wrap" id="my-hitter-body"></div></div>
+    </div>
+    <div class="card">
+      <div class="card-header"><span class="card-title">Upcoming Starts — Next 5 Days</span><span class="card-badge" id="starts-badge">0</span></div>
+      <div class="card-body tbl-wrap" id="starts-body"></div>
+    </div>
+  </div>
+
+  <!-- PITCHERS -->
+  <div class="page" id="page-pitchers">
+    <div class="filters">
+      <div class="range-pills" id="p-range-pills"></div>
+      <div class="range-pills" id="p-role-pills"></div>
+      <input class="search-input" id="p-search" placeholder="Search pitcher…" oninput="renderPitchers()"/>
+      <label><input type="checkbox" id="p-fa-only" onchange="renderPitchers()"> FA only</label>
+      <label><input type="checkbox" id="p-starting-only" onchange="renderPitchers()"> Has start</label>
+      <select class="filter-sel" id="p-sort" onchange="renderPitchers()">
+        <option value="score">Score</option>
+        <option value="KIP">K/IP</option><option value="WhiffPct">Whiff%</option>
+        <option value="ERA">ERA</option><option value="xFIP">xFIP</option>
+        <option value="WHIP">WHIP</option><option value="K">K</option>
+        <option value="SVHD">SV+H</option><option value="IP">IP</option>
+      </select>
+    </div>
+    <div class="grid-2" style="margin-bottom:16px;">
+      <div class="card">
+        <div class="card-header"><span class="card-title">My Staff</span><span class="card-badge" id="my-staff-badge"></span></div>
+        <div class="card-body tbl-wrap" id="my-staff-body"></div>
+      </div>
+      <div class="card">
+        <div class="card-header"><span class="card-title">ERA vs K/IP</span><span class="card-badge">season range · blue = my team</span></div>
+        <div class="card-body scatter-wrap" id="scatter-wrap">
+          <div class="scatter-legend" id="scatter-legend"></div>
+          <div id="scatter-container"></div>
+          <div class="scatter-tooltip" id="scatter-tip"></div>
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-body tbl-wrap">
+        <table>
+          <thead><tr>
+            <th>Score</th><th>Player</th><th>Pos</th><th>Status</th><th>IP</th><th>K</th><th>SV+H</th>
+            <th>ERA</th><th>xFIP</th><th>WHIP</th><th>K/IP</th><th>Whiff%</th>
+            <th>Next Start</th><th>Opp OPS</th>
+          </tr></thead>
+          <tbody id="pitcher-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- HITTERS -->
+  <div class="page" id="page-hitters">
+    <div class="filters">
+      <div class="range-pills" id="h-range-pills"></div>
+      <input class="search-input" id="h-search" placeholder="Search hitter…" oninput="renderHitters()"/>
+      <label><input type="checkbox" id="h-fa-only" onchange="renderHitters()"> FA only</label>
+      <select class="filter-sel" id="h-sort" onchange="renderHitters()">
+        <option value="wRCplus">wRC+</option><option value="OPS">OPS</option>
+        <option value="HR">HR</option><option value="RBI">RBI</option>
+        <option value="R">R</option><option value="SB">SB</option>
+        <option value="xwOBA">xwOBA</option><option value="AVG">AVG</option>
+        <option value="HR_Probability">HR Prob</option>
+      </select>
+    </div>
+    <div class="card">
+      <div class="card-body tbl-wrap">
+        <table><thead><tr>
+          <th>Player</th><th>Pos</th><th>Status</th><th>AB</th><th>R</th>
+          <th>HR</th><th>RBI</th><th>SB</th><th>AVG</th><th>OPS</th><th>wRC+</th><th>xwOBA</th><th>HR Prob</th>
+        </tr></thead>
+        <tbody id="hitter-tbody"></tbody></table>
+      </div>
+    </div>
+  </div>
+
+  <!-- FREE AGENTS -->
+  <div class="page" id="page-fa">
+    <div class="section-title">Top Pitcher Free Agents — Season Stats</div>
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-body tbl-wrap">
+        <table><thead><tr><th>Player</th><th>Injury</th><th>K/IP</th><th>ERA</th><th>WHIP</th><th>Next Start</th><th>Opp OPS</th></tr></thead>
+        <tbody id="fa-pitcher-tbody"></tbody></table>
+      </div>
+    </div>
+    <div class="section-title">Top Hitter Free Agents — Season Stats</div>
+    <div class="card">
+      <div class="card-body tbl-wrap">
+        <table><thead><tr><th>Player</th><th>Injury</th><th>HR</th><th>OPS</th><th>AVG</th><th>SB</th><th>HR Prob</th></tr></thead>
+        <tbody id="fa-hitter-tbody"></tbody></table>
+      </div>
+    </div>
+  </div>
+
+  <!-- HR PROBABILITY -->
+  <div class="page" id="page-hrprob">
+    <div class="filters">
+      <input class="search-input" id="hr-search" placeholder="Search player…" oninput="renderHRProb()"/>
+      <label><input type="checkbox" id="hr-fa-only" onchange="renderHRProb()"> FA only</label>
+      <label><input type="checkbox" id="hr-mine-only" onchange="renderHRProb()"> Mine only</label>
+      <select class="filter-sel" id="hr-tier" onchange="renderHRProb()">
+        <option value="">All tiers</option>
+        <option value="elite">Elite (&gt;20%)</option>
+        <option value="good">Good (15–20%)</option>
+        <option value="avg">Average (10–15%)</option>
+        <option value="low">Low (&lt;10%)</option>
+      </select>
+    </div>
+    <div class="grid-4" id="hr-kpis" style="margin-bottom:16px;"></div>
+    <div class="card">
+      <div class="card-body tbl-wrap">
+        <table><thead><tr>
+          <th>#</th><th>Player</th><th>Status</th><th>HR Prob</th>
+          <th>Barrel%</th><th>Hard Hit%</th><th>Avg EV</th><th>Avg LA</th>
+          <th>HR</th><th>HR/AB</th><th>HR Last 7d</th><th>OPS</th>
+        </tr></thead>
+        <tbody id="hr-tbody"></tbody></table>
+      </div>
+    </div>
+  </div>
+
+  <!-- ROTO -->
+  <div class="page" id="page-roto">
+    <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin-bottom:14px">
+      <select class="filter-sel" id="roto-week" onchange="renderRoto()"><option value="">All Weeks</option></select>
+      <div style="display:flex;align-items:center;gap:10px;font-size:11px;color:var(--muted)">
+        <span style="font-weight:600;color:var(--text)">Color key (table):</span>
+        <span style="color:var(--green);font-weight:700">#1 that week</span>
+        <span style="color:var(--blue)">Top 3</span>
+        <span style="color:var(--muted)">Mid</span>
+        <span style="color:var(--yellow)">Bottom 3</span>
+        <span style="color:var(--red);font-weight:700">Last</span>
+      </div>
+    </div>
+    <div class="grid-4" id="roto-kpis" style="margin-bottom:16px"></div>
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-header"><span class="card-title">Season Race</span><span style="color:var(--muted);font-size:11px;margin-left:auto">cumulative roto points by week · your team highlighted</span></div>
+      <div class="card-body" id="roto-race-chart" style="padding:8px 8px 0"></div>
+    </div>
+    <div class="grid-2" style="margin-bottom:16px">
+      <div class="card">
+        <div class="card-header"><span class="card-title">League Standings</span><span class="card-badge" id="roto-standings-badge"></span></div>
+        <div class="card-body" id="roto-standings-chart"></div>
+      </div>
+      <div class="card">
+        <div class="card-header"><span class="card-title">My Category Points</span><span style="color:var(--muted);font-size:11px;margin-left:auto">bar = me · line = league avg</span></div>
+        <div class="card-body" id="roto-cat-chart"></div>
+      </div>
+    </div>
+    <div class="card"><div class="card-body tbl-wrap" id="roto-body"></div></div>
+  </div>
+
+  <!-- TRANSACTIONS -->
+  <div class="page" id="page-transactions">
+    <div class="filters">
+      <input class="search-input" id="tx-search" placeholder="Search player or team…" oninput="renderTransactions()"/>
+      <select class="filter-sel" id="tx-type" onchange="renderTransactions()">
+        <option value="">All types</option>
+        <option value="ADD">Add</option><option value="DROP">Drop</option><option value="TRADE">Trade</option>
+      </select>
+    </div>
+    <div class="card"><div class="card-body tbl-wrap">
+      <table><thead><tr><th>Date</th><th>Team</th><th>Type</th><th>Player</th><th>MLB Team</th><th>Position</th></tr></thead>
+      <tbody id="tx-tbody"></tbody></table>
+    </div></div>
+  </div>
+
+  <!-- SHOULD I START -->
+  <div class="page" id="page-starthelper">
+    <div style="margin-bottom:16px;">
+      <div style="font-size:20px;font-weight:700;margin-bottom:6px;">🤔 Should I Start?</div>
+      <div style="color:var(--muted);font-size:13px;">Evaluates your rostered pitchers with upcoming starts. Each factor is scored and weighted into a start recommendation.</div>
+    </div>
+    <div class="filters">
+      <label><input type="checkbox" id="sis-fa-too" onchange="renderStartHelper()"> Include FA starters too</label>
+    </div>
+    <div id="sis-container"></div>
+  </div>
+
+  <!-- FREE AGENTS -->
+  <div class="page" id="page-faprospects">
+    <div style="margin-bottom:16px">
+      <div style="font-size:18px;font-weight:700;margin-bottom:4px;">Free Agent Targets</div>
+      <div style="color:var(--muted);font-size:12px;">Score 0–100 reflects overall fantasy value. Compare FAs (left) directly against your roster (right) to decide who to add and drop.</div>
+    </div>
+
+    <div class="section-title">Pitchers</div>
+    <div class="grid-2" style="margin-bottom:20px">
+      <div class="card">
+        <div class="card-header"><span class="card-title">Top FA Pitchers</span><span class="card-badge">by Score</span></div>
+        <div class="card-body tbl-wrap">
+          <table><thead><tr><th>Score</th><th>Pitcher</th><th>K/IP</th><th>ERA</th><th>WHIP</th><th>Next Start</th></tr></thead>
+          <tbody id="fap-pitcher-tbody"></tbody></table>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-header"><span class="card-title">My Pitchers</span><span class="card-badge">your roster</span></div>
+        <div class="card-body tbl-wrap">
+          <table><thead><tr><th>Score</th><th>Pitcher</th><th>K/IP</th><th>ERA</th><th>WHIP</th><th>Next Start</th></tr></thead>
+          <tbody id="fap-my-pitcher-tbody"></tbody></table>
+        </div>
+      </div>
+    </div>
+
+    <div class="section-title">Hitters</div>
+    <div class="grid-2">
+      <div class="card">
+        <div class="card-header"><span class="card-title">Top FA Hitters</span><span class="card-badge">by Score</span></div>
+        <div class="card-body tbl-wrap">
+          <table><thead><tr><th>Score</th><th>Hitter</th><th>OPS</th><th>HR</th><th>RBI</th><th>SB</th><th>AVG</th></tr></thead>
+          <tbody id="fap-hitter-tbody"></tbody></table>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-header"><span class="card-title">My Hitters</span><span class="card-badge">your roster</span></div>
+        <div class="card-body tbl-wrap">
+          <table><thead><tr><th>Score</th><th>Hitter</th><th>OPS</th><th>HR</th><th>RBI</th><th>SB</th><th>AVG</th></tr></thead>
+          <tbody id="fap-my-hitter-tbody"></tbody></table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- TRADE ANALYZER -->
+  <div class="page" id="page-trade">
+    <div style="margin-bottom:14px">
+      <div style="font-size:18px;font-weight:700;margin-bottom:4px;">Trade Analyzer</div>
+      <div style="color:var(--muted);font-size:12px;">Click players to add them to each side. Click again to remove. Green = you win that category.</div>
+    </div>
+
+    <!-- Selected players summary bar -->
+    <div class="grid-2" style="margin-bottom:12px">
+      <div style="padding:10px 14px;background:rgba(248,81,73,.06);border:1px solid rgba(248,81,73,.2);border-radius:8px;min-height:46px">
+        <span style="font-size:9px;font-weight:700;color:var(--red);text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:5px">Giving Up</span>
+        <div id="trade-giving-chips"><span style="color:var(--muted);font-size:11px">None — click players below</span></div>
+      </div>
+      <div style="padding:10px 14px;background:rgba(63,185,80,.06);border:1px solid rgba(63,185,80,.2);border-radius:8px;min-height:46px">
+        <span style="font-size:9px;font-weight:700;color:var(--green);text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:5px">Getting</span>
+        <div id="trade-getting-chips"><span style="color:var(--muted);font-size:11px">None — click players below</span></div>
+      </div>
+    </div>
+
+    <!-- Player pickers -->
+    <div class="grid-2" style="margin-bottom:12px">
+      <div class="trade-panel">
+        <div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">My Roster</div>
+        <input class="search-input" id="trade-my-search" placeholder="Search my players…" oninput="renderTradeMyList()" style="width:100%;margin-bottom:8px"/>
+        <div id="trade-my-list" style="max-height:300px;overflow-y:auto"></div>
+      </div>
+      <div class="trade-panel">
+        <div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">Other Teams</div>
+        <select class="filter-sel" id="trade-team-filter" onchange="filterTradeTeam()" style="width:100%;margin-bottom:6px">
+          <option value="">All Teams</option>
+        </select>
+        <input class="search-input" id="trade-other-search" placeholder="Search players…" oninput="filterTradeTeam()" style="width:100%;margin-bottom:8px"/>
+        <div id="trade-other-list" style="max-height:262px;overflow-y:auto"></div>
+      </div>
+    </div>
+
+    <div id="trade-suggestion" class="trade-suggest-bar" style="display:none"></div>
+
+    <div style="text-align:right;margin-bottom:12px">
+      <button class="refresh-btn" style="background:var(--surface2);border:1px solid var(--border);color:var(--muted)" onclick="clearTrade()">Clear All</button>
+    </div>
+    <div class="card">
+      <div class="card-body" id="trade-analysis">
+        <div class="empty">Click players on both sides to analyze a trade</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- WAR ROOM -->
+  <div class="page" id="page-warroom">
+    <div style="margin-bottom:14px">
+      <div style="font-size:18px;font-weight:700;margin-bottom:4px;">War Room</div>
+      <div style="color:var(--muted);font-size:12px;">Weekly action dashboard — who to start, who to stream, and where your roster needs help.</div>
+    </div>
+    <div class="grid-2" style="margin-bottom:16px">
+      <div class="card">
+        <div class="card-header"><span class="card-title">Hot &amp; Cold — My Roster</span><span class="card-badge">7d vs season</span></div>
+        <div class="card-body">
+          <div class="grid-2" style="margin:0;gap:12px">
+            <div>
+              <div style="font-size:10px;font-weight:700;color:var(--orange);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">Hot</div>
+              <div id="wr-hot"></div>
+            </div>
+            <div>
+              <div style="font-size:10px;font-weight:700;color:var(--blue);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">Cold</div>
+              <div id="wr-cold"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-header"><span class="card-title">Category Intel</span><span class="card-badge">vs league avg</span></div>
+        <div class="card-body" id="wr-cat-intel"></div>
+      </div>
+    </div>
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-header"><span class="card-title">Start / Sit — My Pitchers</span><span class="card-badge">upcoming starts</span></div>
+      <div class="card-body tbl-wrap">
+        <table><thead><tr><th>Pos</th><th>Pitcher</th><th>Matchup</th><th>Opp OPS</th><th>Grade</th><th>ERA</th><th>K/IP</th><th>Score</th><th>Recommendation</th></tr></thead>
+        <tbody id="wr-startsit-tbody"></tbody></table>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-header"><span class="card-title">Streaming Targets</span><span class="card-badge">FA with upcoming starts</span></div>
+      <div class="card-body tbl-wrap">
+        <table><thead><tr><th>Score</th><th>Pos</th><th>Pitcher</th><th>Matchup</th><th>Opp OPS</th><th>Grade</th><th>ERA</th><th>K/IP</th><th>Status</th></tr></thead>
+        <tbody id="wr-stream-tbody"></tbody></table>
+      </div>
+    </div>
+  </div>
+
+</main>
+
+<script>
+// ─── STATE ────────────────────────────────────────────────────────────────────
+let DATA = null, pRange = null, hRange = null;
+const ROTO_CATS = ['R','HR','RBI','SB','OPS','K','QS','W','ERA','WHIP','SVHD'];
+const LOWER_BETTER_CATS = new Set(['ERA','WHIP','B_SO']);
+
+// ─── BOOTSTRAP ────────────────────────────────────────────────────────────────
+async function loadData() {
+  try {
+    const r = await fetch('data/snapshot.json');
+    if (!r.ok) throw new Error(r.statusText);
+    DATA = await r.json();
+    init();
+  } catch(e) {
+    document.getElementById('loading').innerHTML = `
+      <div style="color:var(--red);font-size:14px;text-align:center;padding:20px">
+        <b>Could not load data/snapshot.json</b><br><br>
+        <span style="color:var(--muted);font-size:12px">
+          Run <code style="background:var(--surface2);padding:2px 8px;border-radius:4px">python fetch_data.py</code>
+          first, then reload this page.
+        </span>
+      </div>`;
+  }
+}
+
+function init() {
+  document.getElementById('loading').style.display = 'none';
+  ['header','nav','main'].forEach(id => document.getElementById(id).style.display = '');
+  const ts = new Date(DATA.refreshed_at);
+  document.getElementById('refresh-info').textContent =
+    `Refreshed: ${ts.toLocaleDateString()} ${ts.toLocaleTimeString()}`;
+
+  const ranges = [...new Set((DATA.pitchers||[]).map(r=>r.Dataset).filter(v=>Number.isFinite(+v)))].sort((a,b)=>+a-+b);
+  pRange = ranges.includes(DATA.league_year) ? DATA.league_year : (ranges[ranges.length-1]||DATA.league_year);
+  hRange = pRange;
+
+  buildRangePills('p-range-pills', ranges, pRange, v=>{pRange=v;renderPitchers();});
+  buildRangePills('h-range-pills', ranges, hRange, v=>{hRange=v;renderHitters();});
+
+  let pRole='all';
+  const roleWrap=document.getElementById('p-role-pills');
+  ['all','SP','RP'].forEach(r=>{
+    const el=document.createElement('div');
+    el.className='pill'+(r==='all'?' active':'');
+    el.textContent={all:'All',SP:'SP',RP:'RP'}[r];
+    el.onclick=()=>{pRole=r;roleWrap.querySelectorAll('.pill').forEach(p=>p.classList.remove('active'));el.classList.add('active');renderPitchers();};
+    roleWrap.appendChild(el);
+  });
+  window._getPRole=()=>pRole;
+
+  renderOverview(); renderHighlights(); renderFAByRole();
+  renderPitchers(); renderHitters();
+  renderFA(); renderHRProb(); renderRoto(); renderTransactions(); renderStartHelper();
+  renderFAProspects(); initTradeAnalyzer(); renderWarRoom();
+}
+
+function showPage(id, el) {
+  document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
+  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+  document.getElementById('page-'+id).classList.add('active');
+  el.classList.add('active');
+  if(id==='pitchers') setTimeout(buildScatter,50);
+}
+
+// ─── HELPERS ──────────────────────────────────────────────────────────────────
+const MY   = () => DATA.my_team || '';
+const fmt  = (v,d=2) => (v==null||+v===-1||isNaN(+v)) ? '—' : (+v).toFixed(d);
+const fmtP = v => v>0 ? (v*100).toFixed(1)+'%' : '—';
+const isMyRow  = r => (r.FantasyTeam||'') === MY();
+const isFARow  = r => !(r.FantasyTeam||'').trim();
+
+function rosterBadge(row) {
+  const fa  = row.FreeAgentInjuryStatus || '';
+  const tm  = row.FantasyTeam || '';
+  if (fa==='IL'||fa==='OUT') return `<span class="badge badge-il">${fa}</span>`;
+  if (fa==='DTD') return `<span class="badge badge-dtd">DTD</span>`;
+  if (fa && !tm) return `<span class="badge badge-fa">FA</span>`;
+  if (tm===MY()) return `<span class="badge badge-mine">Mine</span>`;
+  if (tm) return `<span class="badge badge-other">${tm.length>14?tm.slice(0,14)+'…':tm}</span>`;
+  return `<span class="badge badge-fa">FA</span>`;
+}
+
+function probBar(p) {
+  if (!p||p<=0) return '—';
+  const pct = Math.min(p/0.30,1)*100;
+  const h   = Math.round(120 - pct*1.2);
+  return `${fmtP(p)}<span class="prob-bar-wrap"><span style="display:block;height:100%;width:${pct}%;background:hsl(${h},70%,50%);border-radius:3px"></span></span>`;
+}
+
+function hrTier(p) {
+  if (!p||p<=0) return '';
+  if (p>=0.20) return `<span class="hr-tier tier-elite">Elite</span>`;
+  if (p>=0.15) return `<span class="hr-tier tier-good">Good</span>`;
+  if (p>=0.10) return `<span class="hr-tier tier-avg">Avg</span>`;
+  return `<span class="hr-tier tier-low">Low</span>`;
+}
+
+function startChip(r) {
+  if (!r.PSP_Date || r.PSP_Date === '1999-01-01') return '—';
+  const proj = r.PSP_Projected ? ' <span style="color:var(--muted);font-size:11px">(proj.)</span>' : '';
+  return `<span class="start-chip">${r.PSP_Date} ${r.PSP_HomeVAway||''}${proj}</span>`;
+}
+
+function txClass(t) {
+  if (!t) return '';
+  const u = t.toString().toUpperCase();
+  return u.includes('ADD')?'tx-add':u.includes('DROP')?'tx-drop':u.includes('TRADE')?'tx-trade':'';
+}
+
+function buildRangePills(cid, ranges, active, cb) {
+  const labels = {[DATA.league_year]:'Season',30:'Last 30d',15:'Last 15d',7:'Last 7d'};
+  const wrap = document.getElementById(cid);
+  wrap.innerHTML = '';
+  ranges.forEach(r=>{
+    const el = document.createElement('div');
+    el.className='pill'+(+r===+active?' active':'');
+    el.textContent = labels[r]||r;
+    el.onclick=()=>{ wrap.querySelectorAll('.pill').forEach(p=>p.classList.remove('active')); el.classList.add('active'); cb(+r); };
+    wrap.appendChild(el);
+  });
+}
+
+// ─── OVERVIEW ─────────────────────────────────────────────────────────────────
+function renderOverview() {
+  const myTeam = MY();
+  const pitchers = (DATA.pitchers||[]).filter(r=>+r.Dataset===DATA.league_year);
+  const hitters  = (DATA.hitters||[]).filter(r=>+r.Dataset===DATA.league_year);
+  const myP = pitchers.filter(r=>(r.FantasyTeam||'')===myTeam);
+  const myH = hitters.filter(r=>(r.FantasyTeam||'')===myTeam);
+  const standing = (DATA.standings||[]).find(s=>s.team_name===myTeam);
+  const upStarts = [...new Set(
+    (DATA.pitchers||[]).filter(r=>(r.FantasyTeam||'')===myTeam && r.PSP_Date && r.PSP_Date!=='1999-01-01').map(r=>r.PlayerName)
+  )].length;
+
+  document.getElementById('kpi-tiles').innerHTML = [
+    {label:'Standing', value: standing?`#${standing.standing}`:'—', sub: standing?`${standing.wins}W–${standing.losses}L`:''},
+    {label:'My Pitchers', value:myP.length, sub:`of ${pitchers.length} total`},
+    {label:'My Hitters',  value:myH.length, sub:`of ${hitters.length} total`},
+    {label:'Upcoming Starts', value:upStarts, sub:'pitchers with start next 5d'},
+  ].map(t=>`<div class="stat-tile"><div class="stat-label">${t.label}</div><div class="stat-value">${t.value}</div><div class="stat-sub">${t.sub}</div></div>`).join('');
+
+  // Luck = roto rank minus actual rank (positive = luckier than roto suggests)
+  const rotoTotals={};
+  (DATA.roto||[]).forEach(r=>{if(r.Team&&r.Roto_Score) rotoTotals[r.Team]=(rotoTotals[r.Team]||0)+(+r.Roto_Score||0);});
+  const rotoRankMap={};
+  Object.entries(rotoTotals).sort((a,b)=>b[1]-a[1]).forEach(([t],i)=>rotoRankMap[t]=i+1);
+
+  document.getElementById('standings-body').innerHTML = `
+    <div style="display:flex;align-items:center;gap:12px;padding:4px 0 6px;border-bottom:1px solid var(--border);margin-bottom:2px">
+      <span style="width:22px"></span>
+      <span style="flex:1;font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px">Team</span>
+      <span style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;width:36px;text-align:right">W–L</span>
+      <span style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;width:38px;text-align:right" title="Actual rank vs roto rank. Positive = lucky.">Luck</span>
+    </div>
+    ${(DATA.standings||[]).map((s,i)=>{
+      const actualRank=i+1, rotoRank=rotoRankMap[s.team_name]||actualRank;
+      const luck=rotoRank-actualRank;
+      const luckColor=luck>1?'var(--green)':luck<-1?'var(--red)':'var(--muted)';
+      const luckStr=luck===0?'—':(luck>0?'+':'')+luck;
+      return `<div style="display:flex;align-items:center;gap:12px;padding:8px 0;border-bottom:1px solid var(--border)">
+        <span class="rank-num rank-${actualRank}">${actualRank}</span>
+        <span style="flex:1;font-weight:${s.team_name===myTeam?600:400};color:${s.team_name===myTeam?'var(--blue)':'var(--text)'}">${s.team_name}</span>
+        <span style="color:var(--muted);font-size:11px;width:36px;text-align:right">${s.wins}–${s.losses}</span>
+        <span style="color:${luckColor};font-size:11px;font-weight:600;width:38px;text-align:right" title="Roto rank: #${rotoRank}">${luckStr}</span>
+      </div>`;
+    }).join('')}`;
+
+  document.getElementById('my-pitcher-body').innerHTML = myP.length ? `
+    <table><thead><tr><th>Player</th><th>ERA</th><th>WHIP</th><th>K/IP</th><th>Next Start</th></tr></thead>
+    <tbody>${myP.map(r=>`<tr><td><b>${r.PlayerName}</b></td><td>${fmt(r.ERA)}</td><td>${fmt(r.WHIP)}</td><td>${fmt(r['K/IP']||r.KIP)}</td>
+    <td>${startChip(r)}</td></tr>`).join('')}
+    </tbody></table>` : '<div class="empty">No pitchers on your roster</div>';
+
+  document.getElementById('my-hitter-body').innerHTML = myH.length ? `
+    <table><thead><tr><th>Player</th><th>HR</th><th>OPS</th><th>AVG</th><th>HR Prob</th></tr></thead>
+    <tbody>${myH.map(r=>`<tr><td><b>${r.PlayerName}</b></td><td>${fmt(r.HR,0)}</td><td>${fmt(r.OPS,3)}</td><td>${fmt(r.AVG,3)}</td>
+    <td>${probBar(r.HR_Probability)}</td></tr>`).join('')}
+    </tbody></table>` : '<div class="empty">No hitters on your roster</div>';
+
+  const starts = (DATA.pitchers||[]).filter(r=>r.PSP_Date&&r.PSP_Date!=='1999-01-01'&&+r.Dataset===DATA.league_year)
+    .sort((a,b)=>(a.PSP_Date||'').localeCompare(b.PSP_Date||''));
+  document.getElementById('starts-badge').textContent = starts.length;
+  document.getElementById('starts-body').innerHTML = starts.length ? `
+    <table><thead><tr><th>Date</th><th>Pitcher</th><th>Status</th><th>Matchup</th><th>Opp OPS</th><th>ERA</th><th>K/IP</th></tr></thead>
+    <tbody>${starts.map(r=>`<tr class="${isMyRow(r)?'my-team-row':''}">
+      <td style="font-family:monospace">${r.PSP_Date}</td><td><b>${r.PlayerName}</b></td>
+      <td>${rosterBadge(r)}</td><td>${r.PSP_HomeVAway||'—'}</td>
+      <td style="color:${+r.Team_OPS_Value>0.75?'var(--red)':'var(--green)'}">${fmt(r.Team_OPS_Value,3)}</td>
+      <td>${fmt(r.ERA)}</td><td>${fmt(r['K/IP']||r.KIP)}</td>
+    </tr>`).join('')}</tbody></table>` : '<div class="empty">No upcoming starts found</div>';
+}
+
+// ─── PITCHERS TABLE ───────────────────────────────────────────────────────────
+function renderPitchers() {
+  const search   = (document.getElementById('p-search').value||'').toLowerCase();
+  const faOnly   = document.getElementById('p-fa-only').checked;
+  const startOnly= document.getElementById('p-starting-only').checked;
+  const sortCol  = document.getElementById('p-sort').value;
+  const pRole    = window._getPRole ? window._getPRole() : 'all';
+  const posLookup= buildPosLookup();
+  const myTeam   = MY();
+
+  const isSpRole = r => +r.GS>=5 || (r.Position||'').includes('SP');
+  const isRpRole = r => !isSpRole(r);
+  const roleOk   = r => pRole==='all'?true:pRole==='SP'?isSpRole(r):isRpRole(r);
+
+  let rows = (DATA.pitchers||[]).filter(r=>+r.Dataset===+pRange);
+  if (search)    rows=rows.filter(r=>(r.PlayerName||'').toLowerCase().includes(search));
+  if (faOnly)    rows=rows.filter(r=>isFARow(r));
+  if (startOnly) rows=rows.filter(r=>r.PSP_Date&&r.PSP_Date!=='1999-01-01');
+  rows=rows.filter(roleOk);
+
+  if(sortCol==='score') {
+    rows.sort((a,b)=>pitcherScore(b)-pitcherScore(a));
+  } else {
+    const asc=['ERA','WHIP','xFIP'].includes(sortCol);
+    const key=sortCol==='KIP'?'K/IP':sortCol;
+    rows.sort((a,b)=>asc?(+a[key]||99)-(+b[key]||99):(+b[key]||0)-(+a[key]||0));
+  }
+
+  // My Staff card
+  const myP=(DATA.pitchers||[]).filter(r=>+r.Dataset===DATA.league_year&&(r.FantasyTeam||'')===myTeam)
+    .map(r=>({...r,_score:pitcherScore(r)})).sort((a,b)=>b._score-a._score);
+  const staffBadge=document.getElementById('my-staff-badge');
+  if(staffBadge) staffBadge.textContent=`${myP.length} pitchers`;
+  const staffEl=document.getElementById('my-staff-body');
+  if(staffEl) staffEl.innerHTML=myP.length?`
+    <table><thead><tr><th>Score</th><th>Player</th><th>Pos</th><th>ERA</th><th>xFIP</th><th>WHIP</th><th>K/IP</th><th>SVHD</th><th>Next Start</th></tr></thead>
+    <tbody>${myP.map(r=>{
+      const xfip=+r.xFIP||0;
+      return `<tr>
+        <td>${scoreBadge(r._score)}</td>
+        <td><b>${r.PlayerName}</b></td>
+        <td><span class="pos-badge">${inferPos(r,posLookup)}</span></td>
+        <td style="color:${+r.ERA<3.5?'var(--green)':+r.ERA>5?'var(--red)':'var(--text)'}">${fmt(r.ERA)}</td>
+        <td style="color:${xfip>0&&xfip<3.5?'var(--green)':xfip>5?'var(--red)':xfip>0?'var(--text)':'var(--muted)'}">${xfip>0?fmt(xfip):'—'}</td>
+        <td style="color:${+r.WHIP<1.2?'var(--green)':+r.WHIP>1.5?'var(--red)':'var(--text)'}">${fmt(r.WHIP)}</td>
+        <td>${fmt(r['K/IP']||r.KIP)}</td>
+        <td>${(+r.SVHD||+r.SV||0)>0?fmt(+r.SVHD||+r.SV||0,0):'—'}</td>
+        <td>${startChip(r)}</td>
+      </tr>`;
+    }).join('')}</tbody></table>`:'<div class="empty">No pitchers on roster</div>';
+
+  document.getElementById('pitcher-tbody').innerHTML = rows.map(r=>{
+    const xfip=+r.xFIP||0, whiff=+r.WhiffPct||0, svhd=+r.SVHD||+r.SV||0;
+    const score=pitcherScore(r);
+    return `<tr class="${isMyRow(r)?'my-team-row':''}">
+      <td>${scoreBadge(score)}</td>
+      <td><b>${r.PlayerName}</b> <span style="color:var(--muted);font-size:11px">${r.Team||''}</span></td>
+      <td><span class="pos-badge">${inferPos(r,posLookup)}</span></td>
+      <td>${rosterBadge(r)}</td>
+      <td>${fmt(r.IP,1)}</td><td>${fmt(r.K,0)}</td>
+      <td>${svhd>0?fmt(svhd,0):'—'}</td>
+      <td style="color:${+r.ERA<3.5?'var(--green)':+r.ERA>5?'var(--red)':'var(--text)'}">${fmt(r.ERA)}</td>
+      <td style="color:${xfip>0&&xfip<3.5?'var(--green)':xfip>5?'var(--red)':xfip>0?'var(--text)':'var(--muted)'}">${xfip>0?fmt(xfip):'—'}</td>
+      <td style="color:${+r.WHIP<1.2?'var(--green)':+r.WHIP>1.5?'var(--red)':'var(--text)'}">${fmt(r.WHIP)}</td>
+      <td>${fmt(r['K/IP']||r.KIP)}</td>
+      <td style="color:${whiff>=.135?'var(--green)':whiff>=.095?'var(--text)':whiff>0?'var(--red)':'var(--muted)'}">${whiff>0?fmtP(whiff):'—'}</td>
+      <td>${startChip(r)}</td>
+      <td style="color:${+r.Team_OPS_Value>0.75?'var(--red)':+r.Team_OPS_Value>0?'var(--green)':'var(--muted)'}">${+r.Team_OPS_Value>0?fmt(r.Team_OPS_Value,3):'—'}</td>
+    </tr>`;
+  }).join('')||'<tr><td colspan="14" class="empty">No pitchers match</td></tr>';
+
+  buildScatter();
+}
+
+// ─── SCATTER PLOT ─────────────────────────────────────────────────────────────
+function buildScatter() {
+  const container = document.getElementById('scatter-container');
+  if (!container) return;
+  container.innerHTML = '';
+
+  const rows = (DATA.pitchers||[]).filter(r=>+r.Dataset===+pRange && +r.ERA>0 && +r.ERA<10 && +(r['K/IP']||r.KIP)>0);
+  if (!rows.length) { container.innerHTML='<div class="empty">No scatter data</div>'; return; }
+
+  const W = container.offsetWidth || 500, H = 320;
+  const margin = {top:20,right:20,bottom:40,left:50};
+  const iw = W-margin.left-margin.right, ih = H-margin.top-margin.bottom;
+
+  const xVals = rows.map(r=>+(r['K/IP']||r.KIP)||0);
+  const yVals = rows.map(r=>+r.ERA||0);
+  const xMax  = Math.min(d3.max(xVals)*1.1, 3);
+  const yMax  = Math.min(d3.max(yVals)*1.05, 9);
+
+  const x = d3.scaleLinear().domain([0, xMax]).range([0, iw]);
+  const y = d3.scaleLinear().domain([0, yMax]).range([ih, 0]);
+
+  const svg = d3.select(container).append('svg')
+    .attr('width', W).attr('height', H);
+  const g = svg.append('g').attr('transform',`translate(${margin.left},${margin.top})`);
+
+  // grid
+  g.append('g').attr('class','grid').call(d3.axisLeft(y).ticks(5).tickSize(-iw).tickFormat(''));
+  g.append('g').attr('class','grid').attr('transform',`translate(0,${ih})`).call(d3.axisBottom(x).ticks(6).tickSize(-ih).tickFormat(''));
+
+  // quadrant lines (ERA=4, K/IP=0.9)
+  const qERA=4, qKIP=0.9;
+  const qy = y(qERA), qx = x(qKIP);
+  [[0,qy,iw,qy],[qx,0,qx,ih]].forEach(([x1,y1,x2,y2])=>{
+    g.append('line').attr('x1',x1).attr('y1',y1).attr('x2',x2).attr('y2',y2)
+      .style('stroke','var(--accent)').style('stroke-width',1).style('stroke-dasharray','4,4').style('opacity',.5);
+  });
+
+  // quadrant labels
+  [['Elite Zone','var(--green)',xMax*.55,0.3],['High K, High ERA','var(--yellow)',xMax*.55,qERA+0.25],
+   ['Low K, Low ERA','var(--muted)',0.05,0.3],['Sit Zone','var(--red)',0.05,qERA+0.25]].forEach(([lbl,col,lx,ly])=>{
+    g.append('text').attr('x',x(lx)).attr('y',y(ly)).text(lbl)
+      .style('fill',col).style('font-size','9px').style('opacity',.6);
+  });
+
+  // axes
+  g.append('g').attr('class','axis').attr('transform',`translate(0,${ih})`).call(d3.axisBottom(x).ticks(6));
+  g.append('g').attr('class','axis').call(d3.axisLeft(y).ticks(5));
+  g.append('text').attr('x',iw/2).attr('y',ih+35).attr('text-anchor','middle').style('fill','var(--muted)').style('font-size','10px').text('K / IP');
+  g.append('text').attr('transform','rotate(-90)').attr('x',-ih/2).attr('y',-38).attr('text-anchor','middle').style('fill','var(--muted)').style('font-size','10px').text('ERA');
+
+  // dots
+  const tip = document.getElementById('scatter-tip');
+  const scatterWrap = document.getElementById('scatter-wrap');
+  const wrapRect = scatterWrap.getBoundingClientRect();
+
+  rows.forEach(r=>{
+    const isMine = isMyRow(r);
+    const isFA   = isFARow(r);
+    const col    = isMine?'var(--blue)':isFA?'var(--green)':'var(--muted)';
+    const hasStart = r.PSP_Date && r.PSP_Date!=='1999-01-01';
+    const kip = +(r['K/IP']||r.KIP)||0;
+    const era = +r.ERA||0;
+    const cx=x(kip), cy=y(era);
+
+    const circle = g.append('circle')
+      .attr('cx',cx).attr('cy',cy).attr('r',isMine?6:isFA?5:4)
+      .style('fill',col).style('opacity',isMine?1:0.65)
+      .style('stroke',hasStart?'var(--yellow)':'none').style('stroke-width',2)
+      .style('cursor','pointer');
+
+    if (isMine) {
+      g.append('text').attr('x',cx+8).attr('y',cy+4).text(r.PlayerName.split(' ')[1]||r.PlayerName)
+        .style('fill','var(--text)').style('font-size','9px');
+    }
+
+    circle.on('mousemove', (event)=>{
+      const rect = scatterWrap.getBoundingClientRect();
+      const px = event.clientX-rect.left+10, py = event.clientY-rect.top-40;
+      const oppOps = +r.Team_OPS_Value>0 ? `Opp OPS: ${(+r.Team_OPS_Value).toFixed(3)}` : '';
+      tip.style.left=px+'px'; tip.style.top=py+'px'; tip.style.opacity=1;
+      tip.innerHTML=`<b>${r.PlayerName}</b>
+        <span>ERA: ${fmt(r.ERA)} | K/IP: ${fmt(kip)}</span><br>
+        <span>WHIP: ${fmt(r.WHIP)} | IP: ${fmt(r.IP,1)}</span><br>
+        <span>${isMine?'<b style="color:var(--blue)">My Player</b>':isFA?'<b style="color:var(--green)">Free Agent</b>':'Rostered'}</span>
+        ${hasStart?`<br><span style="color:var(--yellow)">▶ Start: ${r.PSP_Date} ${r.PSP_HomeVAway||''}${r.PSP_Projected?' (proj.)':''}</span>`:''}
+        ${oppOps?`<br><span>${oppOps}</span>`:''}`;
+    }).on('mouseleave',()=>{ tip.style.opacity=0; });
+  });
+
+  // legend
+  document.getElementById('scatter-legend').innerHTML = [
+    ['var(--blue)','My players'],['var(--green)','Free agents'],['var(--muted)','Rostered'],
+    ['var(--yellow)','⬤ Has upcoming start (ring)','ring'],
+  ].map(([c,l,t])=>t==='ring'
+    ? `<span><span style="display:inline-block;width:10px;height:10px;border-radius:50%;border:2px solid var(--yellow);background:transparent;margin-right:4px;vertical-align:middle"></span><span style="color:var(--muted)">${l}</span></span>`
+    : `<span><span class="legend-dot" style="background:${c}"></span><span style="color:var(--muted)">${l}</span></span>`
+  ).join('');
+}
+
+
+// ─── HITTERS ──────────────────────────────────────────────────────────────────
+function renderHitters() {
+  const search = (document.getElementById('h-search').value||'').toLowerCase();
+  const faOnly = document.getElementById('h-fa-only').checked;
+  const sortCol= document.getElementById('h-sort').value;
+  let rows = (DATA.hitters||[]).filter(r=>+r.Dataset===+hRange);
+  if (search) rows=rows.filter(r=>(r.PlayerName||'').toLowerCase().includes(search));
+  if (faOnly) rows=rows.filter(r=>isFARow(r));
+  rows.sort((a,b)=>(+b[sortCol]||0)-(+a[sortCol]||0));
+  const hPosLu=buildPosLookup();
+  document.getElementById('hitter-tbody').innerHTML = rows.map(r=>{
+    const pos=inferPos(r,hPosLu);
+    const wrc=+r.wRCplus||0; const xwoba=+r.xwOBA||0;
+    return `<tr class="${isMyRow(r)?'my-team-row':''}">
+      <td><b>${r.PlayerName}</b> <span style="color:var(--muted);font-size:11px">${r.Team||''}</span></td>
+      <td><span class="pos-badge">${pos}</span></td>
+      <td>${rosterBadge(r)}</td>
+      <td>${fmt(r.AB,0)}</td><td>${fmt(r.R,0)}</td><td>${fmt(r.HR,0)}</td>
+      <td>${fmt(r.RBI,0)}</td><td>${fmt(r.SB,0)}</td>
+      <td style="color:${+r.AVG>.29?'var(--green)':+r.AVG<.22?'var(--red)':'var(--text)'}">${fmt(r.AVG,3)}</td>
+      <td style="color:${+r.OPS>.85?'var(--green)':+r.OPS<.70?'var(--red)':'var(--text)'}">${fmt(r.OPS,3)}</td>
+      <td style="font-weight:${wrc>=120?600:400};color:${wrc>=120?'var(--green)':wrc>=90?'var(--text)':wrc>0?'var(--red)':'var(--muted)'}">${wrc>0?wrc:'—'}</td>
+      <td style="color:${xwoba>=.370?'var(--green)':xwoba>=.310?'var(--text)':xwoba>0?'var(--red)':'var(--muted)'}">${xwoba>0?fmt(xwoba,3):'—'}</td>
+      <td>${probBar(r.HR_Probability)}</td>
+    </tr>`;
+  }).join('')||'<tr><td colspan="13" class="empty">No hitters match</td></tr>';
+}
+
+// ─── FREE AGENTS ──────────────────────────────────────────────────────────────
+function renderFA() {
+  const yr = DATA.league_year;
+  const faP = (DATA.pitchers||[]).filter(r=>+r.Dataset===yr&&isFARow(r))
+    .sort((a,b)=>(+(b['K/IP']||b.KIP)||0)-(+(a['K/IP']||a.KIP)||0)).slice(0,30);
+  document.getElementById('fa-pitcher-tbody').innerHTML = faP.map(r=>`
+    <tr><td><b>${r.PlayerName}</b> <span style="color:var(--muted);font-size:11px">${r.Team||''}</span></td>
+    <td>${rosterBadge(r)}</td>
+    <td>${fmt(r['K/IP']||r.KIP)}</td>
+    <td style="color:${+r.ERA<3.5?'var(--green)':+r.ERA>5?'var(--red)':'var(--text)'}">${fmt(r.ERA)}</td>
+    <td style="color:${+r.WHIP<1.2?'var(--green)':+r.WHIP>1.5?'var(--red)':'var(--text)'}">${fmt(r.WHIP)}</td>
+    <td>${startChip(r)}</td>
+    <td style="color:${+r.Team_OPS_Value>0.75?'var(--red)':+r.Team_OPS_Value>0?'var(--green)':'var(--muted)'}">${fmt(r.Team_OPS_Value,3)}</td>
+    </tr>`).join('')||'<tr><td colspan="7" class="empty">No FA pitchers</td></tr>';
+
+  const faH = (DATA.hitters||[]).filter(r=>+r.Dataset===yr&&isFARow(r))
+    .sort((a,b)=>(+b.OPS||0)-(+a.OPS||0)).slice(0,30);
+  document.getElementById('fa-hitter-tbody').innerHTML = faH.map(r=>`
+    <tr><td><b>${r.PlayerName}</b> <span style="color:var(--muted);font-size:11px">${r.Team||''}</span></td>
+    <td>${rosterBadge(r)}</td>
+    <td>${fmt(r.HR,0)}</td>
+    <td style="color:${+r.OPS>.85?'var(--green)':+r.OPS<.70?'var(--red)':'var(--text)'}">${fmt(r.OPS,3)}</td>
+    <td>${fmt(r.AVG,3)}</td><td>${fmt(r.SB,0)}</td>
+    <td>${probBar(r.HR_Probability)}</td>
+    </tr>`).join('')||'<tr><td colspan="7" class="empty">No FA hitters</td></tr>';
+}
+
+// ─── HR PROBABILITY ───────────────────────────────────────────────────────────
+function renderHRProb() {
+  const search    = (document.getElementById('hr-search').value||'').toLowerCase();
+  const faOnly    = document.getElementById('hr-fa-only').checked;
+  const mineOnly  = document.getElementById('hr-mine-only').checked;
+  const tierFilter= document.getElementById('hr-tier').value;
+
+  let rows = (DATA.hitters||[]).filter(r=>+r.Dataset===DATA.league_year && +r.HR_Probability>0);
+  if (search)   rows=rows.filter(r=>(r.PlayerName||'').toLowerCase().includes(search));
+  if (faOnly)   rows=rows.filter(r=>isFARow(r));
+  if (mineOnly) rows=rows.filter(r=>isMyRow(r));
+  if (tierFilter) {
+    const bounds = {elite:[.20,1],good:[.15,.20],avg:[.10,.15],low:[0,.10]};
+    const [lo,hi]=bounds[tierFilter]||[0,1];
+    rows=rows.filter(r=>+r.HR_Probability>=lo&&+r.HR_Probability<(hi===1?999:hi));
+  }
+  rows.sort((a,b)=>(+b.HR_Probability||0)-(+a.HR_Probability||0));
+
+  // KPIs
+  const elite=rows.filter(r=>+r.HR_Probability>=.20).length;
+  const good =rows.filter(r=>+r.HR_Probability>=.15&&+r.HR_Probability<.20).length;
+  const myTop=rows.filter(r=>isMyRow(r)).slice(0,1)[0];
+  const topFA=rows.filter(r=>isFARow(r)).slice(0,1)[0];
+  document.getElementById('hr-kpis').innerHTML=[
+    {label:'Elite (≥20%)',  value:elite,  sub:'top HR probability'},
+    {label:'Good (15–20%)', value:good,   sub:'strong HR candidates'},
+    {label:'My Best',       value:myTop?fmtP(myTop.HR_Probability):'—', sub:myTop?.PlayerName||''},
+    {label:'Best Available',value:topFA?fmtP(topFA.HR_Probability):'—', sub:topFA?.PlayerName||''},
+  ].map(t=>`<div class="stat-tile"><div class="stat-label">${t.label}</div><div class="stat-value" style="font-size:22px">${t.value}</div><div class="stat-sub">${t.sub}</div></div>`).join('');
+
+  document.getElementById('hr-tbody').innerHTML = rows.map((r,i)=>`
+    <tr class="${isMyRow(r)?'my-team-row':''}">
+      <td style="color:var(--muted);font-size:11px">${i+1}</td>
+      <td><b>${r.PlayerName}</b> <span style="color:var(--muted);font-size:11px">${r.Team||''}</span></td>
+      <td>${rosterBadge(r)}</td>
+      <td>${probBar(r.HR_Probability)} ${hrTier(+r.HR_Probability)}</td>
+      <td style="color:${+r.Barrel_Pct>12?'var(--green)':'var(--text)'}">${+r.Barrel_Pct>0?fmt(r.Barrel_Pct,1)+'%':'—'}</td>
+      <td style="color:${+r.HardHit_Pct>50?'var(--green)':'var(--text)'}">${+r.HardHit_Pct>0?fmt(r.HardHit_Pct,1)+'%':'—'}</td>
+      <td>${+r.MaxEV>0?fmt(r.MaxEV,1)+' mph':'—'}</td>
+      <td>${+r.Avg_LA>0?fmt(r.Avg_LA,1)+'°':'—'}</td>
+      <td>${fmt(r.HR,0)}</td>
+      <td>${+r.HR>0&&+r.AB>0?((+r.HR/+r.AB)*100).toFixed(1)+'%':'—'}</td>
+      <td style="color:${+r.HR_Last7>0?'var(--yellow)':'var(--muted)'}">${+r.HR_Last7>0?r.HR_Last7:'—'}</td>
+      <td>${fmt(r.OPS,3)}</td>
+    </tr>`).join('')||'<tr><td colspan="12" class="empty">No HR probability data</td></tr>';
+}
+
+// ─── ROTO ─────────────────────────────────────────────────────────────────────
+function renderRoto() {
+  const rotoData = DATA.roto||[];
+  if (!rotoData.length) {
+    ['roto-body','roto-standings-chart','roto-cat-chart','roto-kpis'].forEach(id=>{const el=document.getElementById(id);if(el)el.innerHTML='<div class="empty">No roto data</div>';});
+    return;
+  }
+  const myTeam=MY();
+  const weeks=[...new Set(rotoData.map(r=>r.Week).filter(Boolean))].sort((a,b)=>+a-+b);
+  const sel=document.getElementById('roto-week');
+  if (sel.options.length===1) weeks.forEach(w=>{const o=document.createElement('option');o.value=w;o.textContent=`Week ${w}`;sel.appendChild(o);});
+  const fw=sel.value?+sel.value:null;
+  const data=fw?rotoData.filter(r=>+r.Week===fw):rotoData;
+
+  // ── AGGREGATE by team ─────────────────────────────────────────────────────
+  const teamAgg={};
+  data.forEach(r=>{
+    if(!teamAgg[r.Team]) teamAgg[r.Team]={total:0};
+    teamAgg[r.Team].total += +r.Roto_Score||0;
+  });
+  const sorted=Object.entries(teamAgg).sort((a,b)=>b[1].total-a[1].total);
+  const myRank=sorted.findIndex(([t])=>t===myTeam)+1;
+  const maxTotal=sorted[0]?.[1].total||1;
+
+  // My rows + per-category points vs league avg
+  const myRows=data.filter(r=>r.Team===myTeam);
+  const catPts={}, leagueAvg={};
+  ROTO_CATS.forEach(c=>{
+    catPts[c]=myRows.reduce((s,r)=>s+(+r[c+'_Points']||0),0);
+    const allVals=data.filter(r=>r[c+'_Points']!=null).map(r=>+r[c+'_Points']||0);
+    leagueAvg[c]=allVals.length?allVals.reduce((a,b)=>a+b)/allVals.length:0;
+  });
+
+  // ── KPI TILES ─────────────────────────────────────────────────────────────
+  const myTotal=teamAgg[myTeam]?.total||0;
+  const leaderTotal=sorted[0]?.[1].total||0;
+  const catDiffs=ROTO_CATS.map(c=>{
+    const lower=LOWER_BETTER_CATS.has(c);
+    const diff=catPts[c]-(leagueAvg[c]||0);
+    return {cat:c, diff:lower?-diff:diff};
+  }).sort((a,b)=>b.diff-a.diff);
+  const bestCat=catDiffs[0], worstCat=catDiffs[catDiffs.length-1];
+  const myAllWeeks=rotoData.filter(r=>r.Team===myTeam).sort((a,b)=>+b.Week-+a.Week);
+  const recentAvg=myAllWeeks.slice(0,3).reduce((s,r)=>s+(+r.Roto_Score||0),0)/Math.min(3,myAllWeeks.length||1);
+  const overallAvg=myAllWeeks.reduce((s,r)=>s+(+r.Roto_Score||0),0)/(myAllWeeks.length||1);
+  const trendTxt=recentAvg>overallAvg+1.5?'↑ Heating Up':recentAvg<overallAvg-1.5?'↓ Cooling Off':'→ Steady';
+  const trendCol=recentAvg>overallAvg+1.5?'var(--green)':recentAvg<overallAvg-1.5?'var(--red)':'var(--muted)';
+  document.getElementById('roto-kpis').innerHTML=[
+    {label:'League Rank', value:`#${myRank||'—'}`, sub:`of ${sorted.length} teams`, vc:myRank<=3?'var(--green)':myRank>=sorted.length-1?'var(--red)':'var(--text)'},
+    {label:'Total Points', value:myTotal.toFixed(1), sub:myRank===1?'Leading':`–${(leaderTotal-myTotal).toFixed(1)} behind 1st`, vc:'var(--text)'},
+    {label:'Best Category', value:bestCat?.cat||'—', sub:`+${bestCat?.diff.toFixed(1)||0} vs avg`, vc:'var(--green)'},
+    {label:'Weak Category', value:worstCat?.cat||'—', sub:`${worstCat?.diff.toFixed(1)||0} vs avg`, vc:'var(--red)'},
+  ].map(t=>`<div class="stat-tile"><div class="stat-label">${t.label}</div><div class="stat-value" style="font-size:22px;color:${t.vc}">${t.value}</div><div class="stat-sub">${t.sub}</div></div>`).join('');
+
+  // ── STANDINGS BAR CHART ───────────────────────────────────────────────────
+  document.getElementById('roto-standings-badge').textContent=fw?`Wk ${fw}`:'All Wks';
+  document.getElementById('roto-standings-chart').innerHTML=sorted.map(([team,d],i)=>{
+    const pct=(d.total/maxTotal)*100;
+    const isMine=team===myTeam;
+    const rank=i+1;
+    const rankCol=rank===1?'var(--yellow)':rank===2?'var(--text)':rank===3?'var(--orange)':'var(--muted)';
+    return `<div class="roto-bar-row">
+      <div style="display:flex;justify-content:space-between;margin-bottom:3px">
+        <span style="font-size:11px;font-weight:${isMine?700:400};color:${isMine?'var(--blue)':'var(--text)'}">
+          <span style="color:${rankCol};font-family:monospace;font-size:10px;margin-right:5px">#${rank}</span>${team}
+        </span>
+        <span style="font-size:11px;font-family:monospace;color:${isMine?'var(--blue)':'var(--muted)'};font-weight:${isMine?700:400}">${d.total.toFixed(1)}</span>
+      </div>
+      <div class="roto-bar-track">
+        <div class="roto-bar-fill" style="width:${pct}%;background:${isMine?'var(--accent)':rank===1?'rgba(210,153,34,.5)':'rgba(125,133,144,.3)'}"></div>
+      </div>
+    </div>`;
+  }).join('');
+
+  // ── CATEGORY CHART ────────────────────────────────────────────────────────
+  const maxCat=Math.max(...ROTO_CATS.map(c=>catPts[c]||0),1);
+  document.getElementById('roto-cat-chart').innerHTML=ROTO_CATS.map(c=>{
+    const pts=catPts[c]||0, avg=leagueAvg[c]||0;
+    const pct=(pts/maxCat)*100, avgPct=(avg/maxCat)*100;
+    const lower=LOWER_BETTER_CATS.has(c);
+    const good=lower?pts<=avg:pts>=avg;
+    return `<div style="margin-bottom:9px">
+      <div style="display:flex;justify-content:space-between;margin-bottom:3px">
+        <span style="font-size:10px;font-weight:600;width:38px;color:var(--text)">${c}</span>
+        <span style="font-size:10px;font-family:monospace;color:${good?'var(--green)':'var(--red)'}">${pts.toFixed(1)} pts</span>
+      </div>
+      <div style="height:7px;background:var(--surface2);border-radius:3px;position:relative">
+        <div style="height:100%;width:${pct}%;background:${good?'var(--green)':'var(--red)'};opacity:.75;border-radius:3px"></div>
+        <div style="position:absolute;top:-3px;left:calc(${avgPct}% - 1px);width:2px;height:13px;background:rgba(255,255,255,.45);border-radius:1px"></div>
+      </div>
+    </div>`;
+  }).join('');
+
+  // ── TABLE with rank-based cell coloring ───────────────────────────────────
+  // Pre-compute per-week per-category rank for each team
+  const rkMap={};
+  weeks.forEach(wk=>{
+    const wkRows=rotoData.filter(r=>+r.Week===wk);
+    ROTO_CATS.forEach(c=>{
+      const sorted_=[...wkRows].sort((a,b)=>(+b[c+'_Points']||0)-(+a[c+'_Points']||0));
+      sorted_.forEach((r,i)=>{rkMap[`${wk}_${c}_${r.Team}`]=i+1;});
+    });
+  });
+  const rkStyle=(rank,n=12)=>{
+    if(!rank) return '';
+    if(rank===1)  return 'color:var(--green);font-weight:700';
+    if(rank<=3)   return 'color:var(--blue)';
+    if(rank>=n)   return 'color:var(--red);font-weight:600';
+    if(rank>=n-2) return 'color:var(--yellow)';
+    return '';
+  };
+
+  // ── RACE CHART ────────────────────────────────────────────────────────────
+  buildRotoRaceChart(rotoData, myTeam, weeks);
+
+  const cats=['Roto_Score',...ROTO_CATS];
+  document.getElementById('roto-body').innerHTML=`
+    <table><thead><tr><th>Wk</th><th>Team</th>${cats.map(c=>`<th>${c}</th>`).join('')}</tr></thead>
+    <tbody>${data.map(r=>{
+      const wk=r.Week;
+      return `<tr class="${(r.Team||'')==myTeam?'my-team-row':''}">
+        <td style="color:var(--muted)">${wk||'—'}</td><td><b>${r.Team||'—'}</b></td>
+        ${cats.map(c=>{
+          const v=r[c],pts=r[c+'_Points'];
+          if(v==null) return '<td>—</td>';
+          const n=+v, isSc=c==='Roto_Score';
+          const rank=!isSc&&wk?rkMap[`${wk}_${c}_${r.Team}`]:null;
+          return `<td class="${isSc?'roto-score':''}" style="${rkStyle(rank)}">${isNaN(n)?v:n.toFixed(['OPS','ERA','WHIP'].includes(c)?3:isSc?1:0)}${pts!=null&&!isSc?`<br><span class="roto-pts">${(+pts).toFixed(0)}pts</span>`:''}</td>`;
+        }).join('')}
+      </tr>`;
+    }).join('')}</tbody></table>`;
+}
+
+// ─── TRANSACTIONS ─────────────────────────────────────────────────────────────
+function renderTransactions() {
+  const search=(document.getElementById('tx-search').value||'').toLowerCase();
+  const type=document.getElementById('tx-type').value;
+  let rows=DATA.transactions||[];
+  if(search) rows=rows.filter(r=>(r.PlayerName||'').toLowerCase().includes(search)||(r.FantasyTeam||'').toLowerCase().includes(search));
+  if(type)   rows=rows.filter(r=>(r.TransactionType||'').toUpperCase().includes(type));
+  document.getElementById('tx-tbody').innerHTML=rows.map(r=>`
+    <tr><td style="color:var(--muted);font-size:11px;white-space:nowrap">${(r.TransactionDate||'').slice(0,16)}</td>
+    <td style="color:${(r.FantasyTeam||'')==MY()?'var(--blue)':'var(--text)'};font-weight:${(r.FantasyTeam||'')==MY()?600:400}">${r.FantasyTeam||'—'}</td>
+    <td><span class="${txClass(r.TransactionType)}">${r.TransactionType||'—'}</span></td>
+    <td>${r.PlayerName||'—'}</td>
+    <td style="color:var(--muted)">${r.MLBTeam||'—'}</td>
+    <td style="color:var(--muted);font-size:11px">${r.PositionEligibility||'—'}</td></tr>
+  `).join('')||'<tr><td colspan="6" class="empty">No transactions</td></tr>';
+}
+
+// ─── SHOULD I START ───────────────────────────────────────────────────────────
+function sisScore(r) {
+  // Returns {score:0-100, factors:[...], verdict}
+  const era   = +r.ERA,  whip = +r.WHIP, kip = +(r['K/IP']||r.KIP)||0;
+  const oppOps= +r.Team_OPS_Value;
+  const isHome= (r.PSP_HomeVAway||'').startsWith('vs');
+
+  // Factor scoring (each 0-25, weighted)
+  const eraScore = era>0&&era<99
+    ? Math.max(0, Math.min(25, 25 - (era-2)*5))   // 2.00=25pts, 7.00=0pts
+    : 10;
+  const whipScore = whip>0&&whip<99
+    ? Math.max(0, Math.min(25, 25 - (whip-0.9)*22)) // 0.90=25, 2.0=0
+    : 10;
+  const kipScore = kip>0
+    ? Math.max(0, Math.min(25, kip*20))              // 1.25 K/IP = 25pts
+    : 10;
+  const oppScore = oppOps>0
+    ? Math.max(0, Math.min(20, (0.90-oppOps)*100))  // OPS 0.65=25, 0.90=0
+    : 10;
+  const homeBonus = isHome ? 5 : 0;
+
+  const total = Math.min(100, Math.round(eraScore + whipScore + kipScore + oppScore + homeBonus));
+  const verdict = total>=70?'START':total>=50?'LEAN START':total>=35?'LEAN SIT':'SIT';
+  const verdictClass = total>=70?'verdict-start':total>=50?'verdict-lean':total>=35?'verdict-lean':'verdict-sit';
+  const verdictEmoji = total>=70?'✅':total>=50?'🟡':total>=35?'🟠':'❌';
+
+  return {
+    score: total, verdict, verdictClass, verdictEmoji,
+    factors:[
+      {label:'ERA',      val:era>0&&era<99?fmt(r.ERA):'N/A', note:era<3?'Elite':era<4?'Good':era<5?'Avg':'Poor',
+       score:eraScore, max:25, color:era<3.5?'var(--green)':era<4.5?'var(--yellow)':'var(--red)'},
+      {label:'WHIP',     val:whip>0&&whip<99?fmt(r.WHIP):'N/A', note:whip<1.1?'Elite':whip<1.3?'Good':whip<1.5?'Avg':'Poor',
+       score:whipScore, max:25, color:whip<1.2?'var(--green)':whip<1.4?'var(--yellow)':'var(--red)'},
+      {label:'K/IP',     val:kip>0?fmt(kip):'N/A', note:kip>1.1?'Dominant':kip>0.9?'Good':kip>0.7?'Avg':'Low',
+       score:kipScore,  max:25, color:kip>1.0?'var(--green)':kip>0.8?'var(--yellow)':'var(--red)'},
+      {label:'Opp OPS',  val:oppOps>0?fmt(oppOps,3):'N/A', note:oppOps<0.70?'Easy':oppOps<0.78?'Fair':oppOps<0.85?'Tough':'Very tough',
+       score:oppScore,  max:20, color:oppOps<0.72?'var(--green)':oppOps<0.80?'var(--yellow)':'var(--red)'},
+      {label:'Home/Away',val:isHome?'Home':'Away', note:isHome?'+5 pts bonus':'No bonus',
+       score:homeBonus, max:5,  color:isHome?'var(--green)':'var(--muted)'},
+    ]
+  };
+}
+
+function renderStartHelper() {
+  const faAlso = document.getElementById('sis-fa-too').checked;
+  const yr = DATA.league_year;
+
+  // Get unique pitchers with upcoming starts
+  const seen = new Set();
+  const starters = (DATA.pitchers||[]).filter(r=>{
+    if (+r.Dataset!==yr) return false;
+    if (!r.PSP_Date || r.PSP_Date==='1999-01-01') return false;
+    if (!faAlso && !isMyRow(r)) return false;
+    if (seen.has(r.PlayerName)) return false;
+    seen.add(r.PlayerName);
+    return true;
+  }).sort((a,b)=>(a.PSP_Date||'').localeCompare(b.PSP_Date||''));
+
+  if (!starters.length) {
+    document.getElementById('sis-container').innerHTML='<div class="empty">No upcoming starters found.<br>Try enabling "Include FA starters" or check that fetch_data.py ran recently.</div>';
+    return;
+  }
+
+  document.getElementById('sis-container').innerHTML = starters.map(r=>{
+    const {score,verdict,verdictClass,verdictEmoji,factors} = sisScore(r);
+    const fillColor = score>=70?'var(--green)':score>=50?'var(--yellow)':'var(--red)';
+    return `
+    <div class="sis-card">
+      <div style="display:flex;align-items:flex-start;gap:16px;flex-wrap:wrap">
+        <div style="flex:1;min-width:260px">
+          <div class="sis-player">${r.PlayerName} <span style="color:var(--muted);font-size:12px;font-weight:400">${r.Team||''}</span></div>
+          <div class="sis-meta">
+            ${rosterBadge(r)} &nbsp;
+            ${startChip(r)}
+          </div>
+          <div class="sis-verdict">
+            <span>${verdictEmoji}</span>
+            <span class="${verdictClass}">${verdict}</span>
+            <span style="color:var(--muted);font-size:14px;font-weight:400">— ${score}/100</span>
+          </div>
+          <div class="sis-score-bar"><div class="sis-score-fill" style="width:${score}%;background:${fillColor}"></div></div>
+          <div class="sis-score-label"><span>0</span><span>50</span><span>100</span></div>
+        </div>
+        <div class="sis-factors" style="flex:2;min-width:320px">
+          ${factors.map(f=>`
+          <div class="sis-factor">
+            <div class="sis-factor-label">${f.label}</div>
+            <div class="sis-factor-val" style="color:${f.color}">${f.val}</div>
+            <div class="sis-factor-note">${f.note} &nbsp; <span style="color:var(--accent)">${f.score.toFixed(0)}/${f.max}pts</span></div>
+          </div>`).join('')}
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+// ─── COMPOSITE SCORES ─────────────────────────────────────────────────────────
+function pitcherScore(r) {
+  const kip=+(r['K/IP']||r.KIP)||0, era=+r.ERA||0, whip=+r.WHIP||0;
+  const gs=+r.GS||0, svhd=+r.SVHD||(+r.SV||0);
+  const xfip=+r.xFIP||0, whiffPct=+r.WhiffPct||0, kpct=+r.Kpct_P||0;
+  const inj=(r.FreeAgentInjuryStatus||'').toUpperCase();
+  if(!kip&&!era&&!kpct) return 0;
+  let s=0;
+  if(whiffPct>0)      s+=Math.min(28, whiffPct/0.135*28);
+  else if(kpct>0)     s+=Math.min(28, kpct/0.28*28);
+  else                s+=Math.min(28, kip/1.5*28);
+  const eraBase=xfip>0?xfip:era;
+  s+=Math.max(0, Math.min(28, (6.0-eraBase)/4.0*28));
+  s+=Math.max(0, Math.min(20, (2.0-whip)/1.1*20));
+  s+=gs>10?12:gs>3?9:svhd>3?8:5;
+  if(xfip>0&&xfip<3.2) s+=5; else if(xfip>0&&xfip<3.8) s+=2;
+  if(inj==='IL'||inj==='OUT') s-=22;
+  if(inj==='DTD') s-=10;
+  return Math.max(0, Math.min(100, Math.round(s)));
+}
+
+function hotColdBadge(delta) {
+  if(delta>=5)  return `<span class="hot-badge">HOT +${Math.round(delta)}</span>`;
+  if(delta<=-5) return `<span class="cold-badge">COLD ${Math.round(delta)}</span>`;
+  return '';
+}
+
+function hitterScore(r) {
+  const ops=+r.OPS||0, hr=+r.HR||0, rbi=+r.RBI||0, sb=+r.SB||0, avg=+r.AVG||0;
+  const hrp=+r.HR_Probability||0;
+  const wrc=+r.wRCplus||0, xwoba=+r.xwOBA||0, sprint=+r.SprintSpeed||0;
+  const iso=+r.ISO||0;
+  const inj=(r.FreeAgentInjuryStatus||'').toUpperCase();
+  if(!ops&&!hr&&!wrc) return 0;
+  let s=0;
+  // Overall offense: prefer wRC+ (park/context neutral), fall back to OPS (0-30)
+  if(wrc>0) s+=Math.max(0, Math.min(30, (wrc-60)/80*30));
+  else       s+=Math.max(0, Math.min(30, (ops-0.55)/0.50*30));
+  // Power: HR + ISO (0-22)
+  s+=Math.min(16, hr/35*16);
+  if(iso>0) s+=Math.min(6, iso/0.25*6);
+  // RBI (0-10)
+  s+=Math.min(10, rbi/110*10);
+  // Speed/SB: prefer sprint speed (Statcast), fall back to SB total (0-10)
+  if(sprint>0) s+=Math.max(0, Math.min(10, (sprint-24)/6*10));
+  else          s+=Math.min(10, sb/40*10);
+  // Contact quality: prefer xwOBA (predictive), fall back to AVG (0-10)
+  if(xwoba>0) s+=Math.max(0, Math.min(10, (xwoba-0.270)/0.120*10));
+  else         s+=Math.max(0, Math.min(10, (avg-0.180)/0.160*10));
+  // HR Probability from Statcast (0-8)
+  s+=Math.min(8, hrp*40);
+  if(inj==='IL'||inj==='OUT') s-=22;
+  if(inj==='DTD') s-=10;
+  return Math.max(0, Math.min(100, Math.round(s)));
+}
+
+function scoreBadge(s) {
+  const cls=s>=72?'score-hi':s>=52?'score-md':s>=32?'score-lo':'score-vl';
+  return `<span class="score-badge ${cls}">${s}</span>`;
+}
+
+// ─── FREE AGENTS ──────────────────────────────────────────────────────────────
+function renderFAProspects() {
+  const yr=DATA.league_year, myTeam=MY();
+
+  const pitcherRow=(r,isMine=false)=>{
+    const s=pitcherScore(r);
+    const kip=+(r['K/IP']||r.KIP)||0, era=+r.ERA||0, whip=+r.WHIP||0;
+    return `<tr class="${isMine?'my-team-row':''}">
+      <td>${scoreBadge(s)}</td>
+      <td><b>${r.PlayerName}</b> <span style="color:var(--muted);font-size:11px">${r.Team||''}</span>${isMine?'':' '+rosterBadge(r)}</td>
+      <td style="color:${kip>1.0?'var(--green)':kip<0.7?'var(--red)':'var(--text)'}">${fmt(kip)}</td>
+      <td style="color:${era<3.5?'var(--green)':era>5?'var(--red)':'var(--text)'}">${fmt(r.ERA)}</td>
+      <td style="color:${whip<1.2?'var(--green)':whip>1.5?'var(--red)':'var(--text)'}">${fmt(r.WHIP)}</td>
+      <td>${startChip(r)}</td>
+    </tr>`;
+  };
+
+  const hitterRow=(r,isMine=false)=>{
+    const s=hitterScore(r);
+    const ops=+r.OPS||0;
+    return `<tr class="${isMine?'my-team-row':''}">
+      <td>${scoreBadge(s)}</td>
+      <td><b>${r.PlayerName}</b> <span style="color:var(--muted);font-size:11px">${r.Team||''}</span>${isMine?'':' '+rosterBadge(r)}</td>
+      <td style="color:${ops>.85?'var(--green)':ops<.70?'var(--red)':'var(--text)'}">${fmt(ops,3)}</td>
+      <td>${fmt(r.HR,0)}</td>
+      <td>${fmt(r.RBI,0)}</td>
+      <td>${fmt(r.SB,0)}</td>
+      <td>${fmt(r.AVG,3)}</td>
+    </tr>`;
+  };
+
+  // ── FA pitchers ───────────────────────────────────────────────────────────
+  const faP=(DATA.pitchers||[]).filter(r=>+r.Dataset===yr&&isFARow(r)&&+(r['K/IP']||r.KIP)>0)
+    .map(r=>({...r,_score:pitcherScore(r)}))
+    .sort((a,b)=>b._score-a._score).slice(0,20);
+  document.getElementById('fap-pitcher-tbody').innerHTML=
+    faP.map(r=>pitcherRow(r)).join('')||'<tr><td colspan="6" class="empty">No FA pitchers</td></tr>';
+
+  // ── My pitchers ───────────────────────────────────────────────────────────
+  const myP=(DATA.pitchers||[]).filter(r=>+r.Dataset===yr&&(r.FantasyTeam||'')===myTeam)
+    .map(r=>({...r,_score:pitcherScore(r)}))
+    .sort((a,b)=>b._score-a._score);
+  document.getElementById('fap-my-pitcher-tbody').innerHTML=
+    myP.map(r=>pitcherRow(r,true)).join('')||'<tr><td colspan="6" class="empty">No pitchers on roster</td></tr>';
+
+  // ── FA hitters ────────────────────────────────────────────────────────────
+  const faH=(DATA.hitters||[]).filter(r=>+r.Dataset===yr&&isFARow(r)&&+r.OPS>0)
+    .map(r=>({...r,_score:hitterScore(r)}))
+    .sort((a,b)=>b._score-a._score).slice(0,20);
+  document.getElementById('fap-hitter-tbody').innerHTML=
+    faH.map(r=>hitterRow(r)).join('')||'<tr><td colspan="7" class="empty">No FA hitters</td></tr>';
+
+  // ── My hitters ────────────────────────────────────────────────────────────
+  const myH=(DATA.hitters||[]).filter(r=>+r.Dataset===yr&&(r.FantasyTeam||'')===myTeam)
+    .map(r=>({...r,_score:hitterScore(r)}))
+    .sort((a,b)=>b._score-a._score);
+  document.getElementById('fap-my-hitter-tbody').innerHTML=
+    myH.map(r=>hitterRow(r,true)).join('')||'<tr><td colspan="7" class="empty">No hitters on roster</td></tr>';
+}
+
+// ─── GM BRIEF (HIGHLIGHTS) ────────────────────────────────────────────────────
+function renderHighlights() {
+  const yr=DATA.league_year, myTeam=MY();
+  const el=document.getElementById('ov-highlights');
+  if(!el) return;
+
+  // My roster rows (season dataset)
+  const myP=(DATA.pitchers||[]).filter(r=>+r.Dataset===yr&&(r.FantasyTeam||'')===myTeam);
+  const myH=(DATA.hitters||[]).filter(r=>+r.Dataset===yr&&(r.FantasyTeam||'')===myTeam);
+
+  // Roto category avg pts/wk for my team
+  const catPts={};
+  (DATA.roto||[]).filter(r=>r.Team===myTeam).forEach(r=>{
+    ROTO_CATS.forEach(cat=>{
+      const v=r[cat+'_Points'];
+      if(v!=null){catPts[cat]=catPts[cat]||[];catPts[cat].push(+v||0);}
+    });
+  });
+  const catAvg=cat=>(catPts[cat]||[]).reduce((a,b)=>a+b,0)/(catPts[cat]||[1]).length;
+  const catRanked=ROTO_CATS.map(cat=>({cat,avg:catAvg(cat)})).sort((a,b)=>a.avg-b.avg);
+  const weakCats=catRanked.slice(0,2), strongCats=catRanked.slice(-2).reverse();
+
+  // Roto rank + luck
+  const rotoTotals={};
+  (DATA.roto||[]).forEach(r=>{if(r.Team) rotoTotals[r.Team]=(rotoTotals[r.Team]||0)+(+r.Roto_Score||0);});
+  const rotoRanked=Object.entries(rotoTotals).sort((a,b)=>b[1]-a[1]);
+  const myRotoRank=(rotoRanked.findIndex(([t])=>t===myTeam))+1||'?';
+  const standing=(DATA.standings||[]).find(s=>s.team_name===myTeam);
+  const myActual=standing?standing.standing:0;
+  const luck=myRotoRank-myActual;
+
+  // Best upcoming start (lowest opp OPS)
+  const starts=(DATA.pitchers||[]).filter(r=>+r.Dataset===yr&&(r.FantasyTeam||'')===myTeam&&r.PSP_Date&&r.PSP_Date!=='1999-01-01'&&+r.Team_OPS_Value>0)
+    .sort((a,b)=>+a.Team_OPS_Value-(+b.Team_OPS_Value));
+
+  // Hot/cold roster (15d vs season)
+  const r15P=(DATA.pitchers||[]).filter(r=>+r.Dataset===15&&(r.FantasyTeam||'')===myTeam);
+  const r15H=(DATA.hitters||[]).filter(r=>+r.Dataset===15&&(r.FantasyTeam||'')===myTeam);
+  const deltas=[];
+  myP.forEach(p=>{const r=r15P.find(x=>x.PlayerName===p.PlayerName);if(r) deltas.push({name:p.PlayerName,d:pitcherScore(r)-pitcherScore(p)});});
+  myH.forEach(h=>{const r=r15H.find(x=>x.PlayerName===h.PlayerName);if(r) deltas.push({name:h.PlayerName,d:hitterScore(r)-hitterScore(h)});});
+  deltas.sort((a,b)=>b.d-a.d);
+  const hotPlayers=deltas.filter(d=>d.d>=5).slice(0,3);
+  const coldPlayers=deltas.filter(d=>d.d<=-5).slice(-2);
+
+  // Injury alerts
+  const injured=[...myP,...myH].filter(r=>{const inj=(r.FreeAgentInjuryStatus||'').toUpperCase();return inj==='IL'||inj==='OUT'||inj==='DTD';});
+
+  // Best FA remedy per weak category
+  const CAT_REMEDY={'SB':{pool:'h',stat:'SB'},'HR':{pool:'h',stat:'HR'},'R':{pool:'h',stat:'R'},'RBI':{pool:'h',stat:'RBI'},'OPS':{pool:'h',stat:'OPS'},'B_SO':{pool:'h',stat:'B_SO',lower:true},'K':{pool:'p',stat:'K'},'ERA':{pool:'p',stat:'ERA',lower:true},'WHIP':{pool:'p',stat:'WHIP',lower:true},'W':{pool:'p',stat:'W'},'QS':{pool:'p',stat:'GS'},'SVHD':{pool:'p',stat:'SVHD'}};
+  const faP=(DATA.pitchers||[]).filter(r=>+r.Dataset===yr&&isFARow(r));
+  const faH=(DATA.hitters||[]).filter(r=>+r.Dataset===yr&&isFARow(r));
+  const bestFAFor=cat=>{
+    const cfg=CAT_REMEDY[cat]; if(!cfg) return null;
+    const pool=cfg.pool==='p'?faP:faH;
+    const sorted=pool.filter(r=>+r[cfg.stat]>0).sort((a,b)=>cfg.lower?(+a[cfg.stat]||99)-(+b[cfg.stat]||99):(+b[cfg.stat]||0)-(+a[cfg.stat]||0));
+    return sorted[0]||null;
+  };
+
+  const insights=[];
+
+  // 1. Standing + luck
+  const luckNote=luck>1?` <span style="color:var(--green)">+${luck} lucky</span>`:luck<-1?` <span style="color:var(--red)">${luck} unlucky</span>`:'';
+  insights.push({color:'var(--blue)',text:`You are <b>#${myActual} actual</b> / <b>#${myRotoRank} roto</b>${luckNote} · ${standing?standing.wins+'-'+standing.losses+' record':''}`});
+
+  // 2. Category strengths
+  insights.push({color:'var(--green)',text:`Category strengths: ${strongCats.map(c=>`<b>${c.cat}</b> (${c.avg.toFixed(1)} pts/wk avg)`).join(', ')}`});
+
+  // 3. Category gaps + remedies
+  weakCats.forEach(c=>{
+    const fa=bestFAFor(c.cat);
+    const remedy=fa?` — <b>${fa.PlayerName}</b> (${fa.Team||''}) is available`:'';
+    insights.push({color:'var(--red)',text:`Category gap: <b>${c.cat}</b> (${c.avg.toFixed(1)} pts/wk avg)${remedy}`});
+  });
+
+  // 4. Best upcoming start
+  if(starts.length){
+    const b=starts[0];
+    insights.push({color:'var(--purple)',text:`Best start: <b>${b.PlayerName}</b> — ${b.PSP_Date} ${b.PSP_HomeVAway||''}${b.PSP_Projected?' (proj.)':''} · opp OPS <span style="color:var(--green)">${fmt(b.Team_OPS_Value,3)}</span> · ERA ${fmt(b.ERA)}`});
+  }
+
+  // 5. Hot players
+  if(hotPlayers.length) insights.push({color:'var(--orange)',text:`Heating up (15d vs szn): ${hotPlayers.map(d=>`<b>${d.name}</b> <span style="color:var(--orange)">+${Math.round(d.d)}</span>`).join(', ')}`});
+  if(coldPlayers.length) insights.push({color:'var(--muted)',text:`Cooling down (15d vs szn): ${coldPlayers.map(d=>`<b>${d.name}</b> <span style="color:var(--blue)">${Math.round(d.d)}</span>`).join(', ')}`});
+
+  // 6. Injuries
+  if(injured.length) insights.push({color:'var(--yellow)',text:`Roster alerts: ${injured.map(r=>`<b>${r.PlayerName}</b> (${r.FreeAgentInjuryStatus})`).join(', ')}`});
+
+  const sub=document.getElementById('gm-brief-sub');
+  if(sub) sub.textContent=`${DATA.refreshed_at?new Date(DATA.refreshed_at).toLocaleDateString():''}`;
+
+  el.innerHTML=insights.map(ins=>`
+    <div style="display:flex;align-items:baseline;gap:10px;padding:7px 0;border-bottom:1px solid var(--border)">
+      <span style="width:6px;height:6px;border-radius:50%;background:${ins.color};flex-shrink:0;margin-top:5px;min-width:6px"></span>
+      <span style="font-size:12px;line-height:1.6;color:var(--text)">${ins.text}</span>
+    </div>`).join('')||'<div class="empty">No insights available</div>';
+}
+
+// ─── FA TARGETS BY ROLE ────────────────────────────────────────────────────────
+let _faRole='SP';
+
+function rpFAScore(r) {
+  if(+r.GS>=5||(r.Position||'').includes('SP')) return 0;
+  const svhd=+r.SVHD||+r.SV||0, kip=+(r['K/IP']||r.KIP)||0, era=+r.ERA||0, whip=+r.WHIP||0;
+  if(!kip&&!svhd) return 0;
+  let s=0;
+  s+=Math.min(35, svhd/15*35);
+  s+=Math.min(25, kip/1.5*25);
+  s+=Math.max(0, Math.min(25, (5.5-era)/3.5*25));
+  s+=Math.max(0, Math.min(15, (1.8-whip)/0.8*15));
+  const inj=(r.FreeAgentInjuryStatus||'').toUpperCase();
+  if(inj==='IL'||inj==='OUT') s-=30;
+  if(inj==='DTD') s-=10;
+  return Math.max(0, Math.min(100, Math.round(s)));
+}
+
+function spFAScore(r) {
+  if(+r.GS<1&&!(r.Position||'').includes('SP')) return 0;
+  let s=pitcherScore(r);
+  if(r.PSP_Date&&r.PSP_Date!=='1999-01-01') s+=15;
+  return Math.min(100, Math.round(s));
+}
+
+function renderFAByRole() {
+  const yr=DATA.league_year;
+  const posLookup=buildPosLookup();
+
+  // Momentum maps: weighted 7d/15d/30d vs season
+  const s7P={},s15P={},s30P={},s7H={},s15H={},s30H={};
+  (DATA.pitchers||[]).filter(r=>isFARow(r)).forEach(r=>{
+    const s=pitcherScore(r),d=+r.Dataset;
+    if(d===7)s7P[r.PlayerName]=s;else if(d===15)s15P[r.PlayerName]=s;else if(d===30)s30P[r.PlayerName]=s;
+  });
+  (DATA.hitters||[]).filter(r=>isFARow(r)).forEach(r=>{
+    const s=hitterScore(r),d=+r.Dataset;
+    if(d===7)s7H[r.PlayerName]=s;else if(d===15)s15H[r.PlayerName]=s;else if(d===30)s30H[r.PlayerName]=s;
+  });
+  const pMom=(name,szn)=>{const has=s7P[name]||s15P[name]||s30P[name];if(!has)return 0;return((s7P[name]||szn)-szn)*.5+((s15P[name]||szn)-szn)*.3+((s30P[name]||szn)-szn)*.2;};
+  const hMom=(name,szn)=>{const has=s7H[name]||s15H[name]||s30H[name];if(!has)return 0;return((s7H[name]||szn)-szn)*.5+((s15H[name]||szn)-szn)*.3+((s30H[name]||szn)-szn)*.2;};
+
+  const posHas=(r,pats)=>{const p=(r.Position||posLookup[r.PlayerName]||'');return pats.some(x=>p.includes(x));};
+
+  const faP=(DATA.pitchers||[]).filter(r=>+r.Dataset===yr&&isFARow(r));
+  const faH=(DATA.hitters||[]).filter(r=>+r.Dataset===yr&&isFARow(r));
+
+  const ROLES={
+    SP:{label:'SP',rows:()=>faP.filter(r=>+r.GS>=1||(r.Position||'').includes('SP')).map(r=>{const sc=spFAScore(r);return{...r,_score:sc,_delta:pMom(r.PlayerName,pitcherScore(r))};}).filter(r=>r._score>0).sort((a,b)=>b._score-a._score).slice(0,8),
+      html:rows=>`<table><thead><tr><th></th><th>Player</th><th></th><th>ERA</th><th>xFIP</th><th>K/IP</th><th>WHIP</th><th>Next Start</th></tr></thead><tbody>${rows.map(r=>{const xfip=+r.xFIP||0;return`<tr><td>${scoreBadge(r._score)}</td><td><b>${r.PlayerName}</b><br><span style="color:var(--muted);font-size:10px">${r.Team||''}</span></td><td>${hotColdBadge(r._delta)}</td><td style="color:${+r.ERA<3.5?'var(--green)':+r.ERA>5?'var(--red)':'var(--text)'}">${fmt(r.ERA)}</td><td style="color:${xfip>0&&xfip<3.5?'var(--green)':xfip>0?'var(--text)':'var(--muted)'}">${xfip>0?fmt(xfip):'—'}</td><td>${fmt(r['K/IP']||r.KIP)}</td><td style="color:${+r.WHIP<1.2?'var(--green)':+r.WHIP>1.5?'var(--red)':'var(--text)'}">${fmt(r.WHIP)}</td><td>${startChip(r)}</td></tr>`;}).join('')}</tbody></table>`},
+    RP:{label:'RP',rows:()=>faP.filter(r=>+r.GS<5&&!(r.Position||'').includes('SP')).map(r=>{const sc=rpFAScore(r);return{...r,_score:sc,_delta:pMom(r.PlayerName,pitcherScore(r))};}).filter(r=>r._score>0).sort((a,b)=>b._score-a._score).slice(0,8),
+      html:rows=>`<table><thead><tr><th></th><th>Player</th><th></th><th>SV+H</th><th>K/IP</th><th>ERA</th><th>WHIP</th><th>Next Opp</th></tr></thead><tbody>${rows.map(r=>`<tr><td>${scoreBadge(r._score)}</td><td><b>${r.PlayerName}</b><br><span style="color:var(--muted);font-size:10px">${r.Team||''}</span></td><td>${hotColdBadge(r._delta)}</td><td style="color:var(--green);font-weight:600">${(+r.SVHD||+r.SV||0)>0?fmt(+r.SVHD||+r.SV||0,0):'—'}</td><td>${fmt(r['K/IP']||r.KIP)}</td><td style="color:${+r.ERA<3.5?'var(--green)':+r.ERA>5?'var(--red)':'var(--text)'}">${fmt(r.ERA)}</td><td style="color:${+r.WHIP<1.2?'var(--green)':+r.WHIP>1.5?'var(--red)':'var(--text)'}">${fmt(r.WHIP)}</td><td style="color:${+r.Team_OPS_Value>0.75?'var(--red)':+r.Team_OPS_Value>0?'var(--green)':'var(--muted)'}">${+r.Team_OPS_Value>0?fmt(r.Team_OPS_Value,3):'—'}</td></tr>`).join('')}</tbody></table>`},
+    IF:{label:'IF',rows:()=>faH.filter(r=>posHas(r,['C','1B','2B','3B','SS'])).map(r=>{const sc=hitterScore(r);return{...r,_score:sc,_delta:hMom(r.PlayerName,sc)};}).filter(r=>r._score>0).sort((a,b)=>b._score-a._score).slice(0,8),
+      html:rows=>`<table><thead><tr><th></th><th>Player</th><th></th><th>OPS</th><th>HR</th><th>RBI</th><th>AVG</th><th>SB</th></tr></thead><tbody>${rows.map(r=>`<tr><td>${scoreBadge(r._score)}</td><td><b>${r.PlayerName}</b><br><span style="color:var(--muted);font-size:10px"><span class="pos-badge">${inferPos(r,posLookup)}</span> ${r.Team||''}</span></td><td>${hotColdBadge(r._delta)}</td><td style="color:${+r.OPS>.85?'var(--green)':+r.OPS<.70?'var(--red)':'var(--text)'}">${fmt(r.OPS,3)}</td><td>${fmt(r.HR,0)}</td><td>${fmt(r.RBI,0)}</td><td>${fmt(r.AVG,3)}</td><td>${fmt(r.SB,0)}</td></tr>`).join('')}</tbody></table>`},
+    OF:{label:'OF',rows:()=>faH.filter(r=>posHas(r,['OF','LF','CF','RF'])).map(r=>{const sc=hitterScore(r);return{...r,_score:sc,_delta:hMom(r.PlayerName,sc)};}).filter(r=>r._score>0).sort((a,b)=>b._score-a._score).slice(0,8),
+      html:rows=>`<table><thead><tr><th></th><th>Player</th><th></th><th>OPS</th><th>xwOBA</th><th>HR</th><th>SB</th><th>Speed</th></tr></thead><tbody>${rows.map(r=>`<tr><td>${scoreBadge(r._score)}</td><td><b>${r.PlayerName}</b><br><span style="color:var(--muted);font-size:10px"><span class="pos-badge">${inferPos(r,posLookup)}</span> ${r.Team||''}</span></td><td>${hotColdBadge(r._delta)}</td><td style="color:${+r.OPS>.85?'var(--green)':+r.OPS<.70?'var(--red)':'var(--text)'}">${fmt(r.OPS,3)}</td><td>${+r.xwOBA>0?fmt(r.xwOBA,3):'—'}</td><td>${fmt(r.HR,0)}</td><td>${fmt(r.SB,0)}</td><td>${+r.SprintSpeed>0?`${(+r.SprintSpeed).toFixed(1)} ft/s`:'—'}</td></tr>`).join('')}</tbody></table>`}
+  };
+
+  // Build role pills once
+  const pillsEl=document.getElementById('fa-role-pills');
+  if(pillsEl&&!pillsEl.dataset.built){
+    pillsEl.dataset.built='1';
+    Object.keys(ROLES).forEach(k=>{
+      const el=document.createElement('div');
+      el.className='pill'+(k===_faRole?' active':'');
+      el.textContent=ROLES[k].label;
+      el.onclick=()=>{_faRole=k;pillsEl.querySelectorAll('.pill').forEach(p=>p.classList.remove('active'));el.classList.add('active');_renderFARoleBody(ROLES);};
+      pillsEl.appendChild(el);
+    });
+  }
+  _renderFARoleBody(ROLES);
+}
+
+function _renderFARoleBody(ROLES) {
+  const body=document.getElementById('fa-role-body');
+  if(!body) return;
+  const role=ROLES[_faRole];
+  const rows=role.rows();
+  body.innerHTML=rows.length?role.html(rows):`<div class="empty">No ${_faRole} free agents found</div>`;
+}
+
+// ─── TRADE ANALYZER ───────────────────────────────────────────────────────────
+let tradeGiving=[], tradeGetting=[], _tradeOtherAll=[], _tradeMyAll=[];
+
+function buildPosLookup() {
+  const pos={};
+  // Primary: Position field on hitter/pitcher rows (added to fetch_data.py)
+  const yr=DATA.league_year;
+  [...(DATA.hitters||[]),...(DATA.pitchers||[])].forEach(r=>{
+    if(r.PlayerName && r.Position && !pos[r.PlayerName]) pos[r.PlayerName]=r.Position;
+  });
+  // Fallback: transaction PositionEligibility
+  (DATA.transactions||[]).forEach(r=>{
+    if(r.PlayerName&&r.PositionEligibility&&!pos[r.PlayerName]) pos[r.PlayerName]=r.PositionEligibility;
+  });
+  return pos;
+}
+
+function inferPos(r, posLookup) {
+  if(r.Position) return r.Position.split(',')[0].trim();
+  if('ERA' in r && r.ERA!=null) { const gs=+r.GS||0; return gs>10?'SP':gs>3?'SP/RP':'RP'; }
+  return (posLookup[r.PlayerName]||'').split(',')[0].trim()||'—';
+}
+
+function pickRow(p, side, selected) {
+  const pos=buildPosLookup();
+  const isP='ERA' in p && p.ERA!=null;
+  const s=isP?pitcherScore(p):hitterScore(p);
+  const statStr=isP
+    ? `<span style="color:var(--muted);font-size:10px">ERA ${fmt(p.ERA)} · K/IP ${fmt(p['K/IP']||p.KIP)}</span>`
+    : `<span style="color:var(--muted);font-size:10px">OPS ${fmt(p.OPS,3)} · HR ${fmt(p.HR,0)}</span>`;
+  const selClass=selected?(side==='my'?'sel-give':'sel-get'):'';
+  return `<div class="player-pick-row ${selClass}" onclick="toggleTrade('${side}',this.dataset.name)" data-name="${(p.PlayerName||'').replace(/"/g,'&quot;')}">
+    <span class="pos-badge">${inferPos(p,pos)}</span>
+    <span class="pick-name" style="font-weight:${selected?600:400}">${p.PlayerName}</span>
+    ${statStr}
+    <span class="pick-team">${p.Team||''}</span>
+    ${scoreBadge(s)}
+  </div>`;
+}
+
+function initTradeAnalyzer() {
+  const yr=DATA.league_year, myTeam=MY();
+  const deduped=(arr)=>{const s=new Set();return arr.filter(r=>!s.has(r.PlayerName)&&s.add(r.PlayerName));};
+
+  _tradeMyAll=deduped([
+    ...(DATA.pitchers||[]).filter(r=>+r.Dataset===yr&&(r.FantasyTeam||'')===myTeam),
+    ...(DATA.hitters||[]).filter(r=>+r.Dataset===yr&&(r.FantasyTeam||'')===myTeam)
+  ].sort((a,b)=>a.PlayerName.localeCompare(b.PlayerName)));
+
+  _tradeOtherAll=deduped([
+    ...(DATA.pitchers||[]).filter(r=>+r.Dataset===yr&&(r.FantasyTeam||'')&&(r.FantasyTeam||'')!==myTeam),
+    ...(DATA.hitters||[]).filter(r=>+r.Dataset===yr&&(r.FantasyTeam||'')&&(r.FantasyTeam||'')!==myTeam)
+  ].sort((a,b)=>a.PlayerName.localeCompare(b.PlayerName)));
+
+  const teams=[...new Set(_tradeOtherAll.map(r=>r.FantasyTeam||'').filter(Boolean))].sort();
+  const tf=document.getElementById('trade-team-filter');
+  if(tf.options.length===1) teams.forEach(t=>{const o=document.createElement('option');o.value=t;o.textContent=t;tf.appendChild(o);});
+
+  renderTradeMyList();
+  filterTradeTeam();
+  renderTradeAnalysis();
+}
+
+function renderTradeMyList() {
+  const search=(document.getElementById('trade-my-search').value||'').toLowerCase();
+  const list=search?_tradeMyAll.filter(p=>p.PlayerName.toLowerCase().includes(search)):_tradeMyAll;
+  document.getElementById('trade-my-list').innerHTML=
+    list.map(p=>pickRow(p,'my',tradeGiving.includes(p.PlayerName))).join('')||
+    '<div class="empty">No players</div>';
+}
+
+function filterTradeTeam() {
+  const team=document.getElementById('trade-team-filter').value;
+  const search=(document.getElementById('trade-other-search').value||'').toLowerCase();
+  let list=team?_tradeOtherAll.filter(r=>(r.FantasyTeam||'')===team):_tradeOtherAll;
+  if(search) list=list.filter(r=>r.PlayerName.toLowerCase().includes(search));
+  document.getElementById('trade-other-list').innerHTML=
+    list.map(p=>pickRow(p,'their',tradeGetting.includes(p.PlayerName))).join('')||
+    '<div class="empty">No players</div>';
+  suggestTrade();
+}
+
+function toggleTrade(side, name) {
+  if(side==='my') {
+    tradeGiving=tradeGiving.includes(name)?tradeGiving.filter(n=>n!==name):[...tradeGiving,name];
+    renderTradeMyList();
+  } else {
+    tradeGetting=tradeGetting.includes(name)?tradeGetting.filter(n=>n!==name):[...tradeGetting,name];
+    filterTradeTeam();
+  }
+  renderTradeAnalysis();
+}
+
+function clearTrade(){tradeGiving=[];tradeGetting=[];renderTradeMyList();filterTradeTeam();renderTradeAnalysis();}
+
+// ─── TRADE SUGGESTION ─────────────────────────────────────────────────────────
+const CAT_STAT_MAP = {
+  'ERA':{'stat':'ERA','type':'pitcher','lower':true},
+  'WHIP':{'stat':'WHIP','type':'pitcher','lower':true},
+  'K':{'stat':'KIP','type':'pitcher','lower':false},
+  'W':{'stat':'GS','type':'pitcher','lower':false},
+  'QS':{'stat':'GS','type':'pitcher','lower':false},
+  'SV':{'stat':'SV','type':'pitcher','lower':false},
+  'SVHD':{'stat':'SV','type':'pitcher','lower':false},
+  'HR':{'stat':'HR','type':'hitter','lower':false},
+  'RBI':{'stat':'RBI','type':'hitter','lower':false},
+  'R':{'stat':'OPS','type':'hitter','lower':false},
+  'SB':{'stat':'SB','type':'hitter','lower':false},
+  'OPS':{'stat':'OPS','type':'hitter','lower':false},
+  'AVG':{'stat':'AVG','type':'hitter','lower':false},
+};
+
+function myWeakCategories() {
+  const myTeam=MY(), rotoData=DATA.roto||[];
+  const catPts={}, leagueAvg={};
+  ROTO_CATS.forEach(c=>{
+    catPts[c]=rotoData.filter(r=>r.Team===myTeam).reduce((s,r)=>s+(+r[c+'_Points']||0),0);
+    const all=rotoData.filter(r=>r[c+'_Points']!=null).map(r=>+r[c+'_Points']||0);
+    leagueAvg[c]=all.length?all.reduce((a,b)=>a+b)/all.length:0;
+  });
+  return ROTO_CATS.map(c=>{
+    const lower=LOWER_BETTER_CATS.has(c);
+    return {cat:c, diff:(lower?-1:1)*(catPts[c]-(leagueAvg[c]||0))};
+  }).sort((a,b)=>a.diff-b.diff); // worst first
+}
+
+function suggestTrade() {
+  const box=document.getElementById('trade-suggestion');
+  const team=document.getElementById('trade-team-filter').value;
+  if(!team){box.style.display='none';return;}
+
+  const yr=DATA.league_year, myTeam=MY();
+  const isP=r=>'ERA' in r&&r.ERA!=null;
+  const deduped=(arr)=>{const s=new Set();return arr.filter(r=>!s.has(r.PlayerName)&&s.add(r.PlayerName));};
+
+  const theirPlayers=deduped([
+    ...(DATA.pitchers||[]).filter(r=>+r.Dataset===yr&&(r.FantasyTeam||'')===team),
+    ...(DATA.hitters||[]).filter(r=>+r.Dataset===yr&&(r.FantasyTeam||'')===team),
+  ]);
+  const myPlayers=deduped([
+    ...(DATA.pitchers||[]).filter(r=>+r.Dataset===yr&&(r.FantasyTeam||'')===myTeam),
+    ...(DATA.hitters||[]).filter(r=>+r.Dataset===yr&&(r.FantasyTeam||'')===myTeam),
+  ]);
+
+  const weakCats=myWeakCategories();
+  let targetPlayer=null, targetCat=null;
+
+  for(const {cat} of weakCats) {
+    const info=CAT_STAT_MAP[cat]; if(!info) continue;
+    const pool=theirPlayers.filter(p=>info.type==='pitcher'?isP(p):!isP(p));
+    const statKey=info.stat;
+    const ranked=pool.filter(p=>+(p[statKey]||p.KIP||0)>0).sort((a,b)=>{
+      const av=+(a[statKey]||a.KIP||0), bv=+(b[statKey]||b.KIP||0);
+      return info.lower?av-bv:bv-av;
+    });
+    if(ranked[0]){targetPlayer=ranked[0];targetCat=cat;break;}
+  }
+
+  if(!targetPlayer){box.style.display='none';return;}
+
+  const tScore=isP(targetPlayer)?pitcherScore(targetPlayer):hitterScore(targetPlayer);
+  const myRanked=myPlayers
+    .map(p=>({p,score:isP(p)?pitcherScore(p):hitterScore(p)}))
+    .sort((a,b)=>Math.abs(a.score-tScore)-Math.abs(b.score-tScore));
+  const offer=myRanked[0]?.p, oScore=myRanked[0]?.score||0;
+
+  const edgeColor=tScore>oScore+8?'var(--green)':tScore<oScore-8?'var(--red)':'var(--yellow)';
+  const edgeText=tScore>oScore+8?'✓ Slight edge your way':tScore<oScore-8?'⚠ You give more value':'≈ Roughly even';
+  const pos=buildPosLookup();
+  const weakStr=weakCats.slice(0,3).map(x=>x.cat).join(', ');
+
+  box.style.display='';
+  box.innerHTML=`
+    <div style="display:flex;align-items:center;gap:6px;margin-bottom:8px">
+      <span style="font-size:10px;font-weight:700;color:var(--yellow);text-transform:uppercase;letter-spacing:.5px">Suggested Trade</span>
+      <span style="font-size:10px;color:var(--muted)">targets your weak categories: ${weakStr}</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+      <div style="flex:1;min-width:180px">
+        <div style="font-size:9px;color:var(--red);font-weight:700;text-transform:uppercase;margin-bottom:4px">You Give</div>
+        <div style="display:flex;align-items:center;gap:7px">
+          <span class="pos-badge">${inferPos(offer,pos)}</span>
+          <span style="font-weight:600;font-size:12px">${offer?.PlayerName||'—'}</span>
+          ${scoreBadge(oScore)}
+        </div>
+      </div>
+      <div style="font-size:20px;color:var(--muted)">⇄</div>
+      <div style="flex:1;min-width:180px">
+        <div style="font-size:9px;color:var(--green);font-weight:700;text-transform:uppercase;margin-bottom:4px">You Get — helps ${targetCat}</div>
+        <div style="display:flex;align-items:center;gap:7px">
+          <span class="pos-badge">${inferPos(targetPlayer,pos)}</span>
+          <span style="font-weight:600;font-size:12px">${targetPlayer.PlayerName}</span>
+          ${scoreBadge(tScore)}
+        </div>
+      </div>
+      <div style="font-size:11px;font-weight:600;color:${edgeColor};white-space:nowrap">${edgeText}</div>
+      <button class="refresh-btn" style="font-size:11px;padding:5px 12px;background:var(--surface2);border:1px solid var(--border);color:var(--text)"
+        onclick="applySuggestedTrade(${JSON.stringify(offer?.PlayerName||'')},${JSON.stringify(targetPlayer.PlayerName)})">Apply →</button>
+    </div>`;
+}
+
+function applySuggestedTrade(giveName, getName) {
+  if(giveName&&!tradeGiving.includes(giveName)) tradeGiving.push(giveName);
+  if(getName&&!tradeGetting.includes(getName)) tradeGetting.push(getName);
+  renderTradeMyList(); filterTradeTeam(); renderTradeAnalysis();
+}
+
+function tradePlayerData(name) {
+  const yr=DATA.league_year;
+  return (DATA.pitchers||[]).find(r=>r.PlayerName===name&&+r.Dataset===yr)||
+         (DATA.hitters||[]).find(r=>r.PlayerName===name&&+r.Dataset===yr)||null;
+}
+
+function renderTradeAnalysis() {
+  const chips=(arr,side)=>arr.map(n=>`<span class="trade-chip trade-chip-${side==='my'?'give':'get'}" onclick="toggleTrade('${side}',this.dataset.name)" data-name="${n.replace(/"/g,'&quot;')}" style="cursor:pointer" title="Click to remove">${n} ×</span>`).join('')||
+    '<span style="color:var(--muted);font-size:12px">None selected</span>';
+  document.getElementById('trade-giving-chips').innerHTML=chips(tradeGiving,'my');
+  document.getElementById('trade-getting-chips').innerHTML=chips(tradeGetting,'their');
+
+  const giveData=tradeGiving.map(tradePlayerData).filter(Boolean);
+  const getData =tradeGetting.map(tradePlayerData).filter(Boolean);
+  if(!giveData.length&&!getData.length){
+    document.getElementById('trade-analysis').innerHTML='<div class="empty">Add players to both sides to analyze a trade</div>';return;
+  }
+
+  const isP=r=>r&&'ERA' in r&&r.ERA!=null;
+  const givP=giveData.filter(isP),  getP=getData.filter(isP);
+  const givH=giveData.filter(r=>!isP(r)), getH=getData.filter(r=>!isP(r));
+
+  const RATE=new Set(['ERA','WHIP','OPS','AVG','K/IP']);
+  const aggVals=(players,key)=>{
+    const vs=players.map(p=>+(p[key]||(key==='K/IP'?p.KIP:0)||0)).filter(v=>v>0);
+    if(!vs.length) return null;
+    return RATE.has(key)?vs.reduce((a,b)=>a+b)/vs.length:vs.reduce((a,b)=>a+b);
+  };
+
+  const PSTATS=[
+    {k:'K/IP',lower:false,d:2},{k:'ERA',lower:true,d:2},{k:'WHIP',lower:true,d:2},
+    {k:'K',lower:false,d:0},{k:'W',lower:false,d:0},{k:'IP',lower:false,d:1}
+  ];
+  const HSTATS=[
+    {k:'OPS',lower:false,d:3},{k:'HR',lower:false,d:0},{k:'RBI',lower:false,d:0},
+    {k:'R',lower:false,d:0},{k:'SB',lower:false,d:0},{k:'AVG',lower:false,d:3}
+  ];
+
+  let myW=0,theirW=0;
+  const statRow=({k,lower,d},gPlayers,aPlayers)=>{
+    const gv=aggVals(gPlayers,k), av=aggVals(aPlayers,k);
+    if(gv===null&&av===null) return '';
+    const gWins=gv!=null&&av!=null?(lower?gv<av:gv>av):false;
+    const aWins=gv!=null&&av!=null?(lower?av<gv:av>gv):false;
+    if(gWins) myW++; if(aWins) theirW++;
+    return `<tr>
+      <td style="text-align:right;padding:6px 12px;${gWins?'color:var(--green);font-weight:600':''}">${gv!=null?gv.toFixed(d):'—'}</td>
+      <td style="text-align:center;padding:6px 4px;color:var(--muted);font-size:11px;font-weight:500">${k}</td>
+      <td style="text-align:left;padding:6px 12px;${aWins?'color:var(--green);font-weight:600':''}">${av!=null?av.toFixed(d):'—'}</td>
+      <td style="text-align:center;font-size:13px">${gWins?'⬅':aWins?'➡':'·'}</td>
+    </tr>`;
+  };
+
+  const sHdr=lbl=>`<tr><td colspan="4" style="padding:12px 12px 4px;color:var(--muted);font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;border-top:1px solid var(--border)">${lbl}</td></tr>`;
+
+  let rows='';
+  if(givP.length||getP.length){rows+=sHdr('Pitchers');PSTATS.forEach(s=>{rows+=statRow(s,givP,getP);});}
+  if(givH.length||getH.length){rows+=sHdr('Hitters'); HSTATS.forEach(s=>{rows+=statRow(s,givH,getH);});}
+
+  const giveNames=giveData.map(r=>`<span style="color:var(--red)">${r.PlayerName}</span>`).join(', ')||'—';
+  const getNames =getData.map(r=>`<span style="color:var(--green)">${r.PlayerName}</span>`).join(', ')||'—';
+  const total=myW+theirW;
+  const verdictColor=myW>theirW?'var(--red)':theirW>myW?'var(--green)':'var(--yellow)';
+  const verdictText=total===0?'Add players on both sides to compare':
+    myW>theirW?`You lose ${myW}–${theirW} stat categories — unfavorable`:
+    theirW>myW?`You win ${theirW}–${myW} stat categories — favorable`:
+    `Even trade — ${myW} categories each`;
+
+  document.getElementById('trade-analysis').innerHTML=`
+    <div style="margin-bottom:12px;padding-bottom:12px;border-bottom:1px solid var(--border)">
+      <div style="display:flex;justify-content:space-between;margin-bottom:8px;flex-wrap:wrap;gap:8px">
+        <div style="font-size:12px"><span style="font-weight:600;color:var(--red)">Giving Up:</span> ${giveNames}</div>
+        <div style="font-size:12px"><span style="font-weight:600;color:var(--green)">Getting:</span> ${getNames}</div>
+      </div>
+      <div style="text-align:center;font-weight:600;color:${verdictColor};font-size:13px">${verdictText}</div>
+    </div>
+    <table style="width:100%;border-collapse:collapse">
+      <thead><tr>
+        <th style="text-align:right;padding:6px 12px;width:38%">Giving Up</th>
+        <th style="text-align:center;width:14%">Stat</th>
+        <th style="text-align:left;padding:6px 12px;width:38%">Getting</th>
+        <th style="width:10%"></th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+}
+
+// ─── ROTO RACE CHART ──────────────────────────────────────────────────────────
+function buildRotoRaceChart(rotoData, myTeam, weeks) {
+  const container = document.getElementById('roto-race-chart');
+  if(!container || !weeks.length) return;
+  container.innerHTML = '';
+
+  const teams = [...new Set(rotoData.map(r=>r.Team).filter(Boolean))];
+
+  // Build cumulative series per team
+  const series = teams.map(team=>{
+    let cum=0;
+    const pts=weeks.map(w=>{
+      const row=rotoData.find(r=>r.Team===team&&+r.Week===w);
+      cum+=row?(+row.Roto_Score||0):0;
+      return {w, cum};
+    });
+    return {team, pts, isMe:team===myTeam};
+  }).sort((a,b)=>{
+    const la=a.pts[a.pts.length-1]?.cum||0;
+    const lb=b.pts[b.pts.length-1]?.cum||0;
+    return lb-la;
+  });
+
+  const W=container.offsetWidth||800;
+  const H=240;
+  const margin={top:16,right:110,bottom:28,left:44};
+  const w=W-margin.left-margin.right;
+  const h=H-margin.top-margin.bottom;
+
+  const maxCum=d3.max(series,s=>d3.max(s.pts,p=>p.cum))||1;
+  const x=d3.scaleLinear().domain([weeks[0],weeks[weeks.length-1]]).range([0,w]);
+  const y=d3.scaleLinear().domain([0,maxCum]).nice().range([h,0]);
+  const line=d3.line().x(p=>x(p.w)).y(p=>y(p.cum)).curve(d3.curveMonotoneX);
+
+  const svg=d3.select(container).append('svg')
+    .attr('width',W).attr('height',H)
+    .append('g').attr('transform',`translate(${margin.left},${margin.top})`);
+
+  // Grid lines
+  svg.append('g').attr('class','grid')
+    .call(d3.axisLeft(y).ticks(4).tickSize(-w).tickFormat(''))
+    .select('.domain').remove();
+
+  // Axes
+  svg.append('g').attr('class','axis').attr('transform',`translate(0,${h})`)
+    .call(d3.axisBottom(x).ticks(weeks.length).tickFormat(d=>`W${d}`));
+  svg.append('g').attr('class','axis').call(d3.axisLeft(y).ticks(4));
+
+  // Other teams first (thin, muted)
+  series.filter(s=>!s.isMe).forEach(s=>{
+    svg.append('path').datum(s.pts).attr('fill','none')
+      .attr('stroke','rgba(125,133,144,0.25)').attr('stroke-width',1.5)
+      .attr('d',line);
+    const last=s.pts[s.pts.length-1];
+    if(last) svg.append('text').attr('x',x(last.w)+5).attr('y',y(last.cum))
+      .attr('fill','rgba(125,133,144,0.5)').attr('font-size','9px')
+      .attr('dominant-baseline','middle')
+      .text(s.team.length>14?s.team.slice(0,13)+'…':s.team);
+  });
+
+  // My team on top
+  const me=series.find(s=>s.isMe);
+  if(me){
+    svg.append('path').datum(me.pts).attr('fill','none')
+      .attr('stroke','#1f6feb').attr('stroke-width',3)
+      .attr('d',line);
+    // Glow dot at current position
+    const last=me.pts[me.pts.length-1];
+    if(last){
+      svg.append('circle').attr('cx',x(last.w)).attr('cy',y(last.cum))
+        .attr('r',5).attr('fill','#58a6ff').attr('stroke','#0d1117').attr('stroke-width',2);
+      svg.append('text').attr('x',x(last.w)+9).attr('y',y(last.cum))
+        .attr('fill','#58a6ff').attr('font-size','11px').attr('font-weight','700')
+        .attr('dominant-baseline','middle')
+        .text(myTeam.length>14?myTeam.slice(0,13)+'…':myTeam);
+    }
+  }
+}
+
+// ─── WAR ROOM ─────────────────────────────────────────────────────────────────
+function oppGrade(oppOps) {
+  const v=+oppOps||0;
+  if(!v) return {label:'?',cls:'grade-c'};
+  if(v<0.680) return {label:'A',cls:'grade-a'};
+  if(v<0.720) return {label:'B',cls:'grade-b'};
+  if(v<0.760) return {label:'C',cls:'grade-c'};
+  if(v<0.800) return {label:'D',cls:'grade-d'};
+  return {label:'F',cls:'grade-f'};
+}
+
+function startRec(score, grade, hasStart) {
+  if(!hasStart) return {label:'No Start',cls:'rec-sit'};
+  if(grade==='A'&&score>=50) return {label:'Start',cls:'rec-start'};
+  if(grade==='B'&&score>=55) return {label:'Start',cls:'rec-start'};
+  if(grade==='A'&&score>=35) return {label:'Lean Start',cls:'rec-lean'};
+  if(grade==='C'&&score>=65) return {label:'Start',cls:'rec-start'};
+  if(grade==='D'||grade==='F') return score>=70?{label:'Lean Start',cls:'rec-lean'}:{label:'Sit',cls:'rec-sit'};
+  return {label:'Start',cls:'rec-start'};
+}
+
+function renderWarRoom() {
+  const yr=DATA.league_year, myTeam=MY();
+  const isP=r=>'ERA' in r&&r.ERA!=null;
+
+  // ── HOT / COLD ──────────────────────────────────────────────────────────────
+  const seasonR=(DATA.pitchers||[]).filter(r=>+r.Dataset===yr&&(r.FantasyTeam||'')===myTeam);
+  const seasonH=(DATA.hitters||[]).filter(r=>+r.Dataset===yr&&(r.FantasyTeam||'')===myTeam);
+  const r15P=(DATA.pitchers||[]).filter(r=>+r.Dataset===15&&(r.FantasyTeam||'')===myTeam);
+  const r15H=(DATA.hitters||[]).filter(r=>+r.Dataset===15&&(r.FantasyTeam||'')===myTeam);
+
+  const findR15=(name,isPitcher)=>{
+    const pool=isPitcher?r15P:r15H;
+    return pool.find(r=>r.PlayerName===name)||null;
+  };
+
+  const posLookup=buildPosLookup();
+  const deltas=[];
+  [...seasonR,...seasonH].forEach(p=>{
+    const ispit=isP(p);
+    const sScore=ispit?pitcherScore(p):hitterScore(p);
+    const r7=findR15(p.PlayerName,ispit);
+    if(!r7) return;
+    const rScore=ispit?pitcherScore(r7):hitterScore(r7);
+    deltas.push({name:p.PlayerName,pos:inferPos(p,posLookup),sScore,rScore,delta:rScore-sScore,ispit});
+  });
+  deltas.sort((a,b)=>b.delta-a.delta);
+
+  const hotList=deltas.filter(d=>d.delta>=10).slice(0,6);
+  const coldList=deltas.filter(d=>d.delta<=-10).sort((a,b)=>a.delta-b.delta).slice(0,6);
+
+  const pulseRow=(d,dir)=>`<div class="pulse-row">
+    <span class="pos-badge">${d.pos}</span>
+    <span style="flex:1;font-size:12px;font-weight:500">${d.name}</span>
+    <span class="${dir==='hot'?'hot-badge':'cold-badge'}">${d.delta>0?'+':''}${d.delta}</span>
+    <span style="font-size:10px;color:var(--muted)">${d.rScore}→${d.sScore}</span>
+  </div>`;
+
+  document.getElementById('wr-hot').innerHTML=hotList.length?hotList.map(d=>pulseRow(d,'hot')).join(''):'<div style="color:var(--muted);font-size:12px;padding:8px 0">No notable hot streaks</div>';
+  document.getElementById('wr-cold').innerHTML=coldList.length?coldList.map(d=>pulseRow(d,'cold')).join(''):'<div style="color:var(--muted);font-size:12px;padding:8px 0">No notable cold spells</div>';
+
+  // ── CATEGORY INTEL ────────────────────────────────────────────────────────
+  const weak=myWeakCategories();
+  document.getElementById('wr-cat-intel').innerHTML=`
+    <div style="font-size:11px;color:var(--muted);margin-bottom:10px">Categories ranked worst to best vs league average. Focus pickups and trades on your bottom rows.</div>
+    <table style="width:100%;border-collapse:collapse">
+      ${weak.map(({cat,diff})=>{
+        const good=diff>=0;
+        const bar=Math.min(Math.abs(diff)/20*100,100);
+        return `<tr>
+          <td style="padding:6px 8px 6px 0;width:50px;font-weight:600;font-size:12px">${cat}</td>
+          <td style="padding:6px 4px"><div style="height:6px;background:var(--surface2);border-radius:3px;overflow:hidden">
+            <div style="height:100%;width:${bar}%;background:${good?'var(--green)':'var(--red)'};opacity:.7;border-radius:3px"></div>
+          </div></td>
+          <td style="padding:6px 0 6px 8px;text-align:right;font-family:monospace;font-size:11px;color:${good?'var(--green)':'var(--red)'};white-space:nowrap">${diff>0?'+':''}${diff.toFixed(1)}</td>
+        </tr>`;
+      }).join('')}
+    </table>`;
+
+  // ── START / SIT ────────────────────────────────────────────────────────────
+  const ssRows=seasonR.map(p=>{
+    const hasStart=!!(p.PSP_Date&&p.PSP_Date!=='1999-01-01');
+    const g=oppGrade(p.Team_OPS_Value);
+    const score=pitcherScore(p);
+    const rec=startRec(score,g.label,hasStart);
+    const inj=(p.FreeAgentInjuryStatus||'').toUpperCase();
+    const injBadge=inj==='IL'||inj==='OUT'?`<span class="badge badge-il">${inj}</span>`:inj==='DTD'?'<span class="badge badge-dtd">DTD</span>':'';
+    const startLabel=hasStart?`${p.PSP_Date} ${p.PSP_HomeVAway||''}${p.PSP_Projected?' (proj.)':''}`.trim():'—';
+    return `<tr>
+      <td><span class="pos-badge">${inferPos(p,posLookup)}</span></td>
+      <td style="font-weight:600">${p.PlayerName} ${injBadge}</td>
+      <td style="color:var(--muted);font-size:11px">${startLabel}</td>
+      <td style="font-family:monospace;font-size:11px">${fmt(p.Team_OPS_Value,3)}</td>
+      <td><span class="wr-matchup-grade ${g.cls}">${g.label}</span></td>
+      <td style="font-family:monospace">${fmt(p.ERA)}</td>
+      <td style="font-family:monospace">${fmt(p['K/IP']||p.KIP)}</td>
+      <td>${scoreBadge(score)}</td>
+      <td><span class="wr-rec ${rec.cls}">${rec.label}</span></td>
+    </tr>`;
+  });
+  document.getElementById('wr-startsit-tbody').innerHTML=ssRows.join('')||'<tr><td colspan="9" class="empty">No rostered pitchers found</td></tr>';
+
+  // ── STREAMING TARGETS ─────────────────────────────────────────────────────
+  // FA pitchers in DATA.pitchers (PSP_Date / Team_OPS_Value live here)
+  const faP=(DATA.pitchers||[]).filter(r=>{
+    const isFa=!(r.FantasyTeam||'').trim();
+    const hasStart=!!(r.PSP_Date&&r.PSP_Date!=='1999-01-01');
+    return +r.Dataset===yr && isFa && hasStart;
+  });
+  const streamRows=faP.map(p=>{
+    const g=oppGrade(p.Team_OPS_Value);
+    const score=pitcherScore(p);
+    return {p,g,score};
+  }).sort((a,b)=>b.score-a.score).slice(0,10);
+
+  document.getElementById('wr-stream-tbody').innerHTML=streamRows.map(({p,g,score})=>{
+    const inj=(p.FreeAgentInjuryStatus||'').toUpperCase();
+    const injBadge=inj==='IL'||inj==='OUT'?`<span class="badge badge-il">${inj}</span>`:inj==='DTD'?'<span class="badge badge-dtd">DTD</span>':'<span class="badge badge-fa">FA</span>';
+    const startLabel=`${p.PSP_Date} ${p.PSP_HomeVAway||''}`.trim();
+    return `<tr>
+      <td>${scoreBadge(score)}</td>
+      <td><span class="pos-badge">${inferPos(p,posLookup)}</span></td>
+      <td style="font-weight:600">${p.PlayerName}</td>
+      <td style="color:var(--muted);font-size:11px">${startLabel}</td>
+      <td style="font-family:monospace;font-size:11px">${fmt(p.Team_OPS_Value,3)}</td>
+      <td><span class="wr-matchup-grade ${g.cls}">${g.label}</span></td>
+      <td style="font-family:monospace">${fmt(p.ERA)}</td>
+      <td style="font-family:monospace">${fmt(p['K/IP']||p.KIP)}</td>
+      <td>${injBadge}</td>
+    </tr>`;
+  }).join('')||'<tr><td colspan="9" class="empty">No FA starters with upcoming games found — try re-running fetch_data.py</td></tr>';
+}
+
+// ─── GO ───────────────────────────────────────────────────────────────────────
+loadData();
+</script>
+</body>
+</html>
