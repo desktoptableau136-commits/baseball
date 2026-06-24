@@ -572,13 +572,13 @@ def build_matchup_section(matchup, logos=None):
         f'<table style="width:100%;border-collapse:collapse;background:{SURFACE};'
         f'border-radius:6px;margin-bottom:12px;">'
         f'<tr>'
-        f'<td style="padding:12px 16px;font-size:13px;font-weight:800;color:{ACCENT};">'
+        f'<td style="width:42%;padding:12px 16px;font-size:13px;font-weight:800;color:{ACCENT};text-align:center;">'
         f'{my_logo_html}Guerrero Warfare &#8592;</td>'
-        f'<td style="text-align:center;padding:12px 8px;">'
+        f'<td style="width:16%;text-align:center;padding:12px 8px;">'
         f'<div style="font-size:24px;font-weight:900;color:{score_color};">{score_str}</div>'
         f'<div style="font-size:10px;color:{MUTED};text-transform:uppercase;letter-spacing:.5px;">{status}</div>'
         f'</td>'
-        f'<td style="padding:12px 16px;font-size:13px;font-weight:700;color:{TEXT};text-align:right;">'
+        f'<td style="width:42%;padding:12px 16px;font-size:13px;font-weight:700;color:{TEXT};text-align:center;">'
         f'{opp_logo_html}{opp_short}</td>'
         f'</tr></table>'
     )
@@ -596,15 +596,16 @@ def build_matchup_section(matchup, logos=None):
         opp_color = RED   if res == "W" else (GREEN if res == "L" else MUTED)
 
         cat_label = f'<span style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:{MUTED};">{label}</span>'
-        if res == "W":   # arrow points left → toward GW
-            mid = f'&#9664;&nbsp;{cat_label}'
-            mid_color = ACCENT   # blue → my team wins
-        elif res == "L": # arrow points right → toward Opp
-            mid = f'{cat_label}&nbsp;&#9654;'
-            mid_color = YELLOW   # orange → opponent wins
-        else:
-            mid = cat_label
-            mid_color = MUTED
+        arrow_l = f'<span style="color:{ACCENT};">&#9664;</span>' if res == "W" else ''
+        arrow_r = f'<span style="color:{YELLOW};">&#9654;</span>' if res == "L" else ''
+        mid = (
+            f'<table style="width:100%;border-collapse:collapse;"><tr>'
+            f'<td style="width:22%;text-align:right;padding:0 4px 0 0;">{arrow_l}</td>'
+            f'<td style="width:56%;text-align:center;padding:0;">{cat_label}</td>'
+            f'<td style="width:22%;text-align:left;padding:0 0 0 4px;">{arrow_r}</td>'
+            f'</tr></table>'
+        )
+        mid_color = MUTED
 
         bg = f"background:{SURFACE2};" if i % 2 else ""
         rows += (
@@ -618,9 +619,9 @@ def build_matchup_section(matchup, logos=None):
     table = (
         f'<table style="width:100%;border-collapse:collapse;margin-bottom:24px;font-size:13px;">'
         f'<thead><tr>'
-        f'<th style="{TH_S}text-align:center;">Guerrero Warfare</th>'
-        f'<th style="{TH_S}text-align:center;"></th>'
-        f'<th style="{TH_S}text-align:center;">{opp_short}</th>'
+        f'<th style="{TH_S}width:42%;text-align:center;">Guerrero Warfare</th>'
+        f'<th style="{TH_S}width:16%;text-align:center;"></th>'
+        f'<th style="{TH_S}width:42%;text-align:center;">{opp_short}</th>'
         f'</tr></thead><tbody>{rows}</tbody></table>'
     )
 
