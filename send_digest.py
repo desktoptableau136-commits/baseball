@@ -596,6 +596,189 @@ def build_matchup_section(matchup, logos=None):
     )
 
 
+# ── CATEGORY PULSE ───────────────────────────────────────────────────────────
+
+_RATE_CATS    = {"OPS", "ERA", "WHIP", "B_SO"}   # use weighted-avg projection
+_LOWER_BETTER = {"ERA", "WHIP"}
+
+_CLOSE_THRESH = {
+    "R": 8, "HR": 3, "RBI": 8, "SB": 3, "OPS": 0.025, "B_SO": 0.08,
+    "K": 8, "QS": 2, "W": 2, "ERA": 0.30, "WHIP": 0.08, "SVHD": 3,
+}
+
+_HIT_CATS = {"R", "HR", "RBI", "SB", "OPS", "B_SO"}
+_PIT_CATS = {"K", "QS", "W",   "ERA", "WHIP", "SVHD"}
+
+
+def compute_weekly_avgs(roto, current_week):
+    """Return {team: {cat: weekly_avg}} from all completed weeks before current_week."""
+    from collections import defaultdict
+    CATS = ["R", "HR", "RBI", "SB", "OPS", "B_SO", "K", "QS", "W", "ERA", "WHIP", "SVHD"]
+    past = [r for r in roto if int(r.get("Week", 0)) < current_week]
+    if not past:
+        return {}
+    buckets = defaultdict(lambda: {c: [] for c in CATS})
+    for row in past:
+        t = " ".join((row.get("Team", "") or "").split())  # normalize whitespace
+        if not t:
+            continue
+        for c in CATS:
+            try:
+                buckets[t][c].append(float(row[c]))
+            except (KeyError, TypeError, ValueError):
+                pass
+    return {t: {c: sum(v) / len(v) for c, v in cats.items() if v}
+            for t, cats in buckets.items()}
+
+
+def _project(current, avg, elapsed_frac, cat):
+    """Project end-of-week value from current accumulated stat and historical weekly avg."""
+    remaining = 1.0 - elapsed_frac
+    if cat in _RATE_CATS:
+        return current * elapsed_frac + avg * remaining   # weighted blend
+    else:
+        return current + remaining * avg                  # counting: add expected remainder
+
+
+def build_category_pulse(matchup, weekly_avgs=None, days_elapsed=None):
+    if not matchup or not matchup.get("categories"):
+        return ""
+
+    week         = matchup.get("week", "")
+    opp          = matchup.get("opp_team", "Opponent")
+    my_team_key  = " ".join(matchup.get("my_team",  "").split())
+    opp_team_key = " ".join(matchup.get("opp_team", "").split())
+
+    # Projection setup
+    elapsed_frac = min(1.0, max(0.0, (days_elapsed or 0) / 7))
+    my_avgs  = (weekly_avgs or {}).get(my_team_key,  {})
+    opp_avgs = (weekly_avgs or {}).get(opp_team_key, {})
+    has_proj = bool(my_avgs and opp_avgs and elapsed_frac > 0)
+
+    def _card(c):
+        cat   = c["cat"]
+        my_v  = c["my_val"]
+        opp_v = c["opp_val"]
+        res   = c["result"]
+        label = _CAT_LABELS_MAP.get(cat, cat)
+        dec   = _CAT_DEC.get(cat, 0)
+
+        if res == "W":
+            border_c, val_c, status, status_c = GREEN,  GREEN,  "WINNING", GREEN
+        elif res == "L":
+            border_c, val_c, status, status_c = RED,    RED,    "LOSING",  RED
+        else:
+            border_c, val_c, status, status_c = YELLOW, YELLOW, "TIED",    YELLOW
+
+        margin = abs(my_v - opp_v)
+        if res in ("W", "L") and margin <= _CLOSE_THRESH.get(cat, 999):
+            status += " ⚡"
+
+        # Bar: % filled = my share of the total; invert for lower-is-better
+        total = my_v + opp_v
+        if total > 0:
+            pct = (opp_v / total * 100) if cat in _LOWER_BETTER else (my_v / total * 100)
+        else:
+            pct = 50
+        pct = max(5, min(95, pct))
+
+        bar = (
+            f'<div style="height:3px;background:{BORDER};border-radius:2px;margin:7px 0 5px;">'
+            f'<div style="width:{pct:.0f}%;height:100%;background:{val_c};border-radius:2px;"></div>'
+            f'</div>'
+        )
+
+        # Projection footer
+        proj_html = ""
+        if has_proj and cat in my_avgs and cat in opp_avgs:
+            pm = _project(my_v,  my_avgs[cat],  elapsed_frac, cat)
+            po = _project(opp_v, opp_avgs[cat], elapsed_frac, cat)
+            lower = cat in _LOWER_BETTER
+            proj_win = (pm < po) if lower else (pm > po)
+            proj_res = "W" if proj_win else ("L" if pm != po else "T")
+
+            flip = proj_res != res
+            if flip:
+                flip_html = (
+                    f'&nbsp;<span style="color:{GREEN};font-size:9px;">▲FLIP</span>'
+                    if proj_res == "W" else
+                    f'&nbsp;<span style="color:{RED};font-size:9px;">▼FLIP</span>'
+                )
+            else:
+                flip_html = ""
+
+            proj_html = (
+                f'<div style="margin-top:4px;color:{MUTED};font-size:9px;">'
+                f'proj&nbsp;<span style="color:{TEXT};">{pm:.{dec}f}</span>'
+                f'&nbsp;vs&nbsp;{po:.{dec}f}'
+                f'{flip_html}</div>'
+            )
+
+        return (
+            f'<td style="padding:4px;width:16.66%;">'
+            f'<div style="background:{SURFACE};border:1px solid {border_c}33;'
+            f'border-top:2px solid {border_c};border-radius:6px;padding:9px 11px;">'
+            f'<div style="color:{MUTED};font-size:9px;font-weight:700;'
+            f'text-transform:uppercase;letter-spacing:.7px;">{label}</div>'
+            f'<div style="margin-top:5px;">'
+            f'<span style="color:{val_c};font-size:19px;font-weight:900;">{my_v:.{dec}f}</span>'
+            f'<span style="color:{MUTED};font-size:11px;margin-left:5px;">vs {opp_v:.{dec}f}</span>'
+            f'</div>'
+            f'{bar}'
+            f'<div style="color:{status_c};font-size:9px;font-weight:700;">{status}</div>'
+            f'{proj_html}'
+            f'</div></td>'
+        )
+
+    hit_cats = [c for c in matchup["categories"] if c["cat"] in _HIT_CATS]
+    pit_cats = [c for c in matchup["categories"] if c["cat"] in _PIT_CATS]
+
+    def _row(cat_list, label):
+        cells = "".join(_card(c) for c in cat_list)
+        return (
+            f'<tr><td colspan="6" style="padding:4px 4px 2px;">'
+            f'<div style="color:{MUTED};font-size:9px;font-weight:700;'
+            f'text-transform:uppercase;letter-spacing:.6px;">{label}</div></td></tr>'
+            f'<tr>{cells}</tr>'
+        )
+
+    wins   = matchup["wins"]
+    losses = matchup["losses"]
+    score_color = GREEN if wins > losses else (RED if losses > wins else YELLOW)
+
+    table = (
+        f'<div style="overflow-x:auto;-webkit-overflow-scrolling:touch;margin-bottom:24px;">'
+        f'<table style="width:100%;border-collapse:collapse;min-width:480px;">'
+        f'{_row(hit_cats, "Hitting")}'
+        f'<tr><td colspan="6" style="height:6px;"></td></tr>'
+        f'{_row(pit_cats, "Pitching")}'
+        f'</table></div>'
+    )
+
+    wins_count   = sum(1 for c in matchup["categories"] if c["result"] == "W")
+    losses_count = sum(1 for c in matchup["categories"] if c["result"] == "L")
+    close_count  = sum(
+        1 for c in matchup["categories"]
+        if c["result"] in ("W", "L") and abs(c["my_val"] - c["opp_val"]) <= _CLOSE_THRESH.get(c["cat"], 999)
+    )
+    summary = (
+        f'<span style="color:{GREEN};font-weight:700;">{wins_count}W</span>'
+        f'<span style="color:{MUTED};margin:0 4px;">·</span>'
+        f'<span style="color:{RED};font-weight:700;">{losses_count}L</span>'
+    )
+    if close_count:
+        summary += (
+            f'<span style="color:{MUTED};margin:0 4px;">·</span>'
+            f'<span style="color:{YELLOW};">⚡{close_count} close</span>'
+        )
+
+    return (
+        section_head(f"Category Pulse — Week {week}", f"vs. {opp} · ⚡ = within striking distance") +
+        f'<div style="margin-bottom:8px;font-size:12px;">{summary}</div>' +
+        table
+    )
+
+
 # ── EMAIL BUILDER ─────────────────────────────────────────────────────────────
 
 def build_email(snap):
@@ -613,6 +796,8 @@ def build_email(snap):
     team_logos = {" ".join(s["team_name"].split()): s.get("logo_url", "") for s in standings}
     cats, n   = category_ranks(roto, my_team)
     current_week_num = matchup.get("week") or max((int(r.get("Week", 0)) for r in roto), default=0)
+    weekly_avgs  = compute_weekly_avgs(roto, current_week_num)
+    days_elapsed = datetime.now().weekday() + 1   # Mon=1 … Sun=7
     week_roto = [r for r in roto if int(r.get("Week", 0)) == current_week_num]
     week_cats, week_n = category_ranks(week_roto, my_team)
     alerts    = roster_alerts(pitchers, hitters, my_team)
@@ -962,6 +1147,7 @@ def build_email(snap):
     body_parts += [
         week_cat_section,
         build_matchup_section(matchup, logos=team_logos),
+        build_category_pulse(matchup, weekly_avgs=weekly_avgs, days_elapsed=days_elapsed),
         pos_section,
         alert_section,
         fa_sp_section,
