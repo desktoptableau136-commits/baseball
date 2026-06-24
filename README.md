@@ -194,7 +194,7 @@ Your pitchers with confirmed or projected starts in the next 7 days, grouped by 
 Season-to-date roto rank across all 12 categories. Same color coding as the weekly version at the top, but for the full season.
 
 ### League Luck Standings
-All 12 teams sorted by record. **Luck** = roto rank minus record rank. Positive luck means your W-L is better than your underlying stats deserve; negative means you're underperforming your true quality.
+All 12 teams sorted by record. Shows W-L-T, roto rank, cumulative roto points, and luck delta. **Luck** = roto rank minus record rank. Positive luck means your W-L-T is better than your underlying stats deserve; negative means you're underperforming your true quality.
 
 ---
 
@@ -335,7 +335,7 @@ Each player gets a 0–100 score used to rank FA pickups. Shown as a colored bad
 `Team, Week, R, HR, RBI, SB, OPS, B_SO, K, QS, W, ERA, WHIP, SVHD, Roto_Score, {CAT}_Points`
 
 **standings** (list of dicts):
-`team_name, wins, losses, standing, logo_url`
+`team_name, wins, losses, ties, standing, logo_url`
 
 **current_matchup** (dict):
 `week, my_team, opp_team, wins, losses, ties, categories[]`
@@ -348,7 +348,7 @@ Each category: `cat, my_val, opp_val, result` (W/L/T), `lower_better`
 `PlayerName, G, GS, IP, ERA, WHIP, BB`
 
 **weekly_results** (dict — `{"1": {"Team Name": "W"/"L"/"T", ...}, ...}`):
-Per-week head-to-head matchup results for every team. Keys are week numbers as strings. Used by `send_digest.py` to build per-week roto rank results for the sparkline.
+Per-week head-to-head matchup results for every team. Keys are week numbers as strings. Note: the sparkline dot encoding uses roto-derived rank results computed in `send_digest.py` from the `roto` data — not this H2H field directly.
 
 ---
 
