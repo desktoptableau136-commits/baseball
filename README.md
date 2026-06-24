@@ -147,7 +147,7 @@ Two-row panel at the top of every digest. Your team logo appears next to the tea
 **Top row:** Category record (W-L-T) · Category wins this week · Roster hot/cold count · Upcoming starts
 
 **Bottom row:**
-- **Roto Trend** — SVG line chart of your weekly roto score across all completed weeks. Dots are color-coded: green filled = your personal peak week, 🏅 = you ranked #1 in roto points among all 12 teams that week, grey = all other weeks. A small legend and "Peak Wk N" label sit on the same line below the chart.
+- **Roto Trend** — SVG line chart of your weekly roto score across all completed weeks. Dots are color-coded: green filled = your personal peak week, 🏅 = you ranked #1 in roto points among all 12 teams that week, grey = all other weeks. A legend below the chart reads: 🟢 Peak Wk: N  |  🏅 #1 roto wk.
 - **Standing** — Your current league standing (#N) with your average roto category W-L-T per week underneath (season totals ÷ weeks played).
 - **Roto Rank** — Season-to-date cumulative roto rank (#N) with average weekly rank and average weekly roto points underneath.
 - **Luck** — Roto rank minus record rank. Positive = your W-L is better than your underlying stats deserve; negative = underperforming your true quality.

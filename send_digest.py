@@ -602,7 +602,7 @@ def make_sparkline(roto, my_team, current_week, n=99, weekly_results=None):
         f'</svg>'
     )
 
-    peak_label = f'<div style="color:{GREEN};font-size:9px;margin-top:2px;">Peak Wk {peak_wk}</div>'
+    peak_label = f'<div style="color:{GREEN};font-size:9px;margin-top:2px;">Peak Wk: {peak_wk}</div>'
     return svg, peak_label
 
 
@@ -1155,9 +1155,8 @@ def build_email(snap):
 
     spark_footer = (
         f'<div style="font-size:9px;color:{MUTED};margin-top:2px;white-space:nowrap;">'
-        f'{peak_label.replace("<div","<span").replace("</div>","</span>")}'
-        f'&ensp;'
-        f'{_dot(3.5, GREEN)}&thinsp;peak&ensp;'
+        f'{_dot(3.5, GREEN)}&thinsp;{peak_label.replace("<div","<span").replace("</div>","</span>")}'
+        f'&ensp;|&ensp;'
         f'&#127941;&thinsp;#1 roto wk'
         f'</div>'
     )
