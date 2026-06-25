@@ -779,12 +779,15 @@ def build_pitcher_data(league) -> list:
     sc_p = get_savant_pitcher_contact(CURRENT_YEAR)
     if not sc_p.empty:
         merged = merged.merge(sc_p, on="PlayerName", how="left")
+
     # Derive approximate K% from FantasyPros K and estimated TBF (K/IP * 9 / K9-to-TBF ratio)
     if "K" in merged.columns and "IP" in merged.columns:
         k_num = pd.to_numeric(merged["K"], errors="coerce").fillna(0)
         ip_num = merged["IP"].apply(innings_to_decimal)
         # Approx TBF ~ IP * 4.3; K% = K / TBF
         merged["Kpct_P"] = (k_num / (ip_num * 4.3 + 0.001)).clip(0, 0.50).round(4)
+        gs_num = pd.to_numeric(merged.get("GS", 0), errors="coerce").fillna(0)
+        merged["IP_per_GS"] = (ip_num / gs_num.clip(lower=1)).clip(upper=7.5).round(2)
 
     num_cols = merged.select_dtypes(include="number").columns
     merged[num_cols] = merged[num_cols].fillna(-1)
