@@ -28,7 +28,7 @@ fetch_data.py  →  data/snapshot.json  →  send_digest.py  →  email
 
 1. **`fetch_data.py`** pulls data from ESPN, FantasyPros, MLB Stats API, Baseball Savant, and FanGraphs. Takes ~90 seconds. Saves everything to `data/snapshot.json`.
 
-2. **`send_digest.py`** reads the snapshot, builds a single HTML email, and sends it via Gmail SMTP. Alternatively saves `digest_preview.html` for local browser preview (no email).
+2. **`send_digest.py`** reads the snapshot, builds a single HTML email, and sends it via Gmail SMTP. The email includes both an inline HTML body and an attached `digest_YYYY-MM-DD.html` file — the attachment bypasses Gmail's 102 KB inline clip limit so the full digest is always accessible by opening the attachment in a browser. Alternatively saves `digest_preview.html` for local browser preview (no email).
 
 3. **GitHub Actions** runs this every morning at 7 AM EDT using credentials stored as repository secrets — no laptop needed.
 
@@ -142,17 +142,18 @@ Go to **Settings → Secrets and variables → Actions** to view or update:
 Sections appear in this order every morning:
 
 1. KPI Row
-2. This Week's Category Rankings
-3. Current Week Matchup
-4. Category Pulse
-5. **FA Pickup — Starting Pitchers**
-6. Roster Hot/Cold
-7. My Upcoming Starts
-8. Positional Breakdown
-9. Roster Alerts
-10. FA Pickup — Hitters
-11. My Category Rankings
-12. League Luck Standings
+2. **Week at a Glance** *(new)*
+3. This Week's Category Rankings
+4. Current Week Matchup
+5. Category Pulse
+6. **FA Pickup — Starting Pitchers**
+7. Roster Hot/Cold
+8. My Upcoming Starts
+9. Positional Breakdown
+10. Roster Alerts
+11. FA Pickup — Hitters
+12. My Category Rankings
+13. League Luck Standings
 
 ### KPI Row
 Two-row panel at the top of every digest. Your team logo appears next to the team name in the header.
@@ -160,15 +161,22 @@ Two-row panel at the top of every digest. Your team logo appears next to the tea
 **Top row:** Category record (W-L-T) with Win% sub-line · Category matchup record (W-L-T) with Win% sub-line · Roster hot/cold count · Upcoming starts
 
 **Bottom row:**
-- **Roto Trend** — SVG line chart of your weekly roto score across all completed weeks. Dots are color-coded: green filled = your personal peak week, 🏅 = you ranked #1 in roto points among all 12 teams that week, grey = all other weeks. A legend below the chart reads: 🟢 Peak Wk: N  |  🏅 #1 roto wk.
+- **Roto Trend** — SVG line chart of your weekly roto score across all completed weeks. Dots are color-coded: green filled = your personal peak week, ★ (yellow star) = you ranked #1 in roto points among all 12 teams that week, grey = all other weeks. A legend below the chart reads: 🟢 Peak Wk: N  |  ★ #1 roto wk. Note: uses ★ (U+2605) instead of an emoji so the marker size is controlled by the SVG font-size attribute.
 - **Standing** — Your current league standing (#N) with your average roto category W-L-T per week underneath (season totals ÷ weeks played).
 - **Roto Rank** — Season-to-date cumulative roto rank (#N) with average weekly rank and average weekly roto points underneath.
 - **Luck** — Roto rank minus record rank. Positive = your W-L is better than your underlying stats deserve; negative = underperforming your true quality.
 
+### Week at a Glance
+Three-bullet summary placed directly above the category rankings grid:
+
+1. **Week record** — current W-L-T vs. this week's opponent through the current day, with the categories you're winning (green) and trailing (red) called out.
+2. **Rotation coverage** — confirmed start count and days covered; flags thin days (< 2 my starts) by day-of-week so you know where to add from FA.
+3. **Top FA pickup** — best available FA starter by QS%, with their next start day and QS%. If the highest-score and highest-QS pitchers differ, both are mentioned.
+
 ### This Week's Category Rankings
 Your roto rank (out of 12 teams) in each of the 12 scoring categories for the **current matchup week only**. Green = top 3, red = bottom half.
 
-Scoring categories: **R · HR · RBI · SB · OPS · BB/K** (hitting) + **K · QS · W · ERA · WHIP · SV+H** (pitching)
+Scoring categories: **R · HR · RBI · SB · OPS · B/SO** (batter strikeouts, hitting) + **K · QS · W · ERA · WHIP · SV+H** (pitching)
 
 ### Current Week Matchup
 Head-to-head breakdown vs. this week's opponent. Shows each category with your value, their value, and a blue arrow (← you're winning) or orange arrow (→ they're winning). Score banner shows team logos and current overall record.

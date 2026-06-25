@@ -597,15 +597,16 @@ def make_sparkline(roto, my_team, current_week, n=99, weekly_results=None):
     peak_wk = weeks[vals.index(max(vals))]
 
     # SVG geometry — scale width to number of points (min 130)
+    # PAD_T (top padding) reserves room for the ★ marker above peak dots without overflow:visible
     n_pts = len(vals)
-    SW, SH, PAD = max(130, n_pts * 14), 36, 5
+    SW, SH, PAD, PAD_T = max(130, n_pts * 14), 50, 5, 14
 
     def sx(i):
         return PAD + (i / max(n_pts - 1, 1)) * (SW - 2 * PAD)
 
     def sy(v):
         norm = max(0.0, min(1.0, (v - lo) / rng))
-        return SH - PAD - norm * (SH - 2 * PAD)
+        return PAD_T + (1 - norm) * (SH - PAD_T - PAD)
 
     pts  = [(sx(i), sy(v)) for i, v in enumerate(vals)]
     line = " ".join(f"{px:.1f},{py:.1f}" for px, py in pts)
@@ -617,14 +618,15 @@ def make_sparkline(roto, my_team, current_week, n=99, weekly_results=None):
         wk_res = wr.get(wk) or wr.get(str(wk), {})
         is_first = (wk_res.get(my_key) or wk_res.get(my_team, "")) == "W"
         if wk == peak_wk:
-            medal = f'<text x="{cx:.1f}" y="{cy - 4:.1f}" text-anchor="middle" font-size="9">&#127941;</text>' if is_first else ""
+            # ★ (U+2605) instead of medal emoji — font-size is honored in SVG unlike emoji
+            star = f'<text x="{cx:.1f}" y="{cy - 6:.1f}" text-anchor="middle" font-size="8" fill="{YELLOW}">&#9733;</text>' if is_first else ""
             dots.append(
-                f'{medal}<circle cx="{cx:.1f}" cy="{cy:.1f}" r="3.5" fill="{GREEN}" stroke="#0d1424" stroke-width="1"/>'
+                f'{star}<circle cx="{cx:.1f}" cy="{cy:.1f}" r="3.5" fill="{GREEN}" stroke="#0d1424" stroke-width="1"/>'
             )
         elif is_first:
             dots.append(
                 f'<circle cx="{cx:.1f}" cy="{cy:.1f}" r="2" fill="{YELLOW}"/>'
-                f'<text x="{cx:.1f}" y="{cy - 4:.1f}" text-anchor="middle" font-size="9">&#127941;</text>'
+                f'<text x="{cx:.1f}" y="{cy - 6:.1f}" text-anchor="middle" font-size="8" fill="{YELLOW}">&#9733;</text>'
             )
         else:
             dots.append(
@@ -632,7 +634,7 @@ def make_sparkline(roto, my_team, current_week, n=99, weekly_results=None):
             )
 
     svg = (
-        f'<svg width="{SW}" height="{SH}" style="display:inline-block;vertical-align:middle;overflow:visible;" xmlns="http://www.w3.org/2000/svg">'
+        f'<svg width="{SW}" height="{SH}" style="display:inline-block;vertical-align:middle;" xmlns="http://www.w3.org/2000/svg">'
         f'<polygon points="{fill}" fill="{ACCENT}" opacity="0.12"/>'
         f'<polyline points="{line}" fill="none" stroke="{ACCENT}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>'
         f'{"".join(dots)}'
@@ -666,7 +668,7 @@ def kpi_cell_sm(label, value, color=None, font_size="20px", font_weight="800"):
 
 _CAT_LABELS_MAP = {
     "R": "R", "HR": "HR", "RBI": "RBI", "SB": "SB", "OPS": "OPS",
-    "B_SO": "BB/K", "K": "K", "QS": "QS", "W": "W",
+    "B_SO": "B/SO", "K": "K", "QS": "QS", "W": "W",
     "ERA": "ERA", "WHIP": "WHIP", "SVHD": "SV+H",
 }
 _CAT_DEC = {
@@ -1047,6 +1049,114 @@ def build_category_pulse(matchup, weekly_avgs=None, days_elapsed=None):
     )
 
 
+_CAT_DISPLAY = {
+    "R": "R", "HR": "HR", "RBI": "RBI", "SB": "SB", "OPS": "OPS",
+    "B_SO": "B/SO", "K": "K", "QS": "QS", "W": "W",
+    "ERA": "ERA", "WHIP": "WHIP", "SVHD": "SV+H",
+}
+
+
+def build_week_overview(matchup, week_cats, week_n, fa_sp, starts, days_elapsed, my_starts_by_day):
+    bullets = []
+
+    def _cat_label(key):
+        return _CAT_DISPLAY.get(key, key)
+
+    # Bullet 1: week record and category snapshot
+    if matchup:
+        cw = matchup.get("wins", 0)
+        cl = matchup.get("losses", 0)
+        ct = matchup.get("ties", 0)
+        opp = matchup.get("opp_team", "opponent")
+        status_color = GREEN if cw > cl else (RED if cl > cw else YELLOW)
+        status_word  = "Leading" if cw > cl else ("Trailing" if cl > cw else "Tied")
+        cats_list    = matchup.get("categories", [])
+        winning_cats = [_cat_label(c["cat"]) for c in cats_list if c.get("result") == "W"]
+        losing_cats  = [_cat_label(c["cat"]) for c in cats_list if c.get("result") == "L"]
+        detail = ""
+        if winning_cats:
+            detail += f" — winning <span style='color:{GREEN};font-weight:600;'>{', '.join(winning_cats[:3])}</span>"
+            if len(winning_cats) > 3:
+                detail += f" +{len(winning_cats)-3} more"
+        if losing_cats:
+            detail += f", trailing in <span style='color:{RED};font-weight:600;'>{', '.join(losing_cats[:3])}</span>"
+        bullets.append(
+            f'<span style="color:{status_color};font-weight:700;">{status_word} {cw}-{cl}-{ct}</span>'
+            f' vs. {opp} through Day {days_elapsed}{detail}.'
+        )
+
+    # Bullet 2: rotation coverage
+    confirmed = [s for s in starts if s.get("PSP_Date", "1999-01-01") != "1999-01-01"]
+    n_days = len(set(s["PSP_Date"] for s in confirmed))
+    thin_days = sorted(d for d, cnt in my_starts_by_day.items() if cnt < 2)
+    if confirmed:
+        rot_str = (
+            f'<span style="color:{ACCENT};font-weight:700;">{len(confirmed)} starts</span>'
+            f' queued across {n_days} day{"s" if n_days != 1 else ""}'
+        )
+        if thin_days:
+            thin_labels = []
+            for d in thin_days[:3]:
+                try:
+                    thin_labels.append(datetime.strptime(d, "%Y-%m-%d").strftime("%a"))
+                except Exception:
+                    thin_labels.append(d[5:])
+            rot_str += (
+                f' — <span style="color:{YELLOW};">thin on {", ".join(thin_labels)}</span>,'
+                f' consider adding from FA below.'
+            )
+        else:
+            rot_str += ' — rotation well-covered through the week.'
+        bullets.append(rot_str)
+    else:
+        bullets.append(
+            f'<span style="color:{RED};font-weight:700;">No confirmed starts</span>'
+            f' yet — check FA SP section below.'
+        )
+
+    # Bullet 3: best FA SP pickup
+    if fa_sp:
+        best_qs  = max(fa_sp, key=lambda r: qs_probability(r) or 0)
+        top_score = fa_sp[0]
+        best_qsp = qs_probability(best_qs)
+        try:
+            best_day = datetime.strptime(best_qs.get("PSP_Date", ""), "%Y-%m-%d").strftime("%a")
+        except Exception:
+            best_day = "?"
+        if best_qsp and best_qsp >= 50:
+            qsp_color = GREEN if best_qsp >= 60 else YELLOW
+            fa_str = (
+                f'Best FA pickup: <span style="color:{TEXT};font-weight:700;">{best_qs["PlayerName"]}</span>'
+                f' ({best_day} start, QS <span style="color:{qsp_color};font-weight:700;">{best_qsp}%</span>)'
+            )
+            if top_score.get("PlayerName") != best_qs.get("PlayerName"):
+                fa_str += (
+                    f' · highest score: <span style="color:{TEXT};font-weight:600;">'
+                    f'{top_score["PlayerName"]}</span>'
+                )
+        else:
+            fa_str = f'<span style="color:{MUTED};">No high-confidence FA starters available this week.</span>'
+        bullets.append(fa_str)
+
+    if not bullets:
+        return ""
+
+    items = "".join(
+        f'<div style="padding:4px 0;font-size:13px;color:{TEXT};line-height:1.5;">'
+        f'<span style="color:{ACCENT};margin-right:7px;">&#9656;</span>{b}'
+        f'</div>'
+        for b in bullets
+    )
+    return (
+        f'<div style="background:#080e1c;border:1px solid {BORDER};border-radius:6px;'
+        f'padding:13px 16px;margin-bottom:20px;">'
+        f'<div style="color:{MUTED};font-size:10px;font-weight:700;text-transform:uppercase;'
+        f'letter-spacing:.7px;margin-bottom:8px;">Week at a Glance</div>'
+        f'{items}'
+        f'</div>'
+    )
+
+
 # ── EMAIL BUILDER ─────────────────────────────────────────────────────────────
 
 def build_email(snap):
@@ -1215,7 +1325,7 @@ def build_email(snap):
         f'<div style="font-size:9px;color:{MUTED};margin-top:2px;white-space:nowrap;">'
         f'{_dot(3.5, GREEN)}&thinsp;{peak_label.replace("<div","<span").replace("</div>","</span>")}'
         f'&ensp;|&ensp;'
-        f'&#127941;&thinsp;#1 roto wk'
+        f'<span style="color:{YELLOW};">&#9733;</span>&thinsp;#1 roto wk'
         f'</div>'
     )
 
@@ -1480,7 +1590,7 @@ def build_email(snap):
 
     # ── Category Rankings ──────────────────────────────────────────────────────
     CAT_LABELS = [
-        ("R","R"), ("HR","HR"), ("RBI","RBI"), ("SB","SB"), ("OPS","OPS"), ("B_SO","BB/K"),
+        ("R","R"), ("HR","HR"), ("RBI","RBI"), ("SB","SB"), ("OPS","OPS"), ("B_SO","B/SO"),
         ("K","K"), ("QS","QS"), ("W","W"), ("ERA","ERA"), ("WHIP","WHIP"), ("SVHD","SV+H"),
     ]
     cat_cells = ""
@@ -1646,7 +1756,11 @@ def build_email(snap):
     )
 
     # ── Final assembly ─────────────────────────────────────────────────────────
+    week_overview = build_week_overview(
+        matchup, week_cats, week_n, fa_sp, starts, days_elapsed, my_starts_by_day
+    )
     body_parts += [
+        week_overview,
         week_cat_section,
         build_matchup_section(matchup, logos=team_logos),
         build_category_pulse(matchup, weekly_avgs=weekly_avgs, days_elapsed=days_elapsed),
@@ -1710,12 +1824,22 @@ def send_email(html, subject):
         print("ERROR: GMAIL_APP_PASSWORD not set — add it to .env")
         sys.exit(1)
 
-    msg = MIMEMultipart("alternative")
+    msg = MIMEMultipart("mixed")
     msg["Subject"] = subject
     msg["From"]    = FROM_EMAIL
     msg["To"]      = TO_EMAIL
     msg["Cc"]      = CC_EMAIL
+
+    # Inline body — Gmail clips this at 102KB; attachment below is the full render
     msg.attach(MIMEText(html, "html"))
+
+    # HTML attachment so the full digest is always accessible (open in browser)
+    attachment = MIMEText(html, "html", "utf-8")
+    attachment.add_header(
+        "Content-Disposition", "attachment",
+        filename=f"digest_{datetime.now().strftime('%Y-%m-%d')}.html",
+    )
+    msg.attach(attachment)
 
     with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
         smtp.login(FROM_EMAIL, GMAIL_APP_PASSWORD)

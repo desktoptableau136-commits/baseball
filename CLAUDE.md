@@ -40,7 +40,7 @@ Two files; one intermediate artifact:
 3. MLB Stats API — probable starters (batch hydrate method) + opponent OPS
 4. pybaseball — Statcast contact quality, expected stats, sprint speed, recent game logs
 
-**`send_digest.py`** reads the snapshot, computes all derived metrics, and builds a single self-contained HTML email sent via Gmail SMTP (`smtplib`). All new features go here. The dashboard.html is legacy.
+**`send_digest.py`** reads the snapshot, computes all derived metrics, and builds a single self-contained HTML email sent via Gmail SMTP (`smtplib`). The email has two parts: inline HTML body (may be clipped by Gmail at 102 KB) and an attached `digest_YYYY-MM-DD.html` for full render. All new features go here. The dashboard.html is legacy.
 
 **`data/snapshot.json`** is the schema contract between the two files. It is ~1.2MB and not committed.
 
