@@ -1063,12 +1063,19 @@ def build_email(snap):
     rec_h = {r["PlayerName"]: r for r in recent_hitting  if r.get("PlayerName")}
     rec_p = {r["PlayerName"]: r for r in recent_pitching if r.get("PlayerName")}
 
-    # Players claimed today may not yet have FantasyTeam set in the ESPN roster API;
-    # use the transaction log as a second source of truth.
-    claimed = {
-        t["PlayerName"] for t in snap.get("transactions", [])
-        if t.get("TransactionType") == "FA ADDED"
-    }
+    # Players claimed today may not yet have FantasyTeam set in the ESPN roster API.
+    # Use today's transactions as a second source of truth, but be precise:
+    # only exclude a player if their MOST RECENT transaction today is FA ADDED
+    # (handles add-then-drop-same-day correctly).
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    todays_txns = [
+        t for t in snap.get("transactions", [])
+        if t.get("TransactionDate", "").startswith(today_str)
+    ]
+    latest_txn = {}
+    for t in sorted(todays_txns, key=lambda t: t.get("TransactionDate", "")):
+        latest_txn[t["PlayerName"]] = t["TransactionType"]
+    claimed = {name for name, txn_type in latest_txn.items() if txn_type == "FA ADDED"}
 
     fa_sp     = fa_starters(pitchers, claimed)
     fa_hit    = fa_hitters(hitters, claimed)
