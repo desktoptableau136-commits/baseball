@@ -2,7 +2,8 @@ name: Daily Fantasy Baseball Digest
 
 on:
   schedule:
-    - cron: '0 11 * * *'  # 7:00 AM EDT (UTC-4) — covers the full baseball season
+    - cron: '0 11 * * *'  # 7:00 AM EDT (UTC-4)
+    - cron: '0 20 * * *'  # 4:00 PM EDT (UTC-4)
   workflow_dispatch:       # allows manual trigger from the GitHub Actions UI
 
 jobs:
