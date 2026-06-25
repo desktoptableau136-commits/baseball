@@ -141,10 +141,23 @@ Go to **Settings → Secrets and variables → Actions** to view or update:
 
 Sections appear in this order every morning:
 
+1. KPI Row
+2. This Week's Category Rankings
+3. Current Week Matchup
+4. Category Pulse
+5. **FA Pickup — Starting Pitchers**
+6. Roster Hot/Cold
+7. My Upcoming Starts
+8. Positional Breakdown
+9. Roster Alerts
+10. FA Pickup — Hitters
+11. My Category Rankings
+12. League Luck Standings
+
 ### KPI Row
 Two-row panel at the top of every digest. Your team logo appears next to the team name in the header.
 
-**Top row:** Category record (W-L-T) · Category wins this week · Roster hot/cold count · Upcoming starts
+**Top row:** Category record (W-L-T) with Win% sub-line · Category matchup record (W-L-T) with Win% sub-line · Roster hot/cold count · Upcoming starts
 
 **Bottom row:**
 - **Roto Trend** — SVG line chart of your weekly roto score across all completed weeks. Dots are color-coded: green filled = your personal peak week, 🏅 = you ranked #1 in roto points among all 12 teams that week, grey = all other weeks. A legend below the chart reads: 🟢 Peak Wk: N  |  🏅 #1 roto wk.
@@ -182,19 +195,35 @@ For each position (C, 1B, 2B, 3B, SS, OF, SP, RP): your weakest rostered player 
 Any injured players on your roster. Only shown if there are active alerts. Color: yellow = DTD, red = IL/OUT.
 
 ### FA Pickup — Starting Pitchers
-Top 12 free agent starters with a confirmed upcoming start in the next 7 days. Sorted by composite SP score. Columns: ERA · **L7 ERA** (last 7 days, colored hot/cold) · Brl% · K/IP · K% · Score.
+Top 12 free agent starters with a confirmed upcoming start in the next 7 days. Grouped by date with day headers. Sorted by composite SP score within each day.
+
+**Columns:** Pitcher · Pos · Matchup · Opp OPS · QS% · ERA · L7 ERA (hot/cold colored) · K% · Score
+
+**Day headers** show a ⚑ badge with your start count for that day: red = 0 my starts, yellow = 1, blue = 2+.
+
+**Pickup badges** appear on thin days (< 2 my starts) only:
+- 🟢 **QS** badge (green left border) — QS% ≥ 55%; likely quality start
+- 🟡 **5K+** badge (yellow left border) — QS% < 55% but K/IP ≥ 0.90 or K% ≥ 0.24 **and** IP/G ≥ 4.5 (deep enough to actually rack up strikeouts)
+
+**K% highlight** — top 3 K% values across the table are highlighted yellow.
+
+**FA exclusion:** players who appear in today's ESPN transaction log as "FA ADDED" (net of any same-day drops) are excluded even if the ESPN roster API hasn't reflected the pickup yet.
 
 ### FA Pickup — Hitters
 Top 12 available hitters sorted by composite score. Columns: R · HR · RBI · SB · OPS · **L7 OPS** (last 7 days, colored hot/cold) · Score. These are the exact fantasy scoring categories.
 
 ### My Upcoming Starts
-Your pitchers with confirmed or projected starts in the next 7 days, grouped by date. Columns: Matchup · Opp OPS · ERA · **L7 ERA** · Brl% · Score. `(proj.)` = rotation estimate, not yet confirmed by MLB.
+Your pitchers with confirmed or projected starts in the next 7 days, grouped by date.
+
+**Columns:** Pitcher · Matchup · Opp OPS · QS% · ERA · L7 ERA (hot/cold colored) · K% · Score
+
+`(proj.)` = rotation estimate, not yet confirmed by MLB. **K% highlight** — top 3 K% values across the table are highlighted yellow.
 
 ### My Category Rankings
 Season-to-date roto rank across all 12 categories. Same color coding as the weekly version at the top, but for the full season.
 
 ### League Luck Standings
-All 12 teams sorted by record. Shows W-L-T, roto rank, cumulative roto points, and luck delta. **Luck** = roto rank minus record rank. Positive luck means your W-L-T is better than your underlying stats deserve; negative means you're underperforming your true quality.
+All 12 teams sorted by record. Shows W-L-T · Win% · Roto rank · Cumulative roto points · Luck delta. **Luck** = roto rank minus record rank. Positive luck means your W-L-T is better than your underlying stats deserve; negative means you're underperforming your true quality.
 
 ---
 
@@ -313,11 +342,13 @@ Each player gets a 0–100 score used to rank FA pickups. Shown as a colored bad
 | Yellow | ≥ 32 — fringe |
 | Red | < 32 — avoid |
 
-**pitcherScore:** K rate (uses Whiff% → K% → K/IP in order of availability) + ERA quality (xFIP preferred, falls back to ERA) + WHIP + role bonus (SP vs RP) + xFIP elite bonus. IL/OUT = −22, DTD = −10.
+**pitcherScore:** K rate (K% → K/IP fallback) + ERA + WHIP + role bonus (SP vs RP). IL/OUT = −22, DTD = −10.
 
 **hitterScore:** wRC+ or OPS + HR volume + ISO + RBI + speed (sprint speed preferred, falls back to SB) + xwOBA/AVG + HR probability model. IL/OUT = −22, DTD = −10.
 
-**spFAScore:** pitcherScore + 15 bonus if the pitcher has a confirmed upcoming start. Requires GS ≥ 1 or SP position eligibility.
+**spFAScore:** pitcherScore + start bonus (8–22 pts) scaled by QS probability. Requires GS ≥ 1 or SP position eligibility.
+
+**QS Probability:** Formula-based estimate (no MLB API support). Inputs: IP/G, ERA, WHIP, Brl%, K%, opponent OPS. Baseline = 38% (league average). Key driver is IP/G — uses total games (not just starts) so relief appearances bleed down the innings-depth signal for mixed-role pitchers. Calibration: ace (~75%), league avg (~38%), short reliever making a spot start (~15%). Shown as a color-coded percentage in FA SP and My Upcoming Starts tables: green ≥ 60%, white ≥ 40%, muted < 40%.
 
 ---
 
@@ -326,7 +357,7 @@ Each player gets a 0–100 score used to rank FA pickups. Shown as a colored bad
 `data/snapshot.json` is rebuilt on every run. It's the only file shared between `fetch_data.py` and `send_digest.py`.
 
 **pitchers** (list of dicts, one per player per time range):
-`PlayerName, FantasyTeam, Position, Dataset` (7/15/30/2026), `IP, K, ERA, WHIP, GS, SV, HLD, SVHD, K/IP, Kpct_P, PSP_Date` (1999-01-01 = no start), `PSP_HomeVAway, PSP_Projected, Team_OPS_Value, BarrelPctAllowed, HardHitPctAllowed`
+`PlayerName, FantasyTeam, Position, Dataset` (7/15/30/2026), `IP, G, GS, K, ERA, WHIP, SV, HLD, SVHD, K/IP, Kpct_P, IP_per_G` (IP÷G, clipped 7.5 — honest for mixed starters/relievers), `IP_per_GS` (IP÷GS, clipped 7.5), `PSP_Date` (1999-01-01 = no start), `PSP_HomeVAway, PSP_Projected, Team_OPS_Value, BarrelPctAllowed, HardHitPctAllowed`
 
 **hitters** (list of dicts, one per player per time range):
 `PlayerName, FantasyTeam, Position, Dataset, HR, RBI, R, SB, AVG, OPS, wRCplus, xwOBA, xBA, xSLG, SprintSpeed, ISO, Barrel_Pct, HardHit_Pct, HR_Probability`
@@ -373,7 +404,7 @@ HITTER_NAME_PATCHES = {
 
 ```
 baseball/
-├── fetch_data.py                        # Data pipeline — runs first (~90s)
+├── fetch_data.py                        # Data pipeline — runs first (~60s)
 ├── send_digest.py                       # Email builder + sender
 ├── requirements.txt                     # pip install -r requirements.txt
 ├── .env                                 # GMAIL_APP_PASSWORD — do not commit
@@ -382,7 +413,11 @@ baseball/
 │   └── workflows/
 │       └── daily-digest.yml            # GitHub Actions schedule (7 AM EDT daily)
 ├── data/
-│   └── snapshot.json                    # ~1.5 MB — rebuilt every run, gitignored
-└── logs/
-    └── digest.log                       # Local send history, gitignored
+│   └── snapshot.json                    # ~1.7 MB — rebuilt every run, gitignored
+├── logs/
+│   └── digest.log                       # Local send history, gitignored
+└── _archive/                            # Legacy files (gitignored)
+    ├── dashboard.html                   # Old single-page dashboard app
+    ├── digest_preview.html              # Last local dry-run preview
+    └── tableau_screenshots/             # Early Tableau exploration screenshots
 ```
