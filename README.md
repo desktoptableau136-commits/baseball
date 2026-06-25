@@ -209,9 +209,10 @@ Top 12 free agent starters with a confirmed upcoming start in the next 7 days. G
 
 **Day headers** show a ⚑ badge with your start count for that day: red = 0 my starts, yellow = 1, blue = 2+.
 
-**Pickup badges** appear on thin days (< 2 my starts) only:
-- 🟢 **QS** badge (green left border) — QS% ≥ 55%; likely quality start
-- 🟡 **5K+** badge (yellow left border) — QS% < 55% but K/IP ≥ 0.90 or K% ≥ 0.24 **and** IP/G ≥ 4.5 (deep enough to actually rack up strikeouts)
+**Pickup badges** appear on thin days (< 2 my starts) only. Both can fire simultaneously:
+- 🟢 **QS** badge (green left border) — QS% ≥ 51%; likely quality start
+- 🟡 **5K+** badge (yellow left border) — K/IP ≥ 0.90 or K% ≥ 24%, **and** IP/G ≥ 4.5 (deep enough to rack up strikeouts)
+- When both fire: left border is green (top half) / yellow (bottom half)
 
 **K% highlight** — top 3 K% values across the table are highlighted yellow.
 

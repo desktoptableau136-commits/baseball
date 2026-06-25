@@ -1490,24 +1490,35 @@ def build_email(snap):
                 qsp_color = GREEN if qsp and qsp >= 60 else (TEXT if qsp and qsp >= 40 else MUTED)
                 qsp_str = f'<span style="color:{qsp_color};font-weight:700;">{qsp}%</span>' if qsp else "—"
 
-                # Pickup highlight on thin days
-                pickup_badge = ""
+                # Pickup highlight on thin days — both badges can fire simultaneously
+                qs_fires = bool(qsp and qsp >= 51)
+                k_fires  = (_n(r.get("K/IP")) >= 0.90 or _n(r.get("Kpct_P")) >= 0.24) and _n(r.get("IP_per_G")) >= 4.5
+                pickup_badges = []
                 name_border = ""
                 if thin_day:
-                    if qsp and qsp >= 55:
-                        pickup_badge = (
+                    if qs_fires:
+                        pickup_badges.append(
                             f'<span style="font-size:9px;font-weight:700;color:{GREEN};'
                             f'background:rgba(34,197,94,0.12);border:1px solid rgba(34,197,94,0.35);'
                             f'border-radius:3px;padding:1px 5px;margin-left:5px;vertical-align:middle;">QS</span>'
                         )
-                        name_border = f"border-left:3px solid {GREEN};"
-                    elif (_n(r.get("K/IP")) >= 0.90 or _n(r.get("Kpct_P")) >= 0.24) and _n(r.get("IP_per_G")) >= 4.5:
-                        pickup_badge = (
+                    if k_fires:
+                        pickup_badges.append(
                             f'<span style="font-size:9px;font-weight:700;color:{YELLOW};'
                             f'background:rgba(245,158,11,0.12);border:1px solid rgba(245,158,11,0.35);'
                             f'border-radius:3px;padding:1px 5px;margin-left:5px;vertical-align:middle;">5K+</span>'
                         )
+                    if qs_fires and k_fires:
+                        # Half green (top) / half yellow (bottom)
+                        name_border = (
+                            f"background-image:linear-gradient(to bottom,{GREEN} 50%,{YELLOW} 50%);"
+                            f"background-size:3px 100%;background-repeat:no-repeat;background-position:0 0;"
+                        )
+                    elif qs_fires:
+                        name_border = f"border-left:3px solid {GREEN};"
+                    elif k_fires:
                         name_border = f"border-left:3px solid {YELLOW};"
+                pickup_badge = "".join(pickup_badges)
 
                 _kpct_val = _n(r.get("Kpct_P"))
                 _kpct_top = _kpct_val > 0 and _kpct_val in _top3_kpct_fa
