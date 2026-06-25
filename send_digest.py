@@ -181,10 +181,12 @@ def sp_fa_score(r):
 
 # ── DATA HELPERS ───────────────────────────────────────────────────────────────
 
-def fa_starters(pitchers):
+def fa_starters(pitchers, claimed=None):
+    claimed = claimed or set()
     fa = [
         r for r in pitchers
         if r.get("FantasyTeam", "") == ""
+        and r.get("PlayerName", "") not in claimed
         and int(r.get("Dataset", 0)) == YEAR
         and r.get("PSP_Date", "") not in ("1999-01-01", "", None)
         and str(r.get("FreeAgentInjuryStatus", "")).upper() != "OUT"
@@ -194,10 +196,12 @@ def fa_starters(pitchers):
     return sorted(fa, key=lambda r: -r["_score"])[:12]
 
 
-def fa_hitters(hitters):
+def fa_hitters(hitters, claimed=None):
+    claimed = claimed or set()
     fa = [
         r for r in hitters
         if r.get("FantasyTeam", "") == ""
+        and r.get("PlayerName", "") not in claimed
         and int(r.get("Dataset", 0)) == YEAR
         and _n(r.get("OPS")) > 0
         and str(r.get("FreeAgentInjuryStatus", "")).upper() != "OUT"
@@ -1059,8 +1063,15 @@ def build_email(snap):
     rec_h = {r["PlayerName"]: r for r in recent_hitting  if r.get("PlayerName")}
     rec_p = {r["PlayerName"]: r for r in recent_pitching if r.get("PlayerName")}
 
-    fa_sp     = fa_starters(pitchers)
-    fa_hit    = fa_hitters(hitters)
+    # Players claimed today may not yet have FantasyTeam set in the ESPN roster API;
+    # use the transaction log as a second source of truth.
+    claimed = {
+        t["PlayerName"] for t in snap.get("transactions", [])
+        if t.get("TransactionType") == "FA ADDED"
+    }
+
+    fa_sp     = fa_starters(pitchers, claimed)
+    fa_hit    = fa_hitters(hitters, claimed)
     luck      = luck_standings(roto, standings)
     team_logos = {" ".join(s["team_name"].split()): s.get("logo_url", "") for s in standings}
     cats, n   = category_ranks(roto, my_team)
