@@ -140,23 +140,19 @@ def qs_probability(r):
     gs = int(_n(r.get("GS")) or 0)
     if gs < 1:
         return None
-    ip_per_gs = _n(r.get("IP_per_GS"))
-    era       = _n(r.get("ERA"))
-    whip      = _n(r.get("WHIP"))
-    brl       = _n(r.get("BarrelPctAllowed"))
-    kpct      = _n(r.get("Kpct_P"))   # 0.0–0.50 scale
-    opp       = _n(r.get("Team_OPS_Value"))
-
-    # IP_per_GS is total IP / GS and gets inflated for relievers making spot starts
-    # (e.g. 30 relief IP / 1 GS = 30 avg). Cap tighter for low-GS pitchers.
-    if gs < 5:
-        ip_per_gs = min(ip_per_gs, 5.5)
-    else:
-        ip_per_gs = min(ip_per_gs, 7.5)
+    ip_per_g = _n(r.get("IP_per_G"))   # IP / total G (honest for starters mixed with relief)
+    if ip_per_g <= 0:                   # fallback for snapshots predating this field
+        _g = max(_n(r.get("G")) or 1, 1)
+        ip_per_g = min(_n(r.get("IP", 0)) / _g, 7.5)
+    era      = _n(r.get("ERA"))
+    whip     = _n(r.get("WHIP"))
+    brl      = _n(r.get("BarrelPctAllowed"))
+    kpct     = _n(r.get("Kpct_P"))     # 0.0–0.50 scale
+    opp      = _n(r.get("Team_OPS_Value"))
 
     score = 38  # league-average baseline
-    if ip_per_gs > 0:
-        score += (ip_per_gs - 5.4) * 16   # biggest driver: avg innings per start
+    if ip_per_g > 0:
+        score += (ip_per_g - 5.4) * 16  # biggest driver: avg innings per appearance
     if era > 0:
         score += (4.2 - era) * 8
     if whip > 0:
@@ -166,11 +162,7 @@ def qs_probability(r):
     if kpct > 0:
         score += (kpct - 0.22) * 20
     if opp > 0:
-        score += (0.730 - opp) * 60       # matchup adjustment
-
-    # Spot-starter penalty: relievers making rare starts rarely go 6+ IP
-    if gs < 5:
-        score -= (5 - gs) * 2.5           # gs=1→-10, gs=2→-7.5, gs=3→-5, gs=4→-2.5
+        score += (0.730 - opp) * 60     # matchup adjustment
 
     return max(1, min(99, round(score)))
 
@@ -1249,7 +1241,7 @@ def build_email(snap):
         for r in starts:
             by_date.setdefault(r.get("PSP_Date", ""), []).append(r)
 
-        _max_kpct_starts = max((_n(r.get("Kpct_P")) for r in starts), default=0)
+        _top3_kpct_starts = set(sorted((_n(r.get("Kpct_P")) for r in starts), reverse=True)[:3])
         rows = ""
         row_idx = 0
         for date_str in sorted(by_date.keys()):
@@ -1277,7 +1269,7 @@ def build_email(snap):
                 qsp_color = GREEN if qsp and qsp >= 60 else (TEXT if qsp and qsp >= 40 else MUTED)
                 qsp_str = f'<span style="color:{qsp_color};font-weight:700;">{qsp}%</span>' if qsp else "—"
                 _kpct_s = _n(r.get("Kpct_P"))
-                _kpct_s_top = _max_kpct_starts > 0 and _kpct_s == _max_kpct_starts
+                _kpct_s_top = _kpct_s > 0 and _kpct_s in _top3_kpct_starts
                 kpct_s_cell = (
                     f'<span style="color:{YELLOW};font-weight:700;">{_kpct_s*100:.1f}%</span>'
                     if _kpct_s_top and _kpct_s > 0
@@ -1329,7 +1321,7 @@ def build_email(snap):
         for r in fa_sp:
             by_date_fa.setdefault(r.get("PSP_Date", ""), []).append(r)
 
-        _max_kpct_fa = max((_n(r.get("Kpct_P")) for r in fa_sp), default=0)
+        _top3_kpct_fa = set(sorted((_n(r.get("Kpct_P")) for r in fa_sp), reverse=True)[:3])
         rows = ""
         row_idx = 0
         for date_str in sorted(by_date_fa.keys()):
@@ -1381,7 +1373,7 @@ def build_email(snap):
                             f'border-radius:3px;padding:1px 5px;margin-left:5px;vertical-align:middle;">QS</span>'
                         )
                         name_border = f"border-left:3px solid {GREEN};"
-                    elif _n(r.get("K/IP")) >= 0.90 or _n(r.get("Kpct_P")) >= 0.24:
+                    elif (_n(r.get("K/IP")) >= 0.90 or _n(r.get("Kpct_P")) >= 0.24) and _n(r.get("IP_per_G")) >= 4.5:
                         pickup_badge = (
                             f'<span style="font-size:9px;font-weight:700;color:{YELLOW};'
                             f'background:rgba(245,158,11,0.12);border:1px solid rgba(245,158,11,0.35);'
@@ -1390,7 +1382,7 @@ def build_email(snap):
                         name_border = f"border-left:3px solid {YELLOW};"
 
                 _kpct_val = _n(r.get("Kpct_P"))
-                _kpct_top = _max_kpct_fa > 0 and _kpct_val == _max_kpct_fa
+                _kpct_top = _kpct_val > 0 and _kpct_val in _top3_kpct_fa
                 kpct_cell = (
                     f'<span style="color:{YELLOW};font-weight:700;">{_kpct_val*100:.1f}%</span>'
                     if _kpct_top and _kpct_val > 0

@@ -787,7 +787,9 @@ def build_pitcher_data(league) -> list:
         # Approx TBF ~ IP * 4.3; K% = K / TBF
         merged["Kpct_P"] = (k_num / (ip_num * 4.3 + 0.001)).clip(0, 0.50).round(4)
         gs_num = pd.to_numeric(merged.get("GS", 0), errors="coerce").fillna(0)
+        g_num  = pd.to_numeric(merged.get("G",  0), errors="coerce").fillna(0)
         merged["IP_per_GS"] = (ip_num / gs_num.clip(lower=1)).clip(upper=7.5).round(2)
+        merged["IP_per_G"]  = (ip_num / g_num.clip(lower=1)).clip(upper=7.5).round(2)
 
     num_cols = merged.select_dtypes(include="number").columns
     merged[num_cols] = merged[num_cols].fillna(-1)
