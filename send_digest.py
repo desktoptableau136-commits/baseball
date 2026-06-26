@@ -903,6 +903,110 @@ def build_hot_cold_section(hitters, recent_hitting, my_team):
     )
 
 
+def build_pitcher_hot_cold_section(pitchers, my_team):
+    my_key = " ".join(my_team.split())
+
+    # Season rows for my pitchers
+    season = {
+        r["PlayerName"]: r for r in pitchers
+        if " ".join((r.get("FantasyTeam") or "").split()) == my_key
+        and int(r.get("Dataset", 0) or 0) == YEAR
+        and _n(r.get("ERA")) > 0
+    }
+    if not season:
+        return ""
+
+    # 15-day rows as "recent" — wide enough window for infrequent starters
+    recent_15 = {
+        r["PlayerName"]: r for r in pitchers
+        if int(r.get("Dataset", 0) or 0) == 15
+    }
+
+    rows_data = []
+    for name, r in season.items():
+        season_era = _n(r.get("ERA"))
+        rec        = recent_15.get(name, {})
+        recent_era = _n(rec.get("ERA")) if rec else None
+        recent_ip  = _n(rec.get("IP"))  if rec else 0
+
+        # Require at least 3 IP in the recent window to avoid noise
+        if recent_era and recent_ip < 3:
+            recent_era = None
+
+        # delta > 0 means recent ERA is LOWER (better) → hot
+        delta = (season_era - recent_era) if recent_era and season_era else None
+        rows_data.append({
+            "name":       name,
+            "pos":        r.get("Position", ""),
+            "team":       r.get("Team", ""),
+            "season_era": season_era,
+            "recent_era": recent_era,
+            "recent_ip":  recent_ip,
+            "delta":      delta,
+            "inj":        inj_tag(r),
+        })
+
+    with_data    = sorted([r for r in rows_data if r["delta"] is not None], key=lambda x: -x["delta"])
+    without_data = [r for r in rows_data if r["delta"] is None]
+    sorted_rows  = with_data + without_data
+
+    rows_html = ""
+    for i, r in enumerate(sorted_rows):
+        bg    = f"background:{SURFACE2};" if i % 2 else ""
+        delta = r["delta"]
+
+        if delta is None:
+            delta_html = f'<span style="color:{MUTED};">—</span>'
+            arrow = ""
+        elif delta >= 1.00:
+            delta_html = f'<span style="color:{GREEN};font-weight:700;">-{delta:.2f}</span>'
+            arrow = f'<span style="color:{GREEN};">🔥</span>'
+        elif delta >= 0.40:
+            delta_html = f'<span style="color:{GREEN};">-{delta:.2f}</span>'
+            arrow = f'<span style="color:{GREEN};">↑</span>'
+        elif delta <= -1.00:
+            delta_html = f'<span style="color:{RED};font-weight:700;">+{abs(delta):.2f}</span>'
+            arrow = f'<span style="color:{RED};">❄</span>'
+        elif delta <= -0.40:
+            delta_html = f'<span style="color:{RED};">+{abs(delta):.2f}</span>'
+            arrow = f'<span style="color:{RED};">↓</span>'
+        else:
+            sign = "-" if delta >= 0 else "+"
+            delta_html = f'<span style="color:{MUTED};">{sign}{abs(delta):.2f}</span>'
+            arrow = ""
+
+        recent_str = (
+            f'{r["recent_era"]:.2f} <span style="color:{MUTED};font-size:10px;">({r["recent_ip"]:.0f} IP)</span>'
+            if r["recent_era"] else f'<span style="color:{MUTED};">—</span>'
+        )
+
+        rows_html += (
+            f'<tr style="{bg}">'
+            f'<td style="{TD_S}font-weight:600;">{team_logo(r["team"])}{r["name"]}{r["inj"]}</td>'
+            f'<td style="{TDC}color:{MUTED};">{r["pos"]}</td>'
+            f'<td style="{TDC}">{r["season_era"]:.2f}</td>'
+            f'<td style="{TDC}">{recent_str}</td>'
+            f'<td style="{TDC}">{delta_html} {arrow}</td>'
+            f'</tr>'
+        )
+
+    n_hot  = sum(1 for r in with_data if r["delta"] >= 0.40)
+    n_cold = sum(1 for r in with_data if r["delta"] <= -0.40)
+    sub    = f"{n_hot} hot · {n_cold} cold · last 15 days vs season ERA"
+
+    return (
+        section_head("Pitcher Hot/Cold", sub) +
+        f'<table style="width:100%;border-collapse:collapse;margin-bottom:24px;font-size:13px;">'
+        f'<thead><tr>'
+        f'<th style="{TH_S}">Pitcher</th>'
+        f'<th style="{TH_S}text-align:center;">Pos</th>'
+        f'<th style="{TH_S}text-align:center;">Season ERA</th>'
+        f'<th style="{TH_S}text-align:center;">Last 15 ERA</th>'
+        f'<th style="{TH_S}text-align:center;">Δ</th>'
+        f'</tr></thead><tbody>{rows_html}</tbody></table>'
+    )
+
+
 # ── CATEGORY PULSE ───────────────────────────────────────────────────────────
 
 _RATE_CATS    = {"OPS", "ERA", "WHIP", "B_SO"}   # use weighted-avg projection
@@ -1912,6 +2016,7 @@ def build_email(snap):
         fa_rp_section,
         starts_section,
         my_rp_section,
+        build_pitcher_hot_cold_section(pitchers, my_team),
         build_hot_cold_section(hitters, recent_hitting, my_team),
         pos_section,
         alert_section,

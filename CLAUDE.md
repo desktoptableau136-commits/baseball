@@ -93,8 +93,9 @@ Numeric missing values are stored as `-1` (not `NaN`) after the merge pipelines 
 6. FA Pickup — Relief Pitchers
 7. My Upcoming Starts
 8. My Relief Pitchers
-9. Roster Hot/Cold
-10. Positional Breakdown
+9. Pitcher Hot/Cold (15-day vs season ERA)
+10. Roster Hot/Cold (hitters, 7-day vs season OPS)
+11. Positional Breakdown
 11. Roster Alerts
 12. FA Pickup — Hitters
 13. League Luck Standings
