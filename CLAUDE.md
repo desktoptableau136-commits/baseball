@@ -64,6 +64,18 @@ Two files; one intermediate artifact:
 
 **B_SO is lower-is-better:** `B_SO` (batter strikeouts) is in `_LOWER_BETTER` alongside ERA and WHIP. This affects the Category Pulse bar direction and projection flip logic — having fewer B_SO than the opponent is a win.
 
+**Category Pulse card design:**
+- Tied categories use `TEXT` (#e2e8f0, white) for border/value/status — not `YELLOW`. Win = green, loss = red, tie = white.
+- ⚡ (close) and flip indicators (▲▼◆) live in an `position:absolute` top-right corner badge, not inline with the status or projection text. The card div is `position:relative`.
+- Flip uses `round(pm, dec)` / `round(po, dec)` (display precision) for outcome comparison — raw floats cause false flips when both round to the same displayed value.
+- Flip arrow: ▲ green = projecting to flip to a win; ▼ red = projecting to flip to a loss; ◆ white = projecting to flip to a tie.
+- Summary line shows W · L · T (T only appended when at least one category is tied).
+- Card value (`my score` / `vs opp`) is stacked on two lines (score block + "vs X" below) so decimal-heavy stats (OPS/ERA/WHIP) don't cause width or height inconsistency across the row.
+
+**My Season Category Rankings** (section 14) subtitle shows a pseudo-single-week roto score: `sum(n - rank + 1 for rank in cats.values())` — same scale as a weekly roto score, max = n × 12. Directly comparable to the "This Week's Category Rankings" subtitle score.
+
+**My Upcoming Starts subheader** format: `X starts across Y days | N this wk[, N next wk]`. The "this wk" count is red when 0. The ", N next wk" segment is omitted entirely when next-week count is 0.
+
 **Probable starters:** The primary method uses two MLB API calls (range schedule → batch hydrate). The +6-day rotation projection fills unannounced slots. A live-feed fallback exists if the batch returns nothing.
 
 **Pitcher hot/cold uses 15-day ERA:** `build_pitcher_hot_cold_section`, My Upcoming Starts, and FA Starting Pitchers all compare season ERA vs 15-day ERA (from `p15` index — Dataset==15 rows). The 7-day window is too short for SPs who start infrequently. The `p15` index is built alongside `rec_p` in the main build function. Column header is "L15 ERA".
@@ -110,7 +122,7 @@ Grouped into four bands: Triage → Week Intelligence → My Team → Action →
 11. FA Pickup — Starting Pitchers
 12. FA Pickup — Relief Pitchers
 13. FA Pickup — Hitters
-14. Category Rankings (season)
+14. My Season Category Rankings
 15. League Luck Standings
 
 ## Color palette

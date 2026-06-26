@@ -804,7 +804,7 @@ def build_matchup_section(matchup, logos=None):
         f'<td style="width:42%;padding:12px 16px;font-size:13px;font-weight:800;color:{ACCENT};text-align:center;">'
         f'{my_logo_html}{MY_TEAM} &#8592;</td>'
         f'<td style="width:16%;text-align:center;padding:12px 8px;">'
-        f'<div style="font-size:24px;font-weight:900;color:{score_color};">{score_str}</div>'
+        f'<div style="font-size:18px;font-weight:900;color:{score_color};">{score_str}</div>'
         f'<div style="font-size:10px;color:{MUTED};text-transform:uppercase;letter-spacing:.5px;">{status}</div>'
         f'</td>'
         f'<td style="width:42%;padding:12px 16px;font-size:13px;font-weight:700;color:{TEXT};text-align:center;">'
@@ -1138,11 +1138,10 @@ def build_category_pulse(matchup, weekly_avgs=None, days_elapsed=None):
         elif res == "L":
             border_c, val_c, status, status_c = RED,    RED,    "LOSING",  RED
         else:
-            border_c, val_c, status, status_c = YELLOW, YELLOW, "TIED",    YELLOW
+            border_c, val_c, status, status_c = TEXT,   TEXT,   "TIED",    TEXT
 
         margin = abs(my_v - opp_v)
-        if res in ("W", "L") and margin <= _CLOSE_THRESH.get(cat, 999):
-            status += " ⚡"
+        is_close = res in ("W", "L") and margin <= _CLOSE_THRESH.get(cat, 999)
 
         # Bar: % filled = my share of the total; invert for lower-is-better
         total = my_v + opp_v
@@ -1159,40 +1158,56 @@ def build_category_pulse(matchup, weekly_avgs=None, days_elapsed=None):
         )
 
         # Projection footer
+        flip = False
+        proj_res = None
         proj_html = ""
         if has_proj and cat in my_avgs and cat in opp_avgs:
             pm = _project(my_v,  my_avgs[cat],  elapsed_frac, cat)
             po = _project(opp_v, opp_avgs[cat], elapsed_frac, cat)
             lower = cat in _LOWER_BETTER
-            proj_win = (pm < po) if lower else (pm > po)
-            proj_res = "W" if proj_win else ("L" if pm != po else "T")
+            pm_r = round(pm, dec)
+            po_r = round(po, dec)
+            if lower:
+                proj_res = "W" if pm_r < po_r else ("T" if pm_r == po_r else "L")
+            else:
+                proj_res = "W" if pm_r > po_r else ("T" if pm_r == po_r else "L")
 
             flip = proj_res != res
-            if flip:
-                flip_html = (
-                    f'&nbsp;<span style="color:{GREEN};font-size:9px;">▲FLIP</span>'
-                    if proj_res == "W" else
-                    f'&nbsp;<span style="color:{RED};font-size:9px;">▼FLIP</span>'
-                )
-            else:
-                flip_html = ""
-
             proj_html = (
                 f'<div style="margin-top:4px;color:{MUTED};font-size:9px;">'
                 f'proj&nbsp;<span style="color:{TEXT};">{pm:.{dec}f}</span>'
                 f'&nbsp;vs&nbsp;{po:.{dec}f}'
-                f'{flip_html}</div>'
+                f'</div>'
             )
+
+        # Top-right corner badge: ⚡ (close) and/or ▲▼ (flip)
+        corner_parts = []
+        if is_close:
+            close_c = GREEN if res == "W" else RED
+            corner_parts.append(f'<span style="color:{close_c};">⚡</span>')
+        if flip:
+            if proj_res == "W":
+                flip_c, flip_arrow = GREEN, "▲"
+            elif proj_res == "L":
+                flip_c, flip_arrow = RED, "▼"
+            else:
+                flip_c, flip_arrow = TEXT, "◆"
+            corner_parts.append(f'<span style="color:{flip_c};font-size:10px;">{flip_arrow}</span>')
+        corner_html = (
+            f'<div style="position:absolute;top:5px;right:6px;line-height:1;'
+            f'display:flex;gap:2px;align-items:center;">{"".join(corner_parts)}</div>'
+        ) if corner_parts else ""
 
         return (
             f'<td style="padding:4px;width:16.66%;">'
-            f'<div style="background:{SURFACE};border:1px solid {border_c}33;'
-            f'border-top:2px solid {border_c};border-radius:6px;padding:9px 11px;">'
+            f'<div style="position:relative;background:{SURFACE};border:1px solid {border_c}33;'
+            f'border-top:2px solid {border_c};border-radius:6px;padding:9px 11px;height:100%;box-sizing:border-box;">'
+            f'{corner_html}'
             f'<div style="color:{MUTED};font-size:9px;font-weight:700;'
             f'text-transform:uppercase;letter-spacing:.7px;">{label}</div>'
             f'<div style="margin-top:5px;">'
-            f'<span style="color:{val_c};font-size:19px;font-weight:900;">{my_v:.{dec}f}</span>'
-            f'<span style="color:{MUTED};font-size:11px;margin-left:5px;">vs {opp_v:.{dec}f}</span>'
+            f'<div style="color:{val_c};font-size:19px;font-weight:900;line-height:1.1;">{my_v:.{dec}f}</div>'
+            f'<div style="color:{MUTED};font-size:11px;">vs {opp_v:.{dec}f}</div>'
             f'</div>'
             f'{bar}'
             f'<div style="color:{status_c};font-size:9px;font-weight:700;">{status}</div>'
@@ -1227,6 +1242,7 @@ def build_category_pulse(matchup, weekly_avgs=None, days_elapsed=None):
 
     wins_count   = sum(1 for c in matchup["categories"] if c["result"] == "W")
     losses_count = sum(1 for c in matchup["categories"] if c["result"] == "L")
+    ties_count   = sum(1 for c in matchup["categories"] if c["result"] == "T")
     close_count  = sum(
         1 for c in matchup["categories"]
         if c["result"] in ("W", "L") and abs(c["my_val"] - c["opp_val"]) <= _CLOSE_THRESH.get(c["cat"], 999)
@@ -1236,6 +1252,11 @@ def build_category_pulse(matchup, weekly_avgs=None, days_elapsed=None):
         f'<span style="color:{MUTED};margin:0 4px;">·</span>'
         f'<span style="color:{RED};font-weight:700;">{losses_count}L</span>'
     )
+    if ties_count:
+        summary += (
+            f'<span style="color:{MUTED};margin:0 4px;">·</span>'
+            f'<span style="color:{TEXT};font-weight:700;">{ties_count}T</span>'
+        )
     if close_count:
         summary += (
             f'<span style="color:{MUTED};margin:0 4px;">·</span>'
@@ -1437,6 +1458,7 @@ def build_email(snap):
         for r in week_roto
         if " ".join((r.get("Team") or "").split()) == " ".join(my_team.split())
     )
+    my_season_pseudo_roto = sum(n - rank + 1 for rank in cats.values() if rank is not None)
     alerts    = roster_alerts(pitchers, hitters, my_team)
     starts    = my_upcoming_starts(pitchers, my_team)
     pos_data  = positional_breakdown(pitchers, hitters, my_team)
@@ -1561,11 +1583,16 @@ def build_email(snap):
         return (f'<svg width="7" height="7" style="vertical-align:middle;" xmlns="http://www.w3.org/2000/svg">'
                 f'<circle cx="3.5" cy="3.5" r="{r}" fill="{fill}"{sf}/></svg>')
 
+    _no1_weeks = sorted(wk for wk, res in roto_week_results.items() if res.get(my_key) == 'W')
+    _no1_wk_str = (
+        f'<span style="color:{YELLOW};">: {", ".join(str(w) for w in _no1_weeks)}</span>'
+        if _no1_weeks else ''
+    )
     spark_footer = (
         f'<div style="font-size:9px;color:{MUTED};margin-top:2px;white-space:nowrap;">'
         f'{_dot(3.5, GREEN)}&thinsp;{peak_label.replace("<div","<span").replace("</div>","</span>")}'
         f'&ensp;|&ensp;'
-        f'<span style="color:{YELLOW};">&#9733;</span>&thinsp;#1 roto wk'
+        f'<span style="color:{YELLOW};">&#9733;</span>&thinsp;#1 roto wk{_no1_wk_str}'
         f'</div>'
     )
 
@@ -1665,8 +1692,17 @@ def build_email(snap):
                     f'</tr>'
                 )
 
+        _this_wk_n = sum(1 for s in starts if s.get("PSP_Date", "") <= week_end_str)
+        _next_wk_n = len(starts) - _this_wk_n
+        _this_wk_html = (
+            f'<span style="color:{RED};">{_this_wk_n} this wk</span>'
+            if _this_wk_n == 0 else
+            f'{_this_wk_n} this wk'
+        )
+        _next_wk_html = f', {_next_wk_n} next wk' if _next_wk_n > 0 else ''
+        _starts_sub = f'{len(starts)} starts across {len(by_date)} days | {_this_wk_html}{_next_wk_html}'
         starts_section = (
-            section_head("My Upcoming Starts", f"{len(starts)} starts across {len(by_date)} days") +
+            section_head("My Upcoming Starts", _starts_sub) +
             f'<div style="overflow-x:auto;-webkit-overflow-scrolling:touch;margin-bottom:24px;">'
             f'<table style="width:100%;border-collapse:collapse;font-size:13px;">'
             f'<thead><tr>'
@@ -2003,7 +2039,7 @@ def build_email(snap):
             f'</td>'
         )
     cat_section = (
-        section_head("My Category Rankings", "Season-to-date roto points rank per category") +
+        section_head("My Season Category Rankings", f"Season-to-date · {my_season_pseudo_roto} roto pts · roto points rank per category") +
         f'<table style="width:100%;border-collapse:collapse;background:{SURFACE};border-radius:6px;margin-bottom:24px;overflow:hidden;">'
         f'<tr>{cat_cells}</tr></table>'
     )
