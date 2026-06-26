@@ -1312,6 +1312,7 @@ def build_email(snap):
     weekly_results  = snap.get("weekly_results",  {})
     rec_h = {r["PlayerName"]: r for r in recent_hitting  if r.get("PlayerName")}
     rec_p = {r["PlayerName"]: r for r in recent_pitching if r.get("PlayerName")}
+    p15   = {r["PlayerName"]: r for r in pitchers if int(r.get("Dataset", 0) or 0) == 15 and r.get("PlayerName")}
 
     # Players claimed today may not yet have FantasyTeam set in the ESPN roster API.
     # Use today's transactions as a second source of truth, but be precise:
@@ -1537,8 +1538,9 @@ def build_email(snap):
             for r in day_pitchers:
                 bg = f"background:{SURFACE2};" if row_idx % 2 else ""
                 row_idx += 1
-                ha = r.get("PSP_HomeVAway", "")
-                rp = rec_p.get(r.get("PlayerName", ""), {})
+                ha   = r.get("PSP_HomeVAway", "")
+                name = r.get("PlayerName", "")
+                p15r = p15.get(name, {})
                 qsp = qs_probability(r)
                 qsp_color = GREEN if qsp and qsp >= 60 else (TEXT if qsp and qsp >= 40 else MUTED)
                 qsp_str = f'<span style="color:{qsp_color};font-weight:700;">{qsp}%</span>' if qsp else "—"
@@ -1551,13 +1553,13 @@ def build_email(snap):
                 )
                 rows += (
                     f'<tr style="{bg}">'
-                    f'<td style="{TD_S}font-weight:600;">{team_logo(r.get("Team"))}{r.get("PlayerName","")}{inj_tag(r)}</td>'
+                    f'<td style="{TD_S}font-weight:600;">{team_logo(r.get("Team"))}{name}{inj_tag(r)}</td>'
                     f'<td style="{TDC}">{opp_logo(ha)}{ha}'
                     f'{"&nbsp;<span style=\"color:#888;font-size:11px\">(proj.)</span>" if r.get("PSP_Projected") else ""}</td>'
                     f'<td style="{TDC}">{v(r.get("Team_OPS_Value"), 3)}</td>'
                     f'<td style="{TDC}">{qsp_str}</td>'
                     f'<td style="{TDC}">{v(r.get("ERA"), 2)}</td>'
-                    + hot_cold_cell(r.get("ERA"), rp.get("ERA"), lower_better=True, dec=2) +
+                    + hot_cold_cell(r.get("ERA"), p15r.get("ERA"), lower_better=True, dec=2) +
                     f'<td style="{TDC}">{kpct_s_cell}</td>'
                     f'<td style="{TDC}">{badge(pitcher_score(r))}</td>'
                     f'</tr>'
@@ -1572,7 +1574,7 @@ def build_email(snap):
             f'<th style="{TH_S}text-align:center;">Opp OPS</th>'
             f'<th style="{TH_S}text-align:center;">QS%</th>'
             f'<th style="{TH_S}text-align:center;">ERA</th>'
-            f'<th style="{TH_S}text-align:center;">L7 ERA</th>'
+            f'<th style="{TH_S}text-align:center;">L15 ERA</th>'
             f'<th style="{TH_S}text-align:center;">K%</th>'
             f'<th style="{TH_S}text-align:center;">Score</th>'
             f'</tr></thead><tbody>{rows}</tbody></table>'
@@ -1685,7 +1687,7 @@ def build_email(snap):
                 bg = f"background:{SURFACE2};" if row_idx % 2 else ""
                 row_idx += 1
                 ha = r.get("PSP_HomeVAway", "")
-                rp = rec_p.get(r.get("PlayerName", ""), {})
+                p15r = p15.get(r.get("PlayerName", ""), {})
                 qsp = qs_probability(r)
                 qsp_color = GREEN if qsp and qsp >= 60 else (TEXT if qsp and qsp >= 40 else MUTED)
                 qsp_str = f'<span style="color:{qsp_color};font-weight:700;">{qsp}%</span>' if qsp else "—"
@@ -1736,7 +1738,7 @@ def build_email(snap):
                     f'<td style="{TDC}">{v(r.get("Team_OPS_Value"), 3)}</td>'
                     f'<td style="{TDC}">{qsp_str}</td>'
                     f'<td style="{TDC}">{v(r.get("ERA"), 2)}</td>'
-                    + hot_cold_cell(r.get("ERA"), rp.get("ERA"), lower_better=True, dec=2) +
+                    + hot_cold_cell(r.get("ERA"), p15r.get("ERA"), lower_better=True, dec=2) +
                     f'<td style="{TDC}">{kpct_cell}</td>'
                     f'<td style="{TDC}">{badge(r["_score"])}</td>'
                     f'</tr>'
@@ -1750,7 +1752,7 @@ def build_email(snap):
             f'<th style="{TH_S}text-align:center;">Opp OPS</th>'
             f'<th style="{TH_S}text-align:center;">QS%</th>'
             f'<th style="{TH_S}text-align:center;">ERA</th>'
-            f'<th style="{TH_S}text-align:center;">L7 ERA</th>'
+            f'<th style="{TH_S}text-align:center;">L15 ERA</th>'
             f'<th style="{TH_S}text-align:center;">K%</th>'
             f'<th style="{TH_S}text-align:center;">Score</th>'
             f'</tr></thead><tbody>{rows}</tbody></table>'
