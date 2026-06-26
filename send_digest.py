@@ -1477,13 +1477,21 @@ def build_email(snap):
         starts_section = ""
 
     # ── My RP ─────────────────────────────────────────────────────────────────
-    my_rp = sorted(
-        [r for r in pitchers
-         if " ".join((r.get("FantasyTeam") or "").split()) == " ".join(my_team.split())
-         and int(r.get("Dataset", 0) or 0) == YEAR
-         and "RP" in str(r.get("Position", ""))],
-        key=lambda r: -rp_score(r),
-    )
+    # Use best available dataset per player (YEAR preferred; fall back for
+    # recently called-up RPs who aren't in FantasyPros' season top-300).
+    _rp_candidates = [
+        r for r in pitchers
+        if " ".join((r.get("FantasyTeam") or "").split()) == " ".join(my_team.split())
+        and "RP" in str(r.get("Position", ""))
+    ]
+    _rp_best = {}
+    _dataset_rank = {YEAR: 4, 30: 3, 15: 2, 7: 1}
+    for r in _rp_candidates:
+        name = r.get("PlayerName", "")
+        ds   = int(r.get("Dataset", 0) or 0)
+        if _dataset_rank.get(ds, 0) > _dataset_rank.get(int((_rp_best.get(name) or {}).get("Dataset", 0) or 0), 0):
+            _rp_best[name] = r
+    my_rp = sorted(_rp_best.values(), key=lambda r: -rp_score(r))
     for r in my_rp:
         r["_rp_score"] = rp_score(r)
 

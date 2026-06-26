@@ -68,7 +68,7 @@ Two files; one intermediate artifact:
 ## Scoring functions (send_digest.py)
 
 - `pitcher_score(r)` → 0–100. Role-aware: detects SP vs RP from `Position` field or `GS > 3`. **SP path**: role bonus 9–12 based on GS volume; SVHD ignored. **RP path**: role bonus 5–12 scaled by SVHD; QS/GS ignored. K component uses WhiffPct if available, else Kpct_P, else K/IP. ERA component prefers xFIP over ERA.
-- `rp_score(r)` → composite for RP ranking. Weights: SVHD (40pts), K (25pts), W (15pts), ERA (12pts), WHIP (8pts). Used by both FA RP and My Relief Pitchers sections.
+- `rp_score(r)` → composite for RP ranking. Weights: SVHD (40pts), K (25pts), W (15pts), ERA (12pts), WHIP (8pts). Used by both FA RP and My Relief Pitchers sections. My Relief Pitchers picks the best available dataset per player (YEAR → 30 → 15 → 7) so recently called-up RPs outside FantasyPros' season top-300 still appear.
 - `hitter_score(r)` → 0–100. Prefers wRC+ over OPS. Uses xwOBA, sprint speed, Barrel%, ISO, HR_Probability.
 - `sp_fa_score(r)` → pitcher_score + start bonus (scaled 8–22 by QS probability). Only applies to pitchers with GS ≥ 1 or "SP" in Position.
 - `qs_probability(r)` → 1–99. Calibrated to league-average ~38%, ace ~75%. Uses IP/G (not IP/GS).
