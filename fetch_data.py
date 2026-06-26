@@ -172,6 +172,37 @@ def get_pitcher_roster(league) -> pd.DataFrame:
     return apply_name_patches(df, PITCHER_NAME_PATCHES)
 
 
+def get_pitcher_espn_svhd(league) -> pd.DataFrame:
+    """Pull season SV, HLD, SVHD from ESPN player stats (scoring period 0 = season total).
+    Covers both rostered and FA pitchers."""
+    rows = []
+    seen = set()
+
+    def _extract(pl):
+        if pl.name in seen:
+            return
+        bd = (pl.stats or {}).get(0, {}).get('breakdown', {})
+        rows.append({
+            "PlayerName": pl.name,
+            "ESPN_SV":    bd.get('SV',   0) or 0,
+            "ESPN_HLD":   bd.get('HLD',  0) or 0,
+            "ESPN_SVHD":  bd.get('SVHD', 0) or 0,
+        })
+        seen.add(pl.name)
+
+    for tm in league.teams:
+        for pl in tm.roster:
+            if is_pitcher(pl):
+                _extract(pl)
+    for fa in league.free_agents():
+        if is_pitcher(fa):
+            _extract(fa)
+
+    df = pd.DataFrame(rows).drop_duplicates(subset="PlayerName")
+    log(f"  ESPN season SVHD: {len(df)} pitchers")
+    return apply_name_patches(df, PITCHER_NAME_PATCHES)
+
+
 def get_hitter_roster(league) -> pd.DataFrame:
     rows = []
     for tm in league.teams:
@@ -496,6 +527,30 @@ def get_opponent_ops() -> pd.DataFrame:
 
 # â”€â”€ FANGRAPHS ADVANCED STATS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
+def get_fg_pitcher_holds(year: int) -> pd.DataFrame:
+    """Season SV and HLD from FanGraphs via pybaseball — FantasyPros HLD column is unreliable.
+    Uses pitching_stats_range (works) rather than pitching_stats (403 on legacy endpoint)."""
+    try:
+        from pybaseball import pitching_stats_range
+        start_dt = f"{year}-03-20"
+        end_dt   = datetime.now().strftime("%Y-%m-%d")
+        df = pitching_stats_range(start_dt, end_dt)
+        if df is None or df.empty:
+            return pd.DataFrame()
+        name_col = next((c for c in df.columns if c.lower() in ("name", "playername")), None)
+        if not name_col:
+            return pd.DataFrame()
+        df = df.rename(columns={name_col: "PlayerName"})
+        df["PlayerName"] = df["PlayerName"].str.strip()
+        keep = [c for c in ["PlayerName", "SV", "HLD"] if c in df.columns]
+        result = df[keep].dropna(subset=["PlayerName"]).copy()
+        log(f"  FanGraphs pitcher holds (season): {len(result)} rows, HLD={'HLD' in result.columns}")
+        return result
+    except Exception as e:
+        log(f"  FanGraphs pitcher holds FAILED: {e}")
+        return pd.DataFrame()
+
+
 def get_savant_pitcher_contact(year: int) -> pd.DataFrame:
     """Barrel% allowed and hard-hit% allowed from Baseball Savant (via pybaseball)."""
     try:
@@ -732,9 +787,10 @@ def build_pitcher_data(league) -> list:
     fp["HLD"]  = pd.to_numeric(fp["HLD"], errors="coerce").fillna(0)
     fp["SVHD"] = fp["SV"] + fp["HLD"]
 
-    log("Getting pitcher roster from ESPNâ€¦")
-    roster_df = get_pitcher_roster(league)
-    fa_df     = get_pitcher_fa(league)
+    log("Getting pitcher roster from ESPN…")
+    roster_df   = get_pitcher_roster(league)
+    fa_df       = get_pitcher_fa(league)
+    espn_svhd   = get_pitcher_espn_svhd(league)
 
     # Merge roster (brings FantasyTeam + Position), then FA status separately
     # FA_Position avoids Position_x / Position_y collision
@@ -790,6 +846,16 @@ def build_pitcher_data(league) -> list:
         g_num  = pd.to_numeric(merged.get("G",  0), errors="coerce").fillna(0)
         merged["IP_per_GS"] = (ip_num / gs_num.clip(lower=1)).clip(upper=7.5).round(2)
         merged["IP_per_G"]  = (ip_num / g_num.clip(lower=1)).clip(upper=7.5).round(2)
+
+    # Override season SVHD with ESPN's own totals — more reliable than FantasyPros HLD
+    if not espn_svhd.empty:
+        merged = merged.merge(espn_svhd, on="PlayerName", how="left")
+        yr_mask = pd.to_numeric(merged["Dataset"], errors="coerce") == CURRENT_YEAR
+        for col, espn_col in [("SV", "ESPN_SV"), ("HLD", "ESPN_HLD"), ("SVHD", "ESPN_SVHD")]:
+            if espn_col in merged.columns:
+                override = pd.to_numeric(merged.loc[yr_mask, espn_col], errors="coerce")
+                merged.loc[yr_mask, col] = override.where(override >= 0, merged.loc[yr_mask, col])
+        merged.drop(columns=["ESPN_SV", "ESPN_HLD", "ESPN_SVHD"], inplace=True, errors="ignore")
 
     num_cols = merged.select_dtypes(include="number").columns
     merged[num_cols] = merged[num_cols].fillna(-1)

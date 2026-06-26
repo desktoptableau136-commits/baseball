@@ -40,7 +40,7 @@ Two files; one intermediate artifact:
 3. MLB Stats API — probable starters (batch hydrate method) + opponent OPS
 4. pybaseball — Statcast contact quality, expected stats, sprint speed, recent game logs
 
-**`send_digest.py`** reads the snapshot, computes all derived metrics, and builds a single self-contained HTML email sent via Gmail SMTP (`smtplib`). The email has two parts: inline HTML body (may be clipped by Gmail at 102 KB) and an attached `digest_YYYY-MM-DD.html` for full render. All new features go here. The dashboard.html is legacy.
+**`send_digest.py`** reads the snapshot, computes all derived metrics, and builds a single self-contained HTML email sent via Gmail SMTP (`smtplib`). The email has two parts: inline HTML body (may be clipped by Gmail at 102 KB) and an attached `digest_YYYY-MM-DD.html` for full render. All new features go here.
 
 **`data/snapshot.json`** is the schema contract between the two files. It is ~1.2MB and not committed.
 
@@ -48,7 +48,10 @@ Two files; one intermediate artifact:
 
 **Data sources:**
 - FanGraphs returns 403 — never use it directly. pybaseball functions work because they handle headers.
+- `pitching_stats()` (FanGraphs leaderboard) returns 403. Use `pitching_stats_range()` instead, which scrapes Baseball Reference — but it has no `HLD` column.
+- SVHD (saves+holds) is pulled from ESPN player stats via `get_pitcher_espn_svhd()` in fetch_data.py, which reads `pl.stats[0]['breakdown']` using ESPN stat IDs (SV=57, HLD=60, SVHD=83). This overwrites FantasyPros SVHD for the season dataset because FantasyPros does not reliably include holds.
 - xFIP and WhiffPct are not available from FantasyPros pitcher tables. Use `BarrelPctAllowed` and `Kpct_P` (derived K%) instead.
+- ESPN injury statuses are `TEN_DAY_DL`, `FIFTEEN_DAY_DL`, `SIXTY_DAY_DL` — not `IL` or `OUT`. The constant `_DL_STATUSES` in send_digest.py covers all of these. FA views and positional breakdown exclude all DL-status players.
 
 **Team name double-space:** `MY_TEAM_NAME = "Guerrero  Warfare"` in fetch_data.py has a double space to match ESPN exactly. `MY_TEAM = "Guerrero Warfare"` in send_digest.py uses a single space for display. Never normalize these to match each other.
 
@@ -56,13 +59,16 @@ Two files; one intermediate artifact:
 
 **PSP sentinel:** `PSP_Date = "1999-01-01"` means no upcoming start. `PSP_Projected = True` means the start was projected via the +6-day rotation rule, not confirmed by the MLB API.
 
-**FA exclusion logic:** Players claimed today are identified by reading today's `transactions` list from the snapshot. The *most recent* transaction per player wins — so add-then-drop-same-day is handled correctly (dropped players re-appear as FA).
+**FA exclusion logic:** Players claimed today are identified by reading today's `transactions` list from the snapshot. The *most recent* transaction per player wins — so add-then-drop-same-day is handled correctly (dropped players re-appear as FA). FA views and positional breakdown replacement options exclude all `_DL_STATUSES` players.
+
+**B_SO is lower-is-better:** `B_SO` (batter strikeouts) is in `_LOWER_BETTER` alongside ERA and WHIP. This affects the Category Pulse bar direction and projection flip logic — having fewer B_SO than the opponent is a win.
 
 **Probable starters:** The primary method uses two MLB API calls (range schedule → batch hydrate). The +6-day rotation projection fills unannounced slots. A live-feed fallback exists if the batch returns nothing.
 
 ## Scoring functions (send_digest.py)
 
-- `pitcher_score(r)` → 0–100. K component uses WhiffPct if available, else Kpct_P, else K/IP. ERA component prefers xFIP over ERA.
+- `pitcher_score(r)` → 0–100. Role-aware: detects SP vs RP from `Position` field or `GS > 3`. **SP path**: role bonus 9–12 based on GS volume; SVHD ignored. **RP path**: role bonus 5–12 scaled by SVHD; QS/GS ignored. K component uses WhiffPct if available, else Kpct_P, else K/IP. ERA component prefers xFIP over ERA.
+- `rp_score(r)` → composite for FA RP ranking. Weights: SVHD (40pts), K (25pts), W (15pts), ERA (12pts), WHIP (8pts).
 - `hitter_score(r)` → 0–100. Prefers wRC+ over OPS. Uses xwOBA, sprint speed, Barrel%, ISO, HR_Probability.
 - `sp_fa_score(r)` → pitcher_score + start bonus (scaled 8–22 by QS probability). Only applies to pitchers with GS ≥ 1 or "SP" in Position.
 - `qs_probability(r)` → 1–99. Calibrated to league-average ~38%, ace ~75%. Uses IP/G (not IP/GS).

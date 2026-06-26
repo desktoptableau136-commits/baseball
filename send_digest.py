@@ -40,6 +40,9 @@ LOG_DIR    = Path(__file__).parent / "logs"
 
 # ── SCORING ────────────────────────────────────────────────────────────────────
 
+_DL_STATUSES = {"TEN_DAY_DL", "FIFTEEN_DAY_DL", "SIXTY_DAY_DL", "IL", "OUT"}
+
+
 def _n(val):
     """Coerce to float, return 0 for falsy/negative sentinel values."""
     try:
@@ -59,6 +62,8 @@ def pitcher_score(r):
     whiff = _n(r.get("WhiffPct"))   # stored as decimal: 0.28 = 28%
     kpct  = _n(r.get("Kpct_P"))
     inj   = str(r.get("FreeAgentInjuryStatus") or "").upper()
+    pos   = str(r.get("Position") or "")
+    is_sp = gs > 3 or "SP" in pos
 
     if not kip and not era and not kpct:
         return 0
@@ -74,15 +79,19 @@ def pitcher_score(r):
     era_base = xfip if xfip > 0 else era
     s += max(0, min(28, (6.0 - era_base) / 4.0 * 28))
     s += max(0, min(20, (2.0 - whip) / 1.1 * 20))
-    s += 12 if gs > 10 else (9 if gs > 3 else (8 if svhd > 3 else 5))
+
+    if is_sp:
+        # SP role: reward starts volume; SVHD is irrelevant
+        s += 12 if gs > 10 else 9
+    else:
+        # RP role: reward saves+holds opportunity; QS/GS are irrelevant
+        s += 5 + min(7, svhd / 15 * 7)
 
     if xfip > 0:
         s += 5 if xfip < 3.2 else (2 if xfip < 3.8 else 0)
 
-    if inj in ("IL", "OUT"):
+    if inj in _DL_STATUSES:
         s -= 22
-    elif inj == "DTD":
-        s -= 10
 
     return max(0, min(100, round(s)))
 
@@ -127,10 +136,8 @@ def hitter_score(r):
 
     s += min(8, hrp * 40)
 
-    if inj in ("IL", "OUT"):
+    if inj in _DL_STATUSES:
         s -= 22
-    elif inj == "DTD":
-        s -= 10
 
     return max(0, min(100, round(s)))
 
@@ -189,11 +196,40 @@ def fa_starters(pitchers, claimed=None):
         and r.get("PlayerName", "") not in claimed
         and int(r.get("Dataset", 0)) == YEAR
         and r.get("PSP_Date", "") not in ("1999-01-01", "", None)
-        and str(r.get("FreeAgentInjuryStatus", "")).upper() != "OUT"
+        and str(r.get("FreeAgentInjuryStatus", "")) not in _DL_STATUSES
     ]
     for r in fa:
         r["_score"] = sp_fa_score(r)
     return sorted(fa, key=lambda r: -r["_score"])[:12]
+
+
+def rp_score(r):
+    svhd = _n(r.get("SVHD"))
+    k    = _n(r.get("K"))
+    w    = _n(r.get("W"))
+    era  = _n(r.get("ERA")) or 5.0
+    whip = _n(r.get("WHIP")) or 1.5
+    s  = min(40, svhd / 20 * 40)
+    s += min(25, k    / 80 * 25)
+    s += min(15, w    / 10 * 15)
+    s += max(0, min(12, (5.0 - era)  / 3.0 * 12))
+    s += max(0, min(8,  (2.0 - whip) / 1.0 * 8))
+    return round(s, 1)
+
+
+def fa_relievers(pitchers, claimed=None):
+    claimed = claimed or set()
+    fa = [
+        r for r in pitchers
+        if r.get("FantasyTeam", "") == ""
+        and r.get("PlayerName", "") not in claimed
+        and int(r.get("Dataset", 0)) == YEAR
+        and "RP" in str(r.get("Position", ""))
+        and str(r.get("FreeAgentInjuryStatus", "")) not in _DL_STATUSES
+    ]
+    for r in fa:
+        r["_rp_score"] = rp_score(r)
+    return sorted(fa, key=lambda r: -r["_rp_score"])[:3]
 
 
 def fa_hitters(hitters, claimed=None):
@@ -204,7 +240,7 @@ def fa_hitters(hitters, claimed=None):
         and r.get("PlayerName", "") not in claimed
         and int(r.get("Dataset", 0)) == YEAR
         and _n(r.get("OPS")) > 0
-        and str(r.get("FreeAgentInjuryStatus", "")).upper() != "OUT"
+        and str(r.get("FreeAgentInjuryStatus", "")) not in _DL_STATUSES
     ]
     for r in fa:
         r["_score"] = hitter_score(r)
@@ -299,9 +335,10 @@ def positional_breakdown(pitchers, hitters, my_team):
         n = len(team_avgs)
         rank = n - sum(1 for s in team_avgs if s <= my_avg) + 1 if n else None
 
-        # Best FA at this position
+        # Best FA at this position (exclude DL players)
         fa = sorted(
-            [r for r in season if r.get("FantasyTeam", "") == "" and pos_match(r)],
+            [r for r in season if r.get("FantasyTeam", "") == "" and pos_match(r)
+             and str(r.get("FreeAgentInjuryStatus", "")) not in _DL_STATUSES],
             key=lambda r: -score_fn(r),
         )
         for r in fa:
@@ -487,7 +524,7 @@ def vp(val):
 def pos_stat_line(r, pos):
     """Build a muted stat line for a player in the positional breakdown."""
     if pos in ("SP", "RP"):
-        specs = [("ERA", 2), ("WHIP", 2), ("SVHD", 0)] if pos == "RP" else [("ERA", 2), ("WHIP", 2), ("K", 0)]
+        specs = [("SVHD", 0), ("K", 0)] if pos == "RP" else [("ERA", 2), ("WHIP", 2), ("K", 0)]
     else:
         specs = [("HR", 0), ("RBI", 0), ("OPS", 3)]
 
@@ -547,7 +584,7 @@ def inj_tag(r):
     inj = str(r.get("FreeAgentInjuryStatus") or "").upper()
     if not inj or inj in ("", "ACTIVE"):
         return ""
-    color = RED if inj in ("IL", "OUT") else YELLOW
+    color = RED if inj in _DL_STATUSES else YELLOW
     return f' <span style="color:{color};font-size:10px;font-weight:600;">{inj}</span>'
 
 
@@ -687,7 +724,7 @@ def build_matchup_section(matchup, logos=None):
     opp     = matchup.get("opp_team", "Opponent")
     week    = matchup.get("week", "")
 
-    score_str = f"{wins}-{losses}" + (f"-{ties}" if ties else "")
+    score_str = f"{wins}-{losses}-{ties}"
     if wins > losses:
         score_color, status = GREEN, "Winning"
     elif losses > wins:
@@ -869,7 +906,7 @@ def build_hot_cold_section(hitters, recent_hitting, my_team):
 # ── CATEGORY PULSE ───────────────────────────────────────────────────────────
 
 _RATE_CATS    = {"OPS", "ERA", "WHIP", "B_SO"}   # use weighted-avg projection
-_LOWER_BETTER = {"ERA", "WHIP"}
+_LOWER_BETTER = {"ERA", "WHIP", "B_SO"}
 
 _CLOSE_THRESH = {
     "R": 8, "HR": 3, "RBI": 8, "SB": 3, "OPS": 0.025, "B_SO": 0.08,
@@ -1062,7 +1099,7 @@ def build_week_overview(matchup, week_cats, week_n, fa_sp, starts, days_elapsed,
     def _cat_label(key):
         return _CAT_DISPLAY.get(key, key)
 
-    # Bullet 1: week record and category snapshot
+    # Bullet 1: week record with hitting/pitching split summary
     if matchup:
         cw = matchup.get("wins", 0)
         cl = matchup.get("losses", 0)
@@ -1071,18 +1108,17 @@ def build_week_overview(matchup, week_cats, week_n, fa_sp, starts, days_elapsed,
         status_color = GREEN if cw > cl else (RED if cl > cw else YELLOW)
         status_word  = "Leading" if cw > cl else ("Trailing" if cl > cw else "Tied")
         cats_list    = matchup.get("categories", [])
-        winning_cats = [_cat_label(c["cat"]) for c in cats_list if c.get("result") == "W"]
-        losing_cats  = [_cat_label(c["cat"]) for c in cats_list if c.get("result") == "L"]
-        detail = ""
-        if winning_cats:
-            detail += f" — winning <span style='color:{GREEN};font-weight:600;'>{', '.join(winning_cats[:3])}</span>"
-            if len(winning_cats) > 3:
-                detail += f" +{len(winning_cats)-3} more"
-        if losing_cats:
-            detail += f", trailing in <span style='color:{RED};font-weight:600;'>{', '.join(losing_cats[:3])}</span>"
+        hit_wins = sum(1 for c in cats_list if c["cat"] in _HIT_CATS and c.get("result") == "W")
+        hit_loss = sum(1 for c in cats_list if c["cat"] in _HIT_CATS and c.get("result") == "L")
+        pit_wins = sum(1 for c in cats_list if c["cat"] in _PIT_CATS and c.get("result") == "W")
+        pit_loss = sum(1 for c in cats_list if c["cat"] in _PIT_CATS and c.get("result") == "L")
+        hit_color = GREEN if hit_wins > hit_loss else (RED if hit_loss > hit_wins else YELLOW)
+        pit_color = GREEN if pit_wins > pit_loss else (RED if pit_loss > pit_wins else YELLOW)
         bullets.append(
             f'<span style="color:{status_color};font-weight:700;">{status_word} {cw}-{cl}-{ct}</span>'
-            f' vs. {opp} through Day {days_elapsed}{detail}.'
+            f' vs. {opp} through Day {days_elapsed} — '
+            f'<span style="color:{hit_color};">hitting {hit_wins}-{hit_loss}</span>, '
+            f'<span style="color:{pit_color};">pitching {pit_wins}-{pit_loss}</span>.'
         )
 
     # Bullet 2: rotation coverage
@@ -1188,6 +1224,7 @@ def build_email(snap):
     claimed = {name for name, txn_type in latest_txn.items() if txn_type == "FA ADDED"}
 
     fa_sp     = fa_starters(pitchers, claimed)
+    fa_rp     = fa_relievers(pitchers, claimed)
     fa_hit    = fa_hitters(hitters, claimed)
     luck      = luck_standings(roto, standings)
     team_logos = {" ".join(s["team_name"].split()): s.get("logo_url", "") for s in standings}
@@ -1197,6 +1234,11 @@ def build_email(snap):
     days_elapsed = datetime.now().weekday() + 1   # Mon=1 … Sun=7
     week_roto = [r for r in roto if int(r.get("Week", 0)) == current_week_num]
     week_cats, week_n = category_ranks(week_roto, my_team)
+    my_week_roto_pts = sum(
+        float(r.get("Roto_Score") or 0)
+        for r in week_roto
+        if " ".join((r.get("Team") or "").split()) == " ".join(my_team.split())
+    )
     alerts    = roster_alerts(pitchers, hitters, my_team)
     starts    = my_upcoming_starts(pitchers, my_team)
     pos_data  = positional_breakdown(pitchers, hitters, my_team)
@@ -1560,6 +1602,43 @@ def build_email(snap):
 
     fa_sp_section = section_head("FA Pickup — Starting Pitchers", "Free agents with confirmed upcoming starts · sorted by SP score") + table
 
+    # ── FA: Relief Pitchers ────────────────────────────────────────────────────
+    if fa_rp:
+        rows = ""
+        for i, r in enumerate(fa_rp):
+            bg   = f"background:{SURFACE2};" if i % 2 else ""
+            era  = _n(r.get("ERA"))
+            whip = _n(r.get("WHIP"))
+            rows += (
+                f'<tr style="{bg}">'
+                f'<td style="{TD_S}font-weight:600;">{team_logo(r.get("Team"))}{r.get("PlayerName","")}{inj_tag(r)}</td>'
+                f'<td style="{TDC}color:{MUTED};">{r.get("Position","")}</td>'
+                f'<td style="{TDC}">{v(r.get("SVHD"), 0)}</td>'
+                f'<td style="{TDC}">{v(r.get("K"), 0)}</td>'
+                f'<td style="{TDC}">{v(r.get("W"), 0)}</td>'
+                f'<td style="{TDC}">{f"{era:.2f}" if era > 0 else "—"}</td>'
+                f'<td style="{TDC}">{f"{whip:.2f}" if whip > 0 else "—"}</td>'
+                f'<td style="{TDC}">{badge(r["_rp_score"])}</td>'
+                f'</tr>'
+            )
+        rp_table = (
+            f'<table style="width:100%;border-collapse:collapse;margin-bottom:24px;font-size:13px;">'
+            f'<thead><tr>'
+            f'<th style="{TH_S}">Reliever</th>'
+            f'<th style="{TH_S}text-align:center;">Pos</th>'
+            f'<th style="{TH_S}text-align:center;">SV+H</th>'
+            f'<th style="{TH_S}text-align:center;">K</th>'
+            f'<th style="{TH_S}text-align:center;">W</th>'
+            f'<th style="{TH_S}text-align:center;">ERA</th>'
+            f'<th style="{TH_S}text-align:center;">WHIP</th>'
+            f'<th style="{TH_S}text-align:center;">Score</th>'
+            f'</tr></thead><tbody>{rows}</tbody></table>'
+        )
+    else:
+        rp_table = f'<p style="color:{MUTED};font-style:italic;margin-bottom:24px;">No FA relievers found.</p>'
+
+    fa_rp_section = section_head("FA Pickup — Relief Pitchers", "Top 3 available RP · ranked by SV+H, K, W, ERA, WHIP") + rp_table
+
     # ── FA: Hitters ────────────────────────────────────────────────────────────
     if fa_hit:
         rows = ""
@@ -1650,7 +1729,7 @@ def build_email(snap):
             f'</td>'
         )
     week_cat_section = (
-        section_head("This Week's Category Rankings", f"Week {current_week_num} roto rank · vs. this week's matchup") +
+        section_head("This Week's Category Rankings", f"Week {current_week_num} · {my_week_roto_pts:.1f} roto pts · vs. this week's matchup") +
         f'<table style="width:100%;border-collapse:collapse;background:{SURFACE};border-radius:6px;margin-bottom:24px;overflow:hidden;">'
         f'<tr>{week_cat_cells}</tr></table>'
     )
@@ -1776,6 +1855,7 @@ def build_email(snap):
         build_matchup_section(matchup, logos=team_logos),
         build_category_pulse(matchup, weekly_avgs=weekly_avgs, days_elapsed=days_elapsed),
         fa_sp_section,
+        fa_rp_section,
         build_hot_cold_section(hitters, recent_hitting, my_team),
         starts_section,
         pos_section,
