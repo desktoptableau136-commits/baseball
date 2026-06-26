@@ -1667,7 +1667,8 @@ def build_email(snap):
 
         starts_section = (
             section_head("My Upcoming Starts", f"{len(starts)} starts across {len(by_date)} days") +
-            f'<table style="width:100%;border-collapse:collapse;margin-bottom:24px;font-size:13px;">'
+            f'<div style="overflow-x:auto;-webkit-overflow-scrolling:touch;margin-bottom:24px;">'
+            f'<table style="width:100%;border-collapse:collapse;font-size:13px;">'
             f'<thead><tr>'
             f'<th style="{TH_S}">Pitcher</th>'
             f'<th style="{TH_S}text-align:center;">Matchup</th>'
@@ -1678,6 +1679,7 @@ def build_email(snap):
             f'<th style="{TH_S}text-align:center;">K%</th>'
             f'<th style="{TH_S}text-align:center;">Score</th>'
             f'</tr></thead><tbody>{rows}</tbody></table>'
+            f'</div>'
         )
     else:
         starts_section = ""
@@ -1734,7 +1736,8 @@ def build_email(snap):
 
         rp_rows = "".join(_rp_row(r, i) for i, r in enumerate(my_rp))
         my_rp_table = (
-            f'<table style="width:100%;border-collapse:collapse;margin-bottom:24px;font-size:13px;">'
+            f'<div style="overflow-x:auto;-webkit-overflow-scrolling:touch;margin-bottom:24px;">'
+            f'<table style="width:100%;border-collapse:collapse;font-size:13px;">'
             f'<thead><tr>'
             f'<th style="{TH_S}">Reliever</th>'
             f'<th style="{TH_S}text-align:center;">Pos</th>'
@@ -1745,6 +1748,7 @@ def build_email(snap):
             f'<th style="{TH_S}text-align:center;">WHIP</th>'
             f'<th style="{TH_S}text-align:center;">Score</th>'
             f'</tr></thead><tbody>{rp_rows}</tbody></table>'
+            f'</div>'
         )
         my_rp_section = section_head("My Relief Pitchers", "Rostered RP · SV+H/K/W season (ESPN) · ERA/WHIP from best dataset") + my_rp_table
     else:
@@ -1865,7 +1869,8 @@ def build_email(snap):
                     f'</tr>'
                 )
         table = (
-            f'<table style="width:100%;border-collapse:collapse;margin-bottom:24px;font-size:13px;">'
+            f'<div style="overflow-x:auto;-webkit-overflow-scrolling:touch;margin-bottom:24px;">'
+            f'<table style="width:100%;border-collapse:collapse;font-size:13px;">'
             f'<thead><tr>'
             f'<th style="{TH_S}">Pitcher</th>'
             f'<th style="{TH_S}text-align:center;">Pos</th>'
@@ -1877,6 +1882,7 @@ def build_email(snap):
             f'<th style="{TH_S}text-align:center;">K%</th>'
             f'<th style="{TH_S}text-align:center;">Score</th>'
             f'</tr></thead><tbody>{rows}</tbody></table>'
+            f'</div>'
         )
     else:
         table = f'<p style="color:{MUTED};font-style:italic;margin-bottom:24px;">No FA starters with confirmed upcoming starts.</p>'
@@ -1914,7 +1920,8 @@ def build_email(snap):
                 f'</tr>'
             )
         rp_table = (
-            f'<table style="width:100%;border-collapse:collapse;margin-bottom:24px;font-size:13px;">'
+            f'<div style="overflow-x:auto;-webkit-overflow-scrolling:touch;margin-bottom:24px;">'
+            f'<table style="width:100%;border-collapse:collapse;font-size:13px;">'
             f'<thead><tr>'
             f'<th style="{TH_S}">Reliever</th>'
             f'<th style="{TH_S}text-align:center;">Pos</th>'
@@ -1925,6 +1932,7 @@ def build_email(snap):
             f'<th style="{TH_S}text-align:center;">WHIP</th>'
             f'<th style="{TH_S}text-align:center;">Score</th>'
             f'</tr></thead><tbody>{"".join(_fa_rp_row(r,i) for i,r in enumerate(fa_rp))}</tbody></table>'
+            f'</div>'
         )
     else:
         rp_table = f'<p style="color:{MUTED};font-style:italic;margin-bottom:24px;">No FA relievers found.</p>'
@@ -2083,13 +2091,15 @@ def build_email(snap):
 
     pos_section = (
         section_head("Positional Breakdown", "Your depth at each position vs. the rest of the league") +
-        f'<table style="width:100%;border-collapse:collapse;margin-bottom:24px;font-size:13px;">'
+        f'<div style="overflow-x:auto;-webkit-overflow-scrolling:touch;margin-bottom:24px;">'
+        f'<table style="width:100%;border-collapse:collapse;font-size:13px;">'
         f'<thead><tr>'
         f'<th style="{TH_S}text-align:center;">Pos</th>'
         f'<th style="{TH_S}">My Weakest Player</th>'
         f'<th style="{TH_S}text-align:center;">Strength</th>'
         f'<th style="{TH_S}">Best FA Available &nbsp;<span style="color:{GREEN};font-size:9px;">&#8593; = upgrade</span></th>'
         f'</tr></thead><tbody>{pos_rows}</tbody></table>'
+        f'</div>'
     )
 
     # ── League Luck Standings ──────────────────────────────────────────────────
