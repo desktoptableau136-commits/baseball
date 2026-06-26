@@ -2142,21 +2142,21 @@ def build_email(snap):
         matchup, week_cats, week_n, fa_sp, starts, days_elapsed, my_starts_by_day, week_end=week_end_str
     )
     body_parts += [
-        week_overview,
-        week_cat_section,
-        build_matchup_section(matchup, logos=team_logos),
-        build_category_pulse(matchup, weekly_avgs=weekly_avgs, days_elapsed=days_elapsed),
-        fa_sp_section,
-        fa_rp_section,
-        starts_section,
-        my_rp_section,
-        build_pitcher_hot_cold_section(pitchers, my_team),
-        build_hot_cold_section(hitters, recent_hitting, my_team),
-        pos_section,
-        alert_section,
-        fa_hit_section,
-        cat_section,
-        luck_section,
+        alert_section,                                                                    # 1  TRIAGE
+        week_overview,                                                                    # 2  WEEK INTELLIGENCE
+        build_category_pulse(matchup, weekly_avgs=weekly_avgs, days_elapsed=days_elapsed), # 3
+        build_matchup_section(matchup, logos=team_logos),                                # 4
+        week_cat_section,                                                                 # 5
+        starts_section,                                                                   # 6  MY TEAM
+        my_rp_section,                                                                    # 7
+        build_pitcher_hot_cold_section(pitchers, my_team),                               # 8
+        build_hot_cold_section(hitters, recent_hitting, my_team),                        # 9
+        pos_section,                                                                      # 10
+        fa_sp_section,                                                                    # 11 ACTION
+        fa_rp_section,                                                                    # 12
+        fa_hit_section,                                                                   # 13
+        cat_section,                                                                      # 14 SEASON CONTEXT
+        luck_section,                                                                     # 15
     ]
     body = "\n".join(p for p in body_parts if p)
 

@@ -95,22 +95,23 @@ Numeric missing values are stored as `-1` (not `NaN`) after the merge pipelines 
 
 ## Digest section order (send_digest.py body_parts)
 
-1. Week at a Glance
-2. This Week's Category Rankings
-3. Matchup (score banner + category table)
-4. Category Pulse (projection cards)
-5. FA Pickup — Starting Pitchers
-6. FA Pickup — Relief Pitchers
-7. My Upcoming Starts
-8. My Relief Pitchers
-9. Pitcher Hot/Cold (15-day vs season ERA)
-10. Roster Hot/Cold (hitters, 7-day vs season OPS)
-11. Positional Breakdown
-11. Roster Alerts
-12. FA Pickup — Hitters
-13. League Luck Standings
+Grouped into four bands: Triage → Week Intelligence → My Team → Action → Season Context.
+
+1. Roster Alerts (conditional — only renders when a player is on IL)
+2. Week at a Glance
+3. Category Pulse (projection cards)
+4. Matchup (score banner + category table)
+5. This Week's Category Rankings
+6. My Upcoming Starts
+7. My Relief Pitchers
+8. Pitcher Hot/Cold (15-day vs season ERA)
+9. Roster Hot/Cold (hitters, 7-day vs season OPS)
+10. Positional Breakdown
+11. FA Pickup — Starting Pitchers
+12. FA Pickup — Relief Pitchers
+13. FA Pickup — Hitters
 14. Category Rankings (season)
-15. Sparkline / trend
+15. League Luck Standings
 
 ## Color palette
 
