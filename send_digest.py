@@ -1476,6 +1476,52 @@ def build_email(snap):
     else:
         starts_section = ""
 
+    # ── My RP ─────────────────────────────────────────────────────────────────
+    my_rp = sorted(
+        [r for r in pitchers
+         if " ".join((r.get("FantasyTeam") or "").split()) == " ".join(my_team.split())
+         and int(r.get("Dataset", 0) or 0) == YEAR
+         and "RP" in str(r.get("Position", ""))],
+        key=lambda r: -rp_score(r),
+    )
+    for r in my_rp:
+        r["_rp_score"] = rp_score(r)
+
+    if my_rp:
+        rp_rows = ""
+        for i, r in enumerate(my_rp):
+            bg   = f"background:{SURFACE2};" if i % 2 else ""
+            era  = _n(r.get("ERA"))
+            whip = _n(r.get("WHIP"))
+            rp_rows += (
+                f'<tr style="{bg}">'
+                f'<td style="{TD_S}font-weight:600;">{team_logo(r.get("Team"))}{r.get("PlayerName","")}{inj_tag(r)}</td>'
+                f'<td style="{TDC}color:{MUTED};">{r.get("Position","")}</td>'
+                f'<td style="{TDC}">{v(r.get("SVHD"), 0)}</td>'
+                f'<td style="{TDC}">{v(r.get("K"), 0)}</td>'
+                f'<td style="{TDC}">{v(r.get("W"), 0)}</td>'
+                f'<td style="{TDC}">{f"{era:.2f}" if era > 0 else "—"}</td>'
+                f'<td style="{TDC}">{f"{whip:.2f}" if whip > 0 else "—"}</td>'
+                f'<td style="{TDC}">{badge(r["_rp_score"])}</td>'
+                f'</tr>'
+            )
+        my_rp_table = (
+            f'<table style="width:100%;border-collapse:collapse;margin-bottom:24px;font-size:13px;">'
+            f'<thead><tr>'
+            f'<th style="{TH_S}">Reliever</th>'
+            f'<th style="{TH_S}text-align:center;">Pos</th>'
+            f'<th style="{TH_S}text-align:center;">SV+H</th>'
+            f'<th style="{TH_S}text-align:center;">K</th>'
+            f'<th style="{TH_S}text-align:center;">W</th>'
+            f'<th style="{TH_S}text-align:center;">ERA</th>'
+            f'<th style="{TH_S}text-align:center;">WHIP</th>'
+            f'<th style="{TH_S}text-align:center;">Score</th>'
+            f'</tr></thead><tbody>{rp_rows}</tbody></table>'
+        )
+        my_rp_section = section_head("My Relief Pitchers", "Rostered RP · ranked by SV+H, K, W, ERA, WHIP") + my_rp_table
+    else:
+        my_rp_section = ""
+
     body_parts = []
 
     # ── FA: Starting Pitchers ──────────────────────────────────────────────────
@@ -1856,8 +1902,9 @@ def build_email(snap):
         build_category_pulse(matchup, weekly_avgs=weekly_avgs, days_elapsed=days_elapsed),
         fa_sp_section,
         fa_rp_section,
-        build_hot_cold_section(hitters, recent_hitting, my_team),
         starts_section,
+        my_rp_section,
+        build_hot_cold_section(hitters, recent_hitting, my_team),
         pos_section,
         alert_section,
         fa_hit_section,

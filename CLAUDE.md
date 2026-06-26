@@ -68,7 +68,7 @@ Two files; one intermediate artifact:
 ## Scoring functions (send_digest.py)
 
 - `pitcher_score(r)` → 0–100. Role-aware: detects SP vs RP from `Position` field or `GS > 3`. **SP path**: role bonus 9–12 based on GS volume; SVHD ignored. **RP path**: role bonus 5–12 scaled by SVHD; QS/GS ignored. K component uses WhiffPct if available, else Kpct_P, else K/IP. ERA component prefers xFIP over ERA.
-- `rp_score(r)` → composite for FA RP ranking. Weights: SVHD (40pts), K (25pts), W (15pts), ERA (12pts), WHIP (8pts).
+- `rp_score(r)` → composite for RP ranking. Weights: SVHD (40pts), K (25pts), W (15pts), ERA (12pts), WHIP (8pts). Used by both FA RP and My Relief Pitchers sections.
 - `hitter_score(r)` → 0–100. Prefers wRC+ over OPS. Uses xwOBA, sprint speed, Barrel%, ISO, HR_Probability.
 - `sp_fa_score(r)` → pitcher_score + start bonus (scaled 8–22 by QS probability). Only applies to pitchers with GS ≥ 1 or "SP" in Position.
 - `qs_probability(r)` → 1–99. Calibrated to league-average ~38%, ace ~75%. Uses IP/G (not IP/GS).
@@ -82,6 +82,24 @@ Two files; one intermediate artifact:
 **Roto:** `Team`, `Week`, `Roto_Score`, `{CAT}_Points` for each of 12 categories
 
 Numeric missing values are stored as `-1` (not `NaN`) after the merge pipelines run.
+
+## Digest section order (send_digest.py body_parts)
+
+1. Week at a Glance
+2. This Week's Category Rankings
+3. Matchup (score banner + category table)
+4. Category Pulse (projection cards)
+5. FA Pickup — Starting Pitchers
+6. FA Pickup — Relief Pitchers
+7. My Upcoming Starts
+8. My Relief Pitchers
+9. Roster Hot/Cold
+10. Positional Breakdown
+11. Roster Alerts
+12. FA Pickup — Hitters
+13. League Luck Standings
+14. Category Rankings (season)
+15. Sparkline / trend
 
 ## Color palette
 
