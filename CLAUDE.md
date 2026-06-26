@@ -49,7 +49,8 @@ Two files; one intermediate artifact:
 **Data sources:**
 - FanGraphs returns 403 — never use it directly. pybaseball functions work because they handle headers.
 - `pitching_stats()` (FanGraphs leaderboard) returns 403. Use `pitching_stats_range()` instead, which scrapes Baseball Reference — but it has no `HLD` column.
-- SVHD (saves+holds) is pulled from ESPN player stats via `get_pitcher_espn_svhd()` in fetch_data.py, which reads `pl.stats[0]['breakdown']` using ESPN stat IDs (SV=57, HLD=60, SVHD=83). This overwrites FantasyPros SVHD for the season dataset because FantasyPros does not reliably include holds.
+- SVHD (saves+holds) is pulled from ESPN player stats via `get_pitcher_espn_svhd()` in fetch_data.py, which reads `pl.stats[0]['breakdown']`. The breakdown uses **string keys** (`'SV'`, `'HLD'`, `'SVHD'`, `'K'`, `'W'`, `'OUTS'`, `'ERA'`, `'WHIP'`, `'GP'`, `'GS'`) — not numeric stat IDs. This is called at fetch time for all rostered and FA pitchers.
+- ESPN season stats (`ESPN_K`, `ESPN_W`, `ESPN_IP`, `ESPN_GS`, `ESPN_GP`, `ESPN_SVHD`) are stored on **all dataset rows** in the snapshot so send_digest.py can use season counts for players who only appear in short-range FantasyPros datasets. `ESPN_SVHD` overrides `SVHD` on `Dataset==YEAR` rows. Use `_n(r.get("ESPN_SVHD")) or _n(r.get("SVHD"))` (not `if >= 0`) for the fallback — `_n` floors negatives to 0 so `>= 0` is always true.
 - xFIP and WhiffPct are not available from FantasyPros pitcher tables. Use `BarrelPctAllowed` and `Kpct_P` (derived K%) instead.
 - ESPN injury statuses are `TEN_DAY_DL`, `FIFTEEN_DAY_DL`, `SIXTY_DAY_DL` — not `IL` or `OUT`. The constant `_DL_STATUSES` in send_digest.py covers all of these. FA views and positional breakdown exclude all DL-status players.
 
@@ -67,17 +68,24 @@ Two files; one intermediate artifact:
 
 **Pitcher hot/cold uses 15-day ERA:** `build_pitcher_hot_cold_section`, My Upcoming Starts, and FA Starting Pitchers all compare season ERA vs 15-day ERA (from `p15` index — Dataset==15 rows). The 7-day window is too short for SPs who start infrequently. The `p15` index is built alongside `rec_p` in the main build function. Column header is "L15 ERA".
 
+**Weekly matchup is Monday–Sunday:** `week_end_str` is computed as the Sunday of the current week (`today + timedelta(days=6 - today.weekday())`). FA SP sections and My Upcoming Starts show all starts including next week, but dates past Sunday get a `NEXT WK` badge. The KPI "Starts This Week" and Week at a Glance bullet 3 count/recommend only within the current matchup week.
+
+**SP/RP role detection uses `_is_sp(r)`:** Never use `"SP" in pos` or `gs > 3` alone. The helper uses a priority chain: ESPN season GS/GP ratio (≥ 5 appearances) → dataset GS/G ratio (≥ 4 appearances) → IP/G → Position field. Thresholds: GS/G ≥ 0.80 → SP, ≤ 0.20 → RP; IP/G ≥ 4.5 → SP, < 2.5 → RP. All four SP/RP-sensitive functions use it: `pitcher_score`, `sp_fa_score`, `fa_relievers`, My RP filter, `positional_breakdown`.
+
+**FA RP requires SVHD ≥ 1:** `fa_relievers` gates on `(_n(r.get("ESPN_SVHD")) or _n(r.get("SVHD"))) >= 1`. A pitcher with zero saves and zero holds all season has no role and should not be recommended.
+
 ## Scoring functions (send_digest.py)
 
-- `pitcher_score(r)` → 0–100. Role-aware: detects SP vs RP from `Position` field or `GS > 3`. **SP path**: role bonus 9–12 based on GS volume; SVHD ignored. **RP path**: role bonus 5–12 scaled by SVHD; QS/GS ignored. K component uses WhiffPct if available, else Kpct_P, else K/IP. ERA component prefers xFIP over ERA.
-- `rp_score(r)` → composite for RP ranking. Weights: SVHD (40pts), K (25pts), W (15pts), ERA (12pts), WHIP (8pts). Used by both FA RP and My Relief Pitchers sections. My Relief Pitchers picks the best available dataset per player (YEAR → 30 → 15 → 7) so recently called-up RPs outside FantasyPros' season top-300 still appear.
+- `_is_sp(r)` → bool. Usage-based SP/RP detection. Priority: ESPN season GS/GP → dataset GS/G → IP/G → Position field. See gotcha above.
+- `pitcher_score(r)` → 0–100. Role-aware via `_is_sp(r)`. **SP path**: role bonus 9–12 based on GS volume; SVHD ignored. **RP path**: role bonus 5–12 scaled by SVHD; QS/GS ignored. K component uses WhiffPct if available, else Kpct_P, else K/IP. ERA component prefers xFIP over ERA.
+- `rp_score(r)` → composite for RP ranking. Weights: SVHD (40pts), K (25pts), W (15pts), ERA (12pts), WHIP (8pts). Uses `ESPN_SVHD`/`ESPN_K`/`ESPN_W` with FantasyPros fallback. Used by both FA RP and My Relief Pitchers sections. My Relief Pitchers picks the best available dataset per player (YEAR → 30 → 15 → 7) so recently called-up RPs outside FantasyPros' season top-300 still appear.
 - `hitter_score(r)` → 0–100. Prefers wRC+ over OPS. Uses xwOBA, sprint speed, Barrel%, ISO, HR_Probability.
-- `sp_fa_score(r)` → pitcher_score + start bonus (scaled 8–22 by QS probability). Only applies to pitchers with GS ≥ 1 or "SP" in Position.
+- `sp_fa_score(r)` → pitcher_score + start bonus (scaled 8–22 by QS probability). Returns 0 if `not _is_sp(r)`.
 - `qs_probability(r)` → 1–99. Calibrated to league-average ~38%, ace ~75%. Uses IP/G (not IP/GS).
 
 ## Key data fields
 
-**Pitchers:** `PlayerName`, `FantasyTeam`, `Position`, `Dataset` (7/15/30/2026), `IP`, `K`, `ERA`, `WHIP`, `GS`, `SVHD`, `K/IP`, `Kpct_P`, `IP_per_G`, `PSP_Date`, `PSP_HomeVAway`, `PSP_Projected`, `Team_OPS_Value`, `BarrelPctAllowed`
+**Pitchers:** `PlayerName`, `FantasyTeam`, `Position`, `Dataset` (7/15/30/2026), `IP`, `K`, `ERA`, `WHIP`, `GS`, `SVHD`, `K/IP`, `Kpct_P`, `IP_per_G`, `PSP_Date`, `PSP_HomeVAway`, `PSP_Projected`, `Team_OPS_Value`, `BarrelPctAllowed`, `ESPN_K`, `ESPN_W`, `ESPN_IP`, `ESPN_GS`, `ESPN_GP`, `ESPN_SVHD`
 
 **Hitters:** `PlayerName`, `FantasyTeam`, `Position`, `Dataset`, `HR`, `RBI`, `R`, `SB`, `AVG`, `OPS`, `wRCplus`, `xwOBA`, `xBA`, `xSLG`, `SprintSpeed`, `ISO`, `Barrel_Pct`, `HardHit_Pct`, `HR_Probability`
 

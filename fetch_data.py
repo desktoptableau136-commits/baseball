@@ -173,8 +173,8 @@ def get_pitcher_roster(league) -> pd.DataFrame:
 
 
 def get_pitcher_espn_svhd(league) -> pd.DataFrame:
-    """Pull season SV, HLD, SVHD from ESPN player stats (scoring period 0 = season total).
-    Covers both rostered and FA pitchers."""
+    """Pull season stats from ESPN player stats (scoring period 0 = season total).
+    Covers both rostered and FA pitchers. Returns K, W, IP, GS, GP, SV, HLD, SVHD."""
     rows = []
     seen = set()
 
@@ -182,11 +182,17 @@ def get_pitcher_espn_svhd(league) -> pd.DataFrame:
         if pl.name in seen:
             return
         bd = (pl.stats or {}).get(0, {}).get('breakdown', {})
+        outs = bd.get('OUTS', 0) or 0
         rows.append({
             "PlayerName": pl.name,
             "ESPN_SV":    bd.get('SV',   0) or 0,
             "ESPN_HLD":   bd.get('HLD',  0) or 0,
             "ESPN_SVHD":  bd.get('SVHD', 0) or 0,
+            "ESPN_K":     bd.get('K',   -1),
+            "ESPN_W":     bd.get('W',   -1),
+            "ESPN_IP":    round(outs / 3, 1) if outs > 0 else -1,
+            "ESPN_GS":    bd.get('GS',  -1),
+            "ESPN_GP":    bd.get('GP',  -1),
         })
         seen.add(pl.name)
 
@@ -199,7 +205,7 @@ def get_pitcher_espn_svhd(league) -> pd.DataFrame:
             _extract(fa)
 
     df = pd.DataFrame(rows).drop_duplicates(subset="PlayerName")
-    log(f"  ESPN season SVHD: {len(df)} pitchers")
+    log(f"  ESPN season stats: {len(df)} pitchers")
     return apply_name_patches(df, PITCHER_NAME_PATCHES)
 
 
@@ -847,7 +853,9 @@ def build_pitcher_data(league) -> list:
         merged["IP_per_GS"] = (ip_num / gs_num.clip(lower=1)).clip(upper=7.5).round(2)
         merged["IP_per_G"]  = (ip_num / g_num.clip(lower=1)).clip(upper=7.5).round(2)
 
-    # Override season SVHD with ESPN's own totals — more reliable than FantasyPros HLD
+    # Override season SVHD with ESPN's own totals — more reliable than FantasyPros HLD.
+    # Also keep ESPN_K, ESPN_W, ESPN_IP, ESPN_GS, ESPN_GP on all rows so send_digest.py
+    # can use season counts for players who only appear in short-range FP datasets.
     if not espn_svhd.empty:
         merged = merged.merge(espn_svhd, on="PlayerName", how="left")
         yr_mask = pd.to_numeric(merged["Dataset"], errors="coerce") == CURRENT_YEAR
@@ -855,7 +863,12 @@ def build_pitcher_data(league) -> list:
             if espn_col in merged.columns:
                 override = pd.to_numeric(merged.loc[yr_mask, espn_col], errors="coerce")
                 merged.loc[yr_mask, col] = override.where(override >= 0, merged.loc[yr_mask, col])
-        merged.drop(columns=["ESPN_SV", "ESPN_HLD", "ESPN_SVHD"], inplace=True, errors="ignore")
+        merged.drop(columns=["ESPN_SV", "ESPN_HLD"], inplace=True, errors="ignore")
+        # ESPN_SVHD, ESPN_K, ESPN_W, ESPN_IP, ESPN_GS, ESPN_GP stay on all rows
+        # so send_digest.py can use season counts for players only in short-range FP datasets
+        for c in ["ESPN_SVHD", "ESPN_K", "ESPN_W", "ESPN_IP", "ESPN_GS", "ESPN_GP"]:
+            if c in merged.columns:
+                merged[c] = pd.to_numeric(merged[c], errors="coerce").fillna(-1)
 
     num_cols = merged.select_dtypes(include="number").columns
     merged[num_cols] = merged[num_cols].fillna(-1)

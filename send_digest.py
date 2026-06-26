@@ -19,7 +19,7 @@ import json
 import os
 import subprocess
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 try:
@@ -52,6 +52,49 @@ def _n(val):
         return 0
 
 
+def _is_sp(r):
+    """Usage-based SP/RP detection. Priority: ESPN season GS/GP → dataset GS/G → IP/G → Position."""
+    pos      = str(r.get("Position") or "")
+    gs       = _n(r.get("GS"))
+    g        = _n(r.get("G"))
+    ip_per_g = _n(r.get("IP_per_G"))
+    espn_gs  = _n(r.get("ESPN_GS"))
+    espn_gp  = _n(r.get("ESPN_GP"))
+
+    # ESPN season GS/GP — full-season sample, most reliable
+    if espn_gp >= 5:
+        rate = espn_gs / espn_gp
+        if rate >= 0.80:
+            return True
+        if rate <= 0.20:
+            return False
+        # 20–80%: ambiguous, fall through
+
+    # Dataset GS/G — only trust with enough appearances
+    if g >= 4:
+        rate = gs / g
+        if rate >= 0.80:
+            return True
+        if rate <= 0.20 and ip_per_g < 4.0:
+            return False
+
+    # IP/G — catches bulk/opener cases regardless of GS rate
+    if ip_per_g >= 4.5:
+        return True
+    if 0 < ip_per_g < 2.5:
+        return False
+
+    # Position field last resort
+    if "SP" in pos and "RP" not in pos:
+        return True
+    if "RP" in pos and "SP" not in pos:
+        return False
+    if "SP" in pos:  # dual-eligible: lean SP if decent IP/G
+        return ip_per_g >= 3.0
+
+    return False
+
+
 def pitcher_score(r):
     kip   = _n(r.get("K/IP") or r.get("KIP"))
     era   = _n(r.get("ERA"))
@@ -62,8 +105,7 @@ def pitcher_score(r):
     whiff = _n(r.get("WhiffPct"))   # stored as decimal: 0.28 = 28%
     kpct  = _n(r.get("Kpct_P"))
     inj   = str(r.get("FreeAgentInjuryStatus") or "").upper()
-    pos   = str(r.get("Position") or "")
-    is_sp = gs > 3 or "SP" in pos
+    is_sp = _is_sp(r)
 
     if not kip and not era and not kpct:
         return 0
@@ -175,9 +217,7 @@ def qs_probability(r):
 
 
 def sp_fa_score(r):
-    gs  = _n(r.get("GS"))
-    pos = str(r.get("Position") or "")
-    if gs < 1 and "SP" not in pos:
+    if not _is_sp(r):
         return 0
     s = pitcher_score(r)
     if r.get("PSP_Date") and r.get("PSP_Date") != "1999-01-01":
@@ -188,7 +228,7 @@ def sp_fa_score(r):
 
 # ── DATA HELPERS ───────────────────────────────────────────────────────────────
 
-def fa_starters(pitchers, claimed=None):
+def fa_starters(pitchers, claimed=None, week_end=None):
     claimed = claimed or set()
     fa = [
         r for r in pitchers
@@ -197,6 +237,7 @@ def fa_starters(pitchers, claimed=None):
         and int(r.get("Dataset", 0)) == YEAR
         and r.get("PSP_Date", "") not in ("1999-01-01", "", None)
         and str(r.get("FreeAgentInjuryStatus", "")) not in _DL_STATUSES
+        and (week_end is None or r.get("PSP_Date", "") <= week_end)
     ]
     for r in fa:
         r["_score"] = sp_fa_score(r)
@@ -204,9 +245,9 @@ def fa_starters(pitchers, claimed=None):
 
 
 def rp_score(r):
-    svhd = _n(r.get("SVHD"))
-    k    = _n(r.get("K"))
-    w    = _n(r.get("W"))
+    svhd = _n(r.get("ESPN_SVHD")) or _n(r.get("SVHD"))   # prefer season total from ESPN
+    k    = _n(r.get("ESPN_K"))    or _n(r.get("K"))       # prefer season count from ESPN
+    w    = _n(r.get("ESPN_W"))    or _n(r.get("W"))
     era  = _n(r.get("ERA")) or 5.0
     whip = _n(r.get("WHIP")) or 1.5
     s  = min(40, svhd / 20 * 40)
@@ -225,6 +266,8 @@ def fa_relievers(pitchers, claimed=None):
         and r.get("PlayerName", "") not in claimed
         and int(r.get("Dataset", 0)) == YEAR
         and "RP" in str(r.get("Position", ""))
+        and not _is_sp(r)
+        and (_n(r.get("ESPN_SVHD")) or _n(r.get("SVHD"))) >= 1
         and str(r.get("FreeAgentInjuryStatus", "")) not in _DL_STATUSES
     ]
     for r in fa:
@@ -313,7 +356,12 @@ def positional_breakdown(pitchers, hitters, my_team):
         score_fn = pitcher_score if ptype == "pit" else hitter_score
         season   = [r for r in source if int(r.get("Dataset", 0) or 0) == YEAR]
 
-        def pos_match(r, slots=slots):
+        def pos_match(r, slots=slots, pos_label=pos_label):
+            if pos_label == "SP":
+                return _is_sp(r)
+            if pos_label == "RP":
+                parts = str(r.get("Position", "")).split(", ")
+                return any(s in parts for s in slots) and not _is_sp(r)
             parts = str(r.get("Position", "")).split(", ")
             return any(s in parts for s in slots)
 
@@ -369,12 +417,13 @@ def roster_alerts(pitchers, hitters, my_team):
     return alerts
 
 
-def my_upcoming_starts(pitchers, my_team):
+def my_upcoming_starts(pitchers, my_team, week_end=None):
     sp = [
         r for r in pitchers
         if r.get("FantasyTeam", "") == my_team
         and int(r.get("Dataset", 0)) == YEAR
         and r.get("PSP_Date", "") not in ("1999-01-01", "", None)
+        and (week_end is None or r.get("PSP_Date", "") <= week_end)
     ]
     return sorted(sp, key=lambda r: r.get("PSP_Date", ""))
 
@@ -523,8 +572,18 @@ def vp(val):
 
 def pos_stat_line(r, pos):
     """Build a muted stat line for a player in the positional breakdown."""
-    if pos in ("SP", "RP"):
-        specs = [("SVHD", 0), ("K", 0)] if pos == "RP" else [("ERA", 2), ("WHIP", 2), ("K", 0)]
+    if pos == "RP":
+        svhd = _n(r.get("ESPN_SVHD")) or _n(r.get("SVHD"))
+        k    = _n(r.get("ESPN_K"))    or _n(r.get("K"))
+        parts = []
+        if svhd >= 0: parts.append(f"SV+H {svhd:.0f}")
+        if k    >= 0: parts.append(f"K {k:.0f}")
+        if not parts:
+            return ""
+        line = " · ".join(parts)
+        return f'<div style="color:{MUTED};font-size:11px;margin-top:2px;">{line}</div>'
+    elif pos == "SP":
+        specs = [("ERA", 2), ("WHIP", 2), ("K", 0)]
     else:
         specs = [("HR", 0), ("RBI", 0), ("OPS", 3)]
 
@@ -1197,7 +1256,7 @@ _CAT_DISPLAY = {
 }
 
 
-def build_week_overview(matchup, week_cats, week_n, fa_sp, starts, days_elapsed, my_starts_by_day):
+def build_week_overview(matchup, week_cats, week_n, fa_sp, starts, days_elapsed, my_starts_by_day, week_end=None):
     bullets = []
 
     def _cat_label(key):
@@ -1214,15 +1273,17 @@ def build_week_overview(matchup, week_cats, week_n, fa_sp, starts, days_elapsed,
         cats_list    = matchup.get("categories", [])
         hit_wins = sum(1 for c in cats_list if c["cat"] in _HIT_CATS and c.get("result") == "W")
         hit_loss = sum(1 for c in cats_list if c["cat"] in _HIT_CATS and c.get("result") == "L")
+        hit_ties = sum(1 for c in cats_list if c["cat"] in _HIT_CATS and c.get("result") == "T")
         pit_wins = sum(1 for c in cats_list if c["cat"] in _PIT_CATS and c.get("result") == "W")
         pit_loss = sum(1 for c in cats_list if c["cat"] in _PIT_CATS and c.get("result") == "L")
+        pit_ties = sum(1 for c in cats_list if c["cat"] in _PIT_CATS and c.get("result") == "T")
         hit_color = GREEN if hit_wins > hit_loss else (RED if hit_loss > hit_wins else YELLOW)
         pit_color = GREEN if pit_wins > pit_loss else (RED if pit_loss > pit_wins else YELLOW)
         bullets.append(
             f'<span style="color:{status_color};font-weight:700;">{status_word} {cw}-{cl}-{ct}</span>'
             f' vs. {opp} through Day {days_elapsed} — '
-            f'<span style="color:{hit_color};">hitting {hit_wins}-{hit_loss}</span>, '
-            f'<span style="color:{pit_color};">pitching {pit_wins}-{pit_loss}</span>.'
+            f'<span style="color:{hit_color};">batting {hit_wins}-{hit_loss}-{hit_ties}</span>, '
+            f'<span style="color:{pit_color};">pitching {pit_wins}-{pit_loss}-{pit_ties}</span>.'
         )
 
     # Bullet 2: rotation coverage
@@ -1254,28 +1315,58 @@ def build_week_overview(matchup, week_cats, week_n, fa_sp, starts, days_elapsed,
             f' yet — check FA SP section below.'
         )
 
-    # Bullet 3: best FA SP pickup
+    # Bullet 3: best FA SP pickup — restrict to current matchup week
     if fa_sp:
-        best_qs  = max(fa_sp, key=lambda r: qs_probability(r) or 0)
-        top_score = fa_sp[0]
-        best_qsp = qs_probability(best_qs)
-        try:
-            best_day = datetime.strptime(best_qs.get("PSP_Date", ""), "%Y-%m-%d").strftime("%a")
-        except Exception:
-            best_day = "?"
-        if best_qsp and best_qsp >= 50:
-            qsp_color = GREEN if best_qsp >= 60 else YELLOW
-            fa_str = (
-                f'Best FA pickup: <span style="color:{TEXT};font-weight:700;">{best_qs["PlayerName"]}</span>'
-                f' ({best_day} start, QS <span style="color:{qsp_color};font-weight:700;">{best_qsp}%</span>)'
+        def _next_week_str():
+            best = max(fa_sp, key=lambda r: qs_probability(r) or 0)
+            qsp  = qs_probability(best)
+            try:
+                day = datetime.strptime(best.get("PSP_Date", ""), "%Y-%m-%d").strftime("%a %b %d")
+            except Exception:
+                day = "?"
+            s = (
+                f'<span style="color:{MUTED};">No FA starters this week</span>'
+                f' — next week: <span style="color:{TEXT};font-weight:700;">{best["PlayerName"]}</span>'
+                f' ({day}'
             )
-            if top_score.get("PlayerName") != best_qs.get("PlayerName"):
-                fa_str += (
-                    f' · highest score: <span style="color:{TEXT};font-weight:600;">'
-                    f'{top_score["PlayerName"]}</span>'
+            if qsp:
+                qc = GREEN if qsp >= 60 else (YELLOW if qsp >= 40 else MUTED)
+                s += f', QS <span style="color:{qc};font-weight:700;">{qsp}%</span>'
+            era = _n(best.get("ERA"))
+            if era > 0:
+                ec = GREEN if era < 3.50 else (YELLOW if era < 4.50 else MUTED)
+                s += f', ERA <span style="color:{ec};">{era:.2f}</span>'
+            kpct = _n(best.get("Kpct_P"))
+            if kpct > 0:
+                kc = GREEN if kpct >= 0.26 else (YELLOW if kpct >= 0.22 else TEXT)
+                s += f', K% <span style="color:{kc};">{kpct*100:.1f}%</span>'
+            s += ')'
+            return s
+
+        fa_sp_this_week = [r for r in fa_sp if week_end is None or r.get("PSP_Date", "") <= week_end]
+        if fa_sp_this_week:
+            best_qs   = max(fa_sp_this_week, key=lambda r: qs_probability(r) or 0)
+            top_score = fa_sp_this_week[0]
+            best_qsp  = qs_probability(best_qs)
+            try:
+                best_day = datetime.strptime(best_qs.get("PSP_Date", ""), "%Y-%m-%d").strftime("%a")
+            except Exception:
+                best_day = "?"
+            if best_qsp and best_qsp >= 50:
+                qsp_color = GREEN if best_qsp >= 60 else YELLOW
+                fa_str = (
+                    f'Best FA pickup: <span style="color:{TEXT};font-weight:700;">{best_qs["PlayerName"]}</span>'
+                    f' ({best_day} start, QS <span style="color:{qsp_color};font-weight:700;">{best_qsp}%</span>)'
                 )
+                if top_score.get("PlayerName") != best_qs.get("PlayerName"):
+                    fa_str += (
+                        f' · highest score: <span style="color:{TEXT};font-weight:600;">'
+                        f'{top_score["PlayerName"]}</span>'
+                    )
+            else:
+                fa_str = _next_week_str()
         else:
-            fa_str = f'<span style="color:{MUTED};">No high-confidence FA starters available this week.</span>'
+            fa_str = _next_week_str()
         bullets.append(fa_str)
 
     if not bullets:
@@ -1337,6 +1428,8 @@ def build_email(snap):
     current_week_num = matchup.get("week") or max((int(r.get("Week", 0)) for r in roto), default=0)
     weekly_avgs  = compute_weekly_avgs(roto, current_week_num)
     days_elapsed = datetime.now().weekday() + 1   # Mon=1 … Sun=7
+    _today = datetime.now().date()
+    week_end_str = (_today + timedelta(days=6 - _today.weekday())).strftime("%Y-%m-%d")
     week_roto = [r for r in roto if int(r.get("Week", 0)) == current_week_num]
     week_cats, week_n = category_ranks(week_roto, my_team)
     my_week_roto_pts = sum(
@@ -1483,7 +1576,7 @@ def build_email(snap):
   {kpi_cell("Record", wl_val)}
   {kpi_cell(f"Cats Wk {current_week_num}", f'<span style="color:{cat_wl_color};">{cat_wl}</span><div style="color:{MUTED};font-size:9px;margin-top:3px;">{cat_win_pct}</div>')}
   {kpi_cell("Roster", hc_str)}
-  {kpi_cell("Upcoming Starts", len(starts))}
+  {kpi_cell("Starts This Week", sum(1 for s in starts if s.get("PSP_Date","") <= week_end_str))}
 </tr>
 <tr style="border-top:1px solid {BORDER};">
   {kpi_cell_sm("Roto Trend", spark_cell_val, font_size="inherit", font_weight="normal")}
@@ -1526,6 +1619,12 @@ def build_email(snap):
             except Exception:
                 day_label = date_str[5:]
             count = len(day_pitchers)
+            next_wk_badge = (
+                f'<span style="color:{MUTED};font-size:9px;font-weight:700;'
+                f'background:rgba(100,116,139,0.15);border:1px solid rgba(100,116,139,0.3);'
+                f'border-radius:3px;padding:1px 5px;margin-left:8px;vertical-align:middle;">NEXT WK</span>'
+                if date_str > week_end_str else ""
+            )
             rows += (
                 f'<tr><td colspan="8" style="background:{SURFACE};padding:5px 10px;'
                 f'border-top:1px solid {BORDER};border-bottom:1px solid {BORDER};">'
@@ -1533,6 +1632,7 @@ def build_email(snap):
                 f'text-transform:uppercase;letter-spacing:.5px;">{day_label}</span>'
                 f'<span style="color:{MUTED};font-size:10px;margin-left:8px;">'
                 f'{count} start{"s" if count != 1 else ""}</span>'
+                f'{next_wk_badge}'
                 f'</td></tr>'
             )
             for r in day_pitchers:
@@ -1589,6 +1689,7 @@ def build_email(snap):
         r for r in pitchers
         if " ".join((r.get("FantasyTeam") or "").split()) == " ".join(my_team.split())
         and "RP" in str(r.get("Position", ""))
+        and not _is_sp(r)
     ]
     _rp_best = {}
     _dataset_rank = {YEAR: 4, 30: 3, 15: 2, 7: 1}
@@ -1602,23 +1703,36 @@ def build_email(snap):
         r["_rp_score"] = rp_score(r)
 
     if my_rp:
-        rp_rows = ""
-        for i, r in enumerate(my_rp):
+        def _rp_row(r, i, score_key="_rp_score"):
             bg   = f"background:{SURFACE2};" if i % 2 else ""
             era  = _n(r.get("ERA"))
             whip = _n(r.get("WHIP"))
-            rp_rows += (
+            svhd = _n(r.get("ESPN_SVHD")) or _n(r.get("SVHD"))
+            k    = _n(r.get("ESPN_K"))    or _n(r.get("K"))
+            w    = _n(r.get("ESPN_W"))    or _n(r.get("W"))
+            ds   = int(r.get("Dataset", 0) or 0)
+            ds_label = {30: "30d", 15: "15d", 7: "7d"}.get(ds, "")
+            no_espn = _n(r.get("ESPN_GP")) <= 0
+            ds_badge = (
+                f'<span style="color:{MUTED};font-size:9px;font-weight:600;'
+                f'background:rgba(100,116,139,0.12);border:1px solid rgba(100,116,139,0.25);'
+                f'border-radius:3px;padding:1px 4px;margin-left:5px;vertical-align:middle;">'
+                f'{ds_label}</span>'
+            ) if ds_label and no_espn else ""
+            return (
                 f'<tr style="{bg}">'
-                f'<td style="{TD_S}font-weight:600;">{team_logo(r.get("Team"))}{r.get("PlayerName","")}{inj_tag(r)}</td>'
+                f'<td style="{TD_S}font-weight:600;">{team_logo(r.get("Team"))}{r.get("PlayerName","")}{inj_tag(r)}{ds_badge}</td>'
                 f'<td style="{TDC}color:{MUTED};">{r.get("Position","")}</td>'
-                f'<td style="{TDC}">{v(r.get("SVHD"), 0)}</td>'
-                f'<td style="{TDC}">{v(r.get("K"), 0)}</td>'
-                f'<td style="{TDC}">{v(r.get("W"), 0)}</td>'
+                f'<td style="{TDC}">{v(svhd, 0)}</td>'
+                f'<td style="{TDC}">{v(k, 0)}</td>'
+                f'<td style="{TDC}">{v(w, 0)}</td>'
                 f'<td style="{TDC}">{f"{era:.2f}" if era > 0 else "—"}</td>'
                 f'<td style="{TDC}">{f"{whip:.2f}" if whip > 0 else "—"}</td>'
-                f'<td style="{TDC}">{badge(r["_rp_score"])}</td>'
+                f'<td style="{TDC}">{badge(r[score_key])}</td>'
                 f'</tr>'
             )
+
+        rp_rows = "".join(_rp_row(r, i) for i, r in enumerate(my_rp))
         my_rp_table = (
             f'<table style="width:100%;border-collapse:collapse;margin-bottom:24px;font-size:13px;">'
             f'<thead><tr>'
@@ -1632,7 +1746,7 @@ def build_email(snap):
             f'<th style="{TH_S}text-align:center;">Score</th>'
             f'</tr></thead><tbody>{rp_rows}</tbody></table>'
         )
-        my_rp_section = section_head("My Relief Pitchers", "Rostered RP · ranked by SV+H, K, W, ERA, WHIP") + my_rp_table
+        my_rp_section = section_head("My Relief Pitchers", "Rostered RP · SV+H/K/W season (ESPN) · ERA/WHIP from best dataset") + my_rp_table
     else:
         my_rp_section = ""
 
@@ -1662,7 +1776,7 @@ def build_email(snap):
                 day_label = date_str[5:]
             count = len(day_pitchers)
             my_count = my_starts_by_day.get(date_str, 0)
-            thin_day = my_count < 2
+            thin_day = my_count < 2 and date_str <= week_end_str
             if my_count == 0:
                 my_starts_label, badge_color = "0 my starts", RED
             elif my_count == 1:
@@ -1672,6 +1786,12 @@ def build_email(snap):
             thin_badge = (
                 f'<span style="color:{badge_color};font-size:10px;font-weight:600;'
                 f'margin-left:10px;">⚑ {my_starts_label}</span>'
+            ) if date_str <= week_end_str else ""
+            next_wk_badge = (
+                f'<span style="color:{MUTED};font-size:9px;font-weight:700;'
+                f'background:rgba(100,116,139,0.15);border:1px solid rgba(100,116,139,0.3);'
+                f'border-radius:3px;padding:1px 5px;margin-left:8px;vertical-align:middle;">NEXT WK</span>'
+                if date_str > week_end_str else ""
             )
             rows += (
                 f'<tr><td colspan="9" style="background:{SURFACE};padding:5px 10px;'
@@ -1681,6 +1801,7 @@ def build_email(snap):
                 f'<span style="color:{MUTED};font-size:10px;margin-left:8px;">'
                 f'{count} FA start{"s" if count != 1 else ""}</span>'
                 f'{thin_badge}'
+                f'{next_wk_badge}'
                 f'</td></tr>'
             )
             for r in day_pitchers:
@@ -1764,18 +1885,29 @@ def build_email(snap):
 
     # ── FA: Relief Pitchers ────────────────────────────────────────────────────
     if fa_rp:
-        rows = ""
-        for i, r in enumerate(fa_rp):
+        def _fa_rp_row(r, i):
             bg   = f"background:{SURFACE2};" if i % 2 else ""
             era  = _n(r.get("ERA"))
             whip = _n(r.get("WHIP"))
-            rows += (
+            svhd = _n(r.get("ESPN_SVHD")) or _n(r.get("SVHD"))
+            k    = _n(r.get("ESPN_K"))    or _n(r.get("K"))
+            w    = _n(r.get("ESPN_W"))    or _n(r.get("W"))
+            ds   = int(r.get("Dataset", 0) or 0)
+            ds_label = {30: "30d", 15: "15d", 7: "7d"}.get(ds, "")
+            no_espn = _n(r.get("ESPN_GP")) <= 0
+            ds_badge = (
+                f'<span style="color:{MUTED};font-size:9px;font-weight:600;'
+                f'background:rgba(100,116,139,0.12);border:1px solid rgba(100,116,139,0.25);'
+                f'border-radius:3px;padding:1px 4px;margin-left:5px;vertical-align:middle;">'
+                f'{ds_label}</span>'
+            ) if ds_label and no_espn else ""
+            return (
                 f'<tr style="{bg}">'
-                f'<td style="{TD_S}font-weight:600;">{team_logo(r.get("Team"))}{r.get("PlayerName","")}{inj_tag(r)}</td>'
+                f'<td style="{TD_S}font-weight:600;">{team_logo(r.get("Team"))}{r.get("PlayerName","")}{inj_tag(r)}{ds_badge}</td>'
                 f'<td style="{TDC}color:{MUTED};">{r.get("Position","")}</td>'
-                f'<td style="{TDC}">{v(r.get("SVHD"), 0)}</td>'
-                f'<td style="{TDC}">{v(r.get("K"), 0)}</td>'
-                f'<td style="{TDC}">{v(r.get("W"), 0)}</td>'
+                f'<td style="{TDC}">{v(svhd, 0)}</td>'
+                f'<td style="{TDC}">{v(k, 0)}</td>'
+                f'<td style="{TDC}">{v(w, 0)}</td>'
                 f'<td style="{TDC}">{f"{era:.2f}" if era > 0 else "—"}</td>'
                 f'<td style="{TDC}">{f"{whip:.2f}" if whip > 0 else "—"}</td>'
                 f'<td style="{TDC}">{badge(r["_rp_score"])}</td>'
@@ -1792,7 +1924,7 @@ def build_email(snap):
             f'<th style="{TH_S}text-align:center;">ERA</th>'
             f'<th style="{TH_S}text-align:center;">WHIP</th>'
             f'<th style="{TH_S}text-align:center;">Score</th>'
-            f'</tr></thead><tbody>{rows}</tbody></table>'
+            f'</tr></thead><tbody>{"".join(_fa_rp_row(r,i) for i,r in enumerate(fa_rp))}</tbody></table>'
         )
     else:
         rp_table = f'<p style="color:{MUTED};font-style:italic;margin-bottom:24px;">No FA relievers found.</p>'
@@ -2007,7 +2139,7 @@ def build_email(snap):
 
     # ── Final assembly ─────────────────────────────────────────────────────────
     week_overview = build_week_overview(
-        matchup, week_cats, week_n, fa_sp, starts, days_elapsed, my_starts_by_day
+        matchup, week_cats, week_n, fa_sp, starts, days_elapsed, my_starts_by_day, week_end=week_end_str
     )
     body_parts += [
         week_overview,
