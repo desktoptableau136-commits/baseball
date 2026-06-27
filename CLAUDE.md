@@ -17,6 +17,9 @@ python send_digest.py --dry-run
 # Instant preview with no network calls
 python send_digest.py --dry-run --no-refresh
 
+# View another team's roster digest (skips Category Pulse and Matchup sections)
+python send_digest.py --dry-run --no-refresh --team "Houck Tuah"
+
 # Refresh data only (writes data/snapshot.json)
 python fetch_data.py
 

@@ -1437,14 +1437,14 @@ def build_week_overview(matchup, week_cats, week_n, fa_sp, starts, days_elapsed,
 
 # ── EMAIL BUILDER ─────────────────────────────────────────────────────────────
 
-def build_email(snap):
-    my_team       = snap.get("my_team", MY_TEAM)
+def build_email(snap, override_team=None):
+    my_team       = override_team if override_team else snap.get("my_team", MY_TEAM)
     pitchers      = snap.get("pitchers", [])
     hitters       = snap.get("hitters", [])
     roto          = snap.get("roto", [])
     standings     = snap.get("standings", [])
     refreshed     = snap.get("refreshed_at", "")[:10]
-    matchup       = snap.get("current_matchup", {})
+    matchup       = {} if override_team else snap.get("current_matchup", {})
     recent_hitting  = snap.get("recent_hitting",  [])
     recent_pitching = snap.get("recent_pitching", [])
     weekly_results  = snap.get("weekly_results",  {})
@@ -2352,11 +2352,17 @@ def send_email(html, subject):
 def main():
     dry_run    = "--dry-run"    in sys.argv
     no_refresh = "--no-refresh" in sys.argv
+    override_team = None
+    if "--team" in sys.argv:
+        idx = sys.argv.index("--team")
+        if idx + 1 < len(sys.argv):
+            override_team = sys.argv[idx + 1]
 
     LOG_DIR.mkdir(exist_ok=True)
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    team_label = override_team or "Guerrero Warfare"
     print("=" * 60)
-    print("  Guerrero Warfare Daily Digest")
+    print(f"  {team_label} Daily Digest")
     print(f"  {ts}")
     print("=" * 60)
 
@@ -2381,8 +2387,9 @@ def main():
     with open(SNAPSHOT) as f:
         snap = json.load(f)
 
-    html    = build_email(snap)
-    subject = f"⚾ Fantasy Baseball Digest — {datetime.now().strftime('%b %d')}"
+    html    = build_email(snap, override_team=override_team)
+    team_label = override_team or "Guerrero Warfare"
+    subject = f"⚾ {team_label} Digest — {datetime.now().strftime('%b %d')}"
 
     if dry_run:
         out = Path(__file__).parent / "digest_preview.html"
