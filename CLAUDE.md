@@ -78,7 +78,9 @@ Two files; one intermediate artifact:
 
 **Probable starters:** The primary method uses two MLB API calls (range schedule → batch hydrate). The +6-day rotation projection fills unannounced slots. A live-feed fallback exists if the batch returns nothing.
 
-**Pitcher hot/cold uses 15-day ERA:** `build_pitcher_hot_cold_section`, My Upcoming Starts, and FA Starting Pitchers all compare season ERA vs 15-day ERA (from `p15` index — Dataset==15 rows). The 7-day window is too short for SPs who start infrequently. The `p15` index is built alongside `rec_p` in the main build function. Column header is "L15 ERA".
+**Pitcher hot/cold uses 15-day ERA:** `build_pitcher_hot_cold_section`, My Upcoming Starts, and FA Starting Pitchers all compare season ERA vs 15-day ERA (from `p15` index — Dataset==15 rows). The 7-day window is too short for SPs who start infrequently. When a player is absent from the FP 15-day top 300 (fringe starters like Davis Martin), the code falls back to `rec_p` — the pybaseball Baseball Reference 15-day scrape stored in `recent_pitching`. `p15` and `rec_p` are both built in the main build function. Column header is "L15 ERA". `fetch_recent_pitcher_stats` fetches 15 days (not 7) to match this window.
+
+**Statcast name matching:** `lf_to_name()` in fetch_data.py converts Baseball Savant "Last, First" names to "First Last" AND strips accents (e.g. `Ramírez, José` → `Jose Ramirez`) so the merge against FantasyPros ASCII names succeeds. Without accent stripping, accented-name players (Jose Ramirez, etc.) silently lose all Statcast data (xwOBA, Barrel%, SprintSpeed, HR_Probability).
 
 **Weekly matchup is Monday–Sunday:** `week_end_str` is computed as the Sunday of the current week (`today + timedelta(days=6 - today.weekday())`). FA SP sections and My Upcoming Starts show all starts including next week, but dates past Sunday get a `NEXT WK` badge. The KPI "Starts This Week" and Week at a Glance bullet 3 count/recommend only within the current matchup week.
 
@@ -94,6 +96,8 @@ Two files; one intermediate artifact:
 - `hitter_score(r)` → 0–100. Prefers wRC+ over OPS. Uses xwOBA, sprint speed, Barrel%, ISO, HR_Probability.
 - `sp_fa_score(r)` → pitcher_score + start bonus (scaled 8–22 by QS probability). Returns 0 if `not _is_sp(r)`.
 - `qs_probability(r)` → 1–99. Calibrated to league-average ~38%, ace ~75%. Uses IP/G (not IP/GS).
+- `_fmt_ip(ip_decimal)` → baseball IP string. Converts true decimal (5.333) to notation (5.1). Formula: `whole = int(d); outs = round((d-whole)*3); if outs>=3: whole+=1, outs=0`. Used in FA SP Proj. Line display.
+- `band_divider(label, color)` → full-width `<div>` with centered label between `BORDER` lines. Used at band boundaries in final assembly.
 
 ## Key data fields
 
@@ -107,23 +111,36 @@ Numeric missing values are stored as `-1` (not `NaN`) after the merge pipelines 
 
 ## Digest section order (send_digest.py body_parts)
 
-Grouped into four bands: Triage → Week Intelligence → My Team → Action → Season Context.
+Five bands separated by full-width `band_divider()` rules (centered label between `BORDER` lines). The Triage divider only renders when `alert_section` is non-empty.
 
-1. Roster Alerts (conditional — only renders when a player is on IL)
+**⚑ ALERTS** (conditional)
+1. Roster Alerts
+
+**MY ROSTER**
 2. Week at a Glance
 3. Category Pulse (projection cards)
-4. Matchup (score banner + category table)
-5. This Week's Category Rankings
+4. Current Matchup — category rankings (renamed from "This Week's Category Rankings"; sits above the score banner)
+5. Matchup (score banner + category table)
+
+**MY ROSTER**
 6. My Upcoming Starts
 7. My Relief Pitchers
 8. Pitcher Hot/Cold (15-day vs season ERA)
 9. Roster Hot/Cold (hitters, 7-day vs season OPS)
 10. Positional Breakdown
+
+**FREE AGENTS**
 11. FA Pickup — Starting Pitchers
 12. FA Pickup — Relief Pitchers
 13. FA Pickup — Hitters
+
+**SEASON**
 14. My Season Category Rankings
 15. League Luck Standings
+
+**FA Starting Pitchers table columns:** Pitcher · Proj. Line · Matchup · Opp OPS · QS% · ERA · L15 ERA · K% · Score. "Pos" was removed (redundant for SPs). "Proj. Line" shows projected `IP · ER · K` per start, with IP in baseball notation via `_fmt_ip()` (decimal 5.333 → "5.1", 5.667 → "5.2"). Date header rows span `colspan="9"` with background on `<tr>` (not `<td>`) for full-width highlight.
+
+**My Upcoming Starts badges:** QS (green) and 5K+ (yellow) badges always shown next to pitcher name. QS fires at qs_probability ≥ 51%; 5K+ fires at K/IP ≥ 0.90 or K% ≥ 24% with IP/G ≥ 4.5.
 
 ## Color palette
 

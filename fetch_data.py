@@ -91,10 +91,11 @@ def log(msg):
 
 
 def lf_to_name(x):
-    """Convert 'Last, First' format to 'First Last'."""
+    """Convert 'Last, First' format to 'First Last', stripping accents to match FantasyPros ASCII names."""
     if isinstance(x, str) and ", " in x:
         parts = x.split(", ", 1)
-        return f"{parts[1].strip()} {parts[0].strip()}"
+        name = f"{parts[1].strip()} {parts[0].strip()}"
+        return "".join(c for c in unicodedata.normalize("NFD", name) if unicodedata.category(c) != "Mn")
     return x
 
 
@@ -610,7 +611,7 @@ def get_sprint_speed(year: int) -> pd.DataFrame:
         if combo_col:
             df["PlayerName"] = df[combo_col].apply(lf_to_name)
         elif last_col and first_col:
-            df["PlayerName"] = df[first_col].str.strip() + " " + df[last_col].str.strip()
+            df["PlayerName"] = (df[first_col].str.strip() + ", " + df[last_col].str.strip()).apply(lf_to_name)
         if "sprint_speed" in df.columns:
             df = df.rename(columns={"sprint_speed": "SprintSpeed"})
         if "PlayerName" in df.columns and "SprintSpeed" in df.columns:
@@ -1159,8 +1160,8 @@ def main():
     recent_hitting = fetch_recent_hitter_stats(days=7)
     print(f"       {len(recent_hitting)} hitters with recent stats")
 
-    print("\n[9/10] Fetching last-7-day pitcher stats...")
-    recent_pitching = fetch_recent_pitcher_stats(days=7)
+    print("\n[9/10] Fetching last-15-day pitcher stats...")
+    recent_pitching = fetch_recent_pitcher_stats(days=15)
     print(f"       {len(recent_pitching)} pitchers with recent stats")
 
     print("\n[10/10] Writing snapshot...")

@@ -559,6 +559,28 @@ def v(val, dec=2):
         return f'<span style="color:{MUTED}">—</span>'
 
 
+def _fmt_ip(ip_decimal):
+    """Convert decimal IP to baseball notation: 5.333 → '5.1', 5.667 → '5.2', 6.0 → '6.0'."""
+    whole = int(ip_decimal)
+    outs = round((ip_decimal - whole) * 3)
+    if outs >= 3:
+        whole += 1
+        outs = 0
+    return f"{whole}.{outs}"
+
+
+def band_divider(label, color=None):
+    c = color or MUTED
+    return (
+        f'<div style="display:flex;align-items:center;margin:32px 0 22px;">'
+        f'<div style="flex:1;height:1px;background:{BORDER};"></div>'
+        f'<span style="padding:0 14px;color:{c};font-size:10px;font-weight:700;'
+        f'letter-spacing:2px;text-transform:uppercase;">{label}</span>'
+        f'<div style="flex:1;height:1px;background:{BORDER};"></div>'
+        f'</div>'
+    )
+
+
 def vp(val):
     """Format a decimal-stored percentage (0.28 → 28.0%)."""
     try:
@@ -962,7 +984,7 @@ def build_hot_cold_section(hitters, recent_hitting, my_team):
     )
 
 
-def build_pitcher_hot_cold_section(pitchers, my_team):
+def build_pitcher_hot_cold_section(pitchers, my_team, rec_p=None):
     my_key = " ".join(my_team.split())
 
     # Season rows for my pitchers
@@ -975,7 +997,7 @@ def build_pitcher_hot_cold_section(pitchers, my_team):
     if not season:
         return ""
 
-    # 15-day rows as "recent" — wide enough window for infrequent starters
+    # 15-day rows as "recent"; fall back to pybaseball 15-day scrape for fringe players
     recent_15 = {
         r["PlayerName"]: r for r in pitchers
         if int(r.get("Dataset", 0) or 0) == 15
@@ -984,7 +1006,7 @@ def build_pitcher_hot_cold_section(pitchers, my_team):
     rows_data = []
     for name, r in season.items():
         season_era = _n(r.get("ERA"))
-        rec        = recent_15.get(name, {})
+        rec        = recent_15.get(name) or (rec_p or {}).get(name, {})
         recent_era = _n(rec.get("ERA")) if rec else None
         recent_ip  = _n(rec.get("IP"))  if rec else 0
 
@@ -1601,7 +1623,7 @@ def build_email(snap):
 <table style="width:100%;border-collapse:collapse;background:{SURFACE};border-bottom:2px solid {BORDER};">
 <tr>
   {kpi_cell("Record", wl_val)}
-  {kpi_cell(f"Cats Wk {current_week_num}", f'<span style="color:{cat_wl_color};">{cat_wl}</span><div style="color:{MUTED};font-size:9px;margin-top:3px;">{cat_win_pct}</div>')}
+  {kpi_cell("Current Matchup", f'<span style="color:{cat_wl_color};">{cat_wl}</span><div style="color:{MUTED};font-size:9px;margin-top:3px;">{cat_win_pct}</div>')}
   {kpi_cell("Roster", hc_str)}
   {kpi_cell("Starts This Week", sum(1 for s in starts if s.get("PSP_Date","") <= week_end_str))}
 </tr>
@@ -1653,7 +1675,8 @@ def build_email(snap):
                 if date_str > week_end_str else ""
             )
             rows += (
-                f'<tr><td colspan="8" style="background:{SURFACE};padding:5px 10px;'
+                f'<tr style="background:{SURFACE};">'
+                f'<td colspan="8" style="padding:5px 10px;'
                 f'border-top:1px solid {BORDER};border-bottom:1px solid {BORDER};">'
                 f'<span style="color:{ACCENT};font-size:11px;font-weight:700;'
                 f'text-transform:uppercase;letter-spacing:.5px;">{day_label}</span>'
@@ -1667,7 +1690,7 @@ def build_email(snap):
                 row_idx += 1
                 ha   = r.get("PSP_HomeVAway", "")
                 name = r.get("PlayerName", "")
-                p15r = p15.get(name, {})
+                p15r = p15.get(name) or rec_p.get(name, {})
                 qsp = qs_probability(r)
                 qsp_color = GREEN if qsp and qsp >= 60 else (TEXT if qsp and qsp >= 40 else MUTED)
                 qsp_str = f'<span style="color:{qsp_color};font-weight:700;">{qsp}%</span>' if qsp else "—"
@@ -1678,9 +1701,25 @@ def build_email(snap):
                     if _kpct_s_top and _kpct_s > 0
                     else (f"{_kpct_s*100:.1f}%" if _kpct_s > 0 else f'<span style="color:{MUTED}">—</span>')
                 )
+                qs_fires_s = bool(qsp and qsp >= 51)
+                k_fires_s  = (_n(r.get("K/IP")) >= 0.90 or _n(r.get("Kpct_P")) >= 0.24) and _n(r.get("IP_per_G")) >= 4.5
+                start_badges = []
+                if qs_fires_s:
+                    start_badges.append(
+                        f'<span style="font-size:9px;font-weight:700;color:{GREEN};'
+                        f'background:rgba(34,197,94,0.12);border:1px solid rgba(34,197,94,0.35);'
+                        f'border-radius:3px;padding:1px 5px;margin-left:5px;vertical-align:middle;">QS</span>'
+                    )
+                if k_fires_s:
+                    start_badges.append(
+                        f'<span style="font-size:9px;font-weight:700;color:{YELLOW};'
+                        f'background:rgba(245,158,11,0.12);border:1px solid rgba(245,158,11,0.35);'
+                        f'border-radius:3px;padding:1px 5px;margin-left:5px;vertical-align:middle;">5K+</span>'
+                    )
+                start_badge = "".join(start_badges)
                 rows += (
                     f'<tr style="{bg}">'
-                    f'<td style="{TD_S}font-weight:600;">{team_logo(r.get("Team"))}{name}{inj_tag(r)}</td>'
+                    f'<td style="{TD_S}font-weight:600;">{team_logo(r.get("Team"))}{name}{inj_tag(r)}{start_badge}</td>'
                     f'<td style="{TDC}">{opp_logo(ha)}{ha}'
                     f'{"&nbsp;<span style=\"color:#888;font-size:11px\">(proj.)</span>" if r.get("PSP_Projected") else ""}</td>'
                     f'<td style="{TDC}">{v(r.get("Team_OPS_Value"), 3)}</td>'
@@ -1834,7 +1873,8 @@ def build_email(snap):
                 if date_str > week_end_str else ""
             )
             rows += (
-                f'<tr><td colspan="9" style="background:{SURFACE};padding:5px 10px;'
+                f'<tr style="background:{SURFACE};">'
+                f'<td colspan="9" style="padding:5px 10px;'
                 f'border-top:1px solid {BORDER};border-bottom:1px solid {BORDER};">'
                 f'<span style="color:{ACCENT};font-size:11px;font-weight:700;'
                 f'text-transform:uppercase;letter-spacing:.5px;">{day_label}</span>'
@@ -1848,7 +1888,8 @@ def build_email(snap):
                 bg = f"background:{SURFACE2};" if row_idx % 2 else ""
                 row_idx += 1
                 ha = r.get("PSP_HomeVAway", "")
-                p15r = p15.get(r.get("PlayerName", ""), {})
+                _pname = r.get("PlayerName", "")
+                p15r = p15.get(_pname) or rec_p.get(_pname, {})
                 qsp = qs_probability(r)
                 qsp_color = GREEN if qsp and qsp >= 60 else (TEXT if qsp and qsp >= 40 else MUTED)
                 qsp_str = f'<span style="color:{qsp_color};font-weight:700;">{qsp}%</span>' if qsp else "—"
@@ -1890,10 +1931,19 @@ def build_email(snap):
                     if _kpct_top and _kpct_val > 0
                     else (f"{_kpct_val*100:.1f}%" if _kpct_val > 0 else f'<span style="color:{MUTED}">—</span>')
                 )
+                _ip_g = _n(r.get("IP_per_G"))
+                _era_v = _n(r.get("ERA"))
+                _kip_v = _n(r.get("K/IP"))
+                if _ip_g > 0:
+                    _proj_er = round(_era_v * _ip_g / 9) if _era_v > 0 else 0
+                    _proj_k  = round(_kip_v * _ip_g) if _kip_v > 0 else 0
+                    proj_line_str = f'<span style="color:{MUTED};font-size:10px;white-space:nowrap;">{_fmt_ip(_ip_g)}&nbsp;IP&thinsp;·&thinsp;{_proj_er}&nbsp;ER&thinsp;·&thinsp;{_proj_k}K</span>'
+                else:
+                    proj_line_str = f'<span style="color:{MUTED}">—</span>'
                 rows += (
                     f'<tr style="{bg}">'
                     f'<td style="{name_border}{TD_S}font-weight:600;">{team_logo(r.get("Team"))}{r.get("PlayerName","")}{inj_tag(r)}{pickup_badge}</td>'
-                    f'<td style="{TDC}color:{MUTED};">{r.get("Position","")}</td>'
+                    f'<td style="{TDC}">{proj_line_str}</td>'
                     f'<td style="{TDC}">{opp_logo(ha)}{ha}'
                     f'{"&nbsp;<span style=\"color:#888;font-size:11px\">(proj.)</span>" if r.get("PSP_Projected") else ""}</td>'
                     f'<td style="{TDC}">{v(r.get("Team_OPS_Value"), 3)}</td>'
@@ -1909,7 +1959,7 @@ def build_email(snap):
             f'<table style="width:100%;border-collapse:collapse;font-size:13px;">'
             f'<thead><tr>'
             f'<th style="{TH_S}">Pitcher</th>'
-            f'<th style="{TH_S}text-align:center;">Pos</th>'
+            f'<th style="{TH_S}text-align:center;">Proj. Line</th>'
             f'<th style="{TH_S}text-align:center;">Matchup</th>'
             f'<th style="{TH_S}text-align:center;">Opp OPS</th>'
             f'<th style="{TH_S}text-align:center;">QS%</th>'
@@ -2065,7 +2115,7 @@ def build_email(snap):
             f'</td>'
         )
     week_cat_section = (
-        section_head("This Week's Category Rankings", f"Week {current_week_num} · {my_week_roto_pts:.1f} roto pts · vs. this week's matchup") +
+        section_head("Current Matchup", f"Week {current_week_num} · {my_week_roto_pts:.1f} roto pts · vs. this week's matchup") +
         f'<table style="width:100%;border-collapse:collapse;background:{SURFACE};border-radius:6px;margin-bottom:24px;overflow:hidden;">'
         f'<tr>{week_cat_cells}</tr></table>'
     )
@@ -2188,20 +2238,24 @@ def build_email(snap):
         matchup, week_cats, week_n, fa_sp, starts, days_elapsed, my_starts_by_day, week_end=week_end_str
     )
     body_parts += [
+        band_divider("⚑  ALERTS", RED) if alert_section else "",                         # TRIAGE band header
         alert_section,                                                                    # 1  TRIAGE
         week_overview,                                                                    # 2  WEEK INTELLIGENCE
         build_category_pulse(matchup, weekly_avgs=weekly_avgs, days_elapsed=days_elapsed), # 3
-        build_matchup_section(matchup, logos=team_logos),                                # 4
-        week_cat_section,                                                                 # 5
-        starts_section,                                                                   # 6  MY TEAM
+        week_cat_section,                                                                 # 4  (before matchup panel)
+        build_matchup_section(matchup, logos=team_logos),                                # 5
+        band_divider("MY ROSTER"),                                                        # MY TEAM band header
+        starts_section,                                                                   # 6
         my_rp_section,                                                                    # 7
-        build_pitcher_hot_cold_section(pitchers, my_team),                               # 8
+        build_pitcher_hot_cold_section(pitchers, my_team, rec_p),                        # 8
         build_hot_cold_section(hitters, recent_hitting, my_team),                        # 9
         pos_section,                                                                      # 10
-        fa_sp_section,                                                                    # 11 ACTION
+        band_divider("FREE AGENTS"),                                                      # ACTION band header
+        fa_sp_section,                                                                    # 11
         fa_rp_section,                                                                    # 12
         fa_hit_section,                                                                   # 13
-        cat_section,                                                                      # 14 SEASON CONTEXT
+        band_divider("SEASON"),                                                           # SEASON CONTEXT band header
+        cat_section,                                                                      # 14
         luck_section,                                                                     # 15
     ]
     body = "\n".join(p for p in body_parts if p)
