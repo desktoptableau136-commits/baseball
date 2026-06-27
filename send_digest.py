@@ -798,7 +798,7 @@ _CAT_DEC = {
 }
 
 
-def build_matchup_section(matchup, logos=None):
+def build_matchup_section(matchup, logos=None, my_team=MY_TEAM):
     if not matchup or not matchup.get("categories"):
         return ""
 
@@ -820,7 +820,7 @@ def build_matchup_section(matchup, logos=None):
     opp_short = opp[:16] + ("…" if len(opp) > 16 else "")
 
     def _norm(n): return " ".join(n.split())
-    my_logo_html  = fantasy_logo(logos.get(_norm(MY_TEAM), ""), 36, MY_TEAM)
+    my_logo_html  = fantasy_logo(logos.get(_norm(my_team), ""), 36, my_team)
     opp_logo_html = fantasy_logo(logos.get(_norm(opp), ""), 36, opp)
 
     score_banner = (
@@ -828,7 +828,7 @@ def build_matchup_section(matchup, logos=None):
         f'border-radius:6px;margin-bottom:12px;">'
         f'<tr>'
         f'<td style="width:42%;padding:12px 16px;font-size:13px;font-weight:800;color:{ACCENT};text-align:center;">'
-        f'{my_logo_html}{MY_TEAM} &#8592;</td>'
+        f'{my_logo_html}{my_team} &#8592;</td>'
         f'<td style="width:16%;text-align:center;padding:12px 8px;">'
         f'<div style="font-size:18px;font-weight:900;color:{score_color};">{score_str}</div>'
         f'<div style="font-size:10px;color:{MUTED};text-transform:uppercase;letter-spacing:.5px;">{status}</div>'
@@ -874,7 +874,7 @@ def build_matchup_section(matchup, logos=None):
     table = (
         f'<table style="width:100%;border-collapse:collapse;margin-bottom:24px;font-size:13px;">'
         f'<thead><tr>'
-        f'<th style="{TH_S}width:42%;text-align:center;">{MY_TEAM}</th>'
+        f'<th style="{TH_S}width:42%;text-align:center;">{my_team}</th>'
         f'<th style="{TH_S}width:16%;text-align:center;"></th>'
         f'<th style="{TH_S}width:42%;text-align:center;">{opp_short}</th>'
         f'</tr></thead><tbody>{rows}</tbody></table>'
@@ -1444,7 +1444,8 @@ def build_email(snap, override_team=None):
     roto          = snap.get("roto", [])
     standings     = snap.get("standings", [])
     refreshed     = snap.get("refreshed_at", "")[:10]
-    matchup       = {} if override_team else snap.get("current_matchup", {})
+    all_matchups  = snap.get("all_matchups", {})
+    matchup       = all_matchups.get(" ".join(my_team.split())) or snap.get("current_matchup", {})
     recent_hitting  = snap.get("recent_hitting",  [])
     recent_pitching = snap.get("recent_pitching", [])
     weekly_results  = snap.get("weekly_results",  {})
@@ -2258,7 +2259,7 @@ def build_email(snap, override_team=None):
         week_overview,                                                                    # 2  WEEK INTELLIGENCE
         build_category_pulse(matchup, weekly_avgs=weekly_avgs, days_elapsed=days_elapsed), # 3
         week_cat_section,                                                                 # 4  (before matchup panel)
-        build_matchup_section(matchup, logos=team_logos),                                # 5
+        build_matchup_section(matchup, logos=team_logos, my_team=my_team),               # 5
         band_divider("MY ROSTER"),                                                        # MY TEAM band header
         starts_section,                                                                   # 6
         my_rp_section,                                                                    # 7

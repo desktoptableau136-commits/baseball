@@ -1048,65 +1048,64 @@ def get_standings(league) -> list:
 
 # â”€â”€ CURRENT WEEK MATCHUP â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-def get_current_matchup(league, my_team_name: str) -> dict:
+def get_all_matchups(league) -> dict:
+    """Return current-week matchups for all teams as {normalized_team_name: matchup_dict}."""
     current_week = getattr(league, "currentMatchupPeriod", None)
     if not current_week:
         return {}
     try:
         boxes = league.box_scores(current_week)
     except Exception as e:
-        log(f"  Current matchup fetch failed: {e}")
+        log(f"  Matchup fetch failed: {e}")
         return {}
 
-    my_normalized    = " ".join(my_team_name.split())
     LOWER_BETTER_CATS = {"ERA", "WHIP", "B_SO"}
+    all_matchups = {}
 
     for b in boxes:
         home_name = b.home_team.team_name
         away_name = b.away_team.team_name
-        if my_normalized not in (" ".join(home_name.split()), " ".join(away_name.split())):
-            continue
 
-        my_side  = "home" if " ".join(home_name.split()) == my_normalized else "away"
-        opp_side = "away" if my_side == "home" else "home"
-        opp_name = away_name if my_side == "home" else home_name
+        for my_name, opp_name, my_side, opp_side in [
+            (home_name, away_name, "home", "away"),
+            (away_name, home_name, "away", "home"),
+        ]:
+            my_stats  = getattr(b, f"{my_side}_stats",  {}) or {}
+            opp_stats = getattr(b, f"{opp_side}_stats", {}) or {}
 
-        my_stats  = getattr(b, f"{my_side}_stats",  {}) or {}
-        opp_stats = getattr(b, f"{opp_side}_stats", {}) or {}
+            wins = losses = ties = 0
+            categories = []
+            for cat in ROTO_CATS:
+                my_info  = my_stats.get(cat,  {}) or {}
+                opp_info = opp_stats.get(cat, {}) or {}
+                my_val   = float(my_info.get("value")  or 0)
+                opp_val  = float(opp_info.get("value") or 0)
 
-        wins = losses = ties = 0
-        categories = []
-        for cat in ROTO_CATS:
-            my_info  = my_stats.get(cat,  {}) or {}
-            opp_info = opp_stats.get(cat, {}) or {}
-            my_val   = float(my_info.get("value")  or 0)
-            opp_val  = float(opp_info.get("value") or 0)
-
-            if my_val == opp_val:
-                result = "T"; ties += 1
-            elif cat in LOWER_BETTER_CATS:
-                if my_val < opp_val:
-                    result = "W"; wins += 1
+                if my_val == opp_val:
+                    result = "T"; ties += 1
+                elif cat in LOWER_BETTER_CATS:
+                    if my_val < opp_val:
+                        result = "W"; wins += 1
+                    else:
+                        result = "L"; losses += 1
                 else:
-                    result = "L"; losses += 1
-            else:
-                if my_val > opp_val:
-                    result = "W"; wins += 1
-                else:
-                    result = "L"; losses += 1
+                    if my_val > opp_val:
+                        result = "W"; wins += 1
+                    else:
+                        result = "L"; losses += 1
 
-            categories.append({
-                "cat": cat, "my_val": my_val, "opp_val": opp_val,
-                "result": result, "lower_better": cat in LOWER_BETTER_CATS,
-            })
+                categories.append({
+                    "cat": cat, "my_val": my_val, "opp_val": opp_val,
+                    "result": result, "lower_better": cat in LOWER_BETTER_CATS,
+                })
 
-        return {
-            "week": current_week, "my_team": my_team_name,
-            "opp_team": opp_name, "wins": wins, "losses": losses,
-            "ties": ties, "categories": categories,
-        }
+            all_matchups[" ".join(my_name.split())] = {
+                "week": current_week, "my_team": my_name,
+                "opp_team": opp_name, "wins": wins, "losses": losses,
+                "ties": ties, "categories": categories,
+            }
 
-    return {}
+    return all_matchups
 
 
 # â”€â”€ MAIN â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -1149,10 +1148,11 @@ def main():
     normalized = {" ".join(n.split()): n for n in espn_names}
     my_team = normalized.get(" ".join(MY_TEAM_NAME.split())) or MY_TEAM_NAME or (espn_names[0] if espn_names else "")
 
-    print("\n[7/10] Pulling current week matchup...")
-    current_matchup = get_current_matchup(league, my_team)
+    print("\n[7/10] Pulling current week matchups...")
+    all_matchups    = get_all_matchups(league)
+    current_matchup = all_matchups.get(" ".join(my_team.split()), {})
     if current_matchup:
-        print(f"       Week {current_matchup['week']}: {my_team} vs {current_matchup['opp_team']} ({current_matchup['wins']}-{current_matchup['losses']})")
+        print(f"       Week {current_matchup['week']}: {my_team} vs {current_matchup['opp_team']} ({current_matchup['wins']}-{current_matchup['losses']}) | {len(all_matchups)} teams indexed")
     else:
         print("       No active matchup found.")
 
@@ -1176,6 +1176,7 @@ def main():
         "weekly_results":  {str(k): v for k, v in weekly_results.items()},
         "transactions":    transactions,
         "current_matchup": current_matchup,
+        "all_matchups":    all_matchups,
         "recent_hitting":  recent_hitting,
         "recent_pitching": recent_pitching,
     }

@@ -17,7 +17,7 @@ python send_digest.py --dry-run
 # Instant preview with no network calls
 python send_digest.py --dry-run --no-refresh
 
-# View another team's roster digest (skips Category Pulse and Matchup sections)
+# View any team's full digest (requires a fresh snapshot with all_matchups)
 python send_digest.py --dry-run --no-refresh --team "Houck Tuah"
 
 # Refresh data only (writes data/snapshot.json)
@@ -145,6 +145,8 @@ Five bands separated by full-width `band_divider()` rules (centered label betwee
 **FA Starting Pitchers table columns:** Pitcher · Proj. Line · Matchup · Opp OPS · QS% · ERA · L15 ERA · K% · Score. "Pos" was removed (redundant for SPs). "Proj. Line" shows projected `IP · ER · K` per start, with IP in baseball notation via `_fmt_ip()` (decimal 5.333 → "5.1", 5.667 → "5.2"). Date header rows span `colspan="9"` with background on `<tr>` (not `<td>`) for full-width highlight.
 
 **My Upcoming Starts table columns:** Pitcher · Proj. Line · Matchup · Opp OPS · QS% · ERA · L15 ERA · K% · Score. Same Proj. Line formula as FA SP. Date header rows span `colspan="9"`.
+
+**`--team` flag:** `python send_digest.py --team "Team Name"` shows a full digest from another team's perspective. All sections render correctly including Category Pulse and Matchup score banner. Requires a fresh snapshot (run `fetch_data.py` first) since `all_matchups` must be present. Falls back to `current_matchup` (Guerrero Warfare only) for old snapshots. `build_matchup_section` accepts `my_team` param (default `MY_TEAM` constant) so it renders the correct team name and logo.
 
 **My Upcoming Starts badges:** QS (green) and 5K+ (yellow) badges always shown next to pitcher name. QS fires at qs_probability ≥ 51%; 5K+ fires at K/IP ≥ 0.90 or K% ≥ 24% with IP/G ≥ 4.5.
 
