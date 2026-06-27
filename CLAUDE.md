@@ -11,7 +11,7 @@ python send_digest.py
 # Skip data refresh, use existing snapshot (fast — for email-only changes)
 python send_digest.py --no-refresh
 
-# Save HTML to digest_preview.html without sending email
+# Save HTML to previews/digest_preview.html without sending email
 python send_digest.py --dry-run
 
 # Instant preview with no network calls
@@ -27,7 +27,7 @@ python fetch_data.py
 pip install -r requirements.txt
 ```
 
-No linter, no test suite. Verify changes by opening `digest_preview.html` in a browser.
+No linter, no test suite. Verify changes by opening `previews/digest_preview.html` in a browser.
 
 ## Setup
 
@@ -162,5 +162,5 @@ My team name is always styled `font-weight:800;color:{ACCENT}` with a ← arrow.
 
 ## Automation
 
-- **Windows Task Scheduler:** Task "GuerreroDailyDigest" runs `run_digest.bat` daily at 7:00 AM. `WakeToRun=True`, `StartWhenAvailable=True`.
 - **GitHub Actions:** `.github/workflows/daily-digest.yml` runs at 11:00 UTC (7 AM EDT). ESPN credentials are stored as repo secrets (`ESPN_SWID`, `ESPN_S2`).
+- **Local runner:** `scripts/run_digest.bat` can be used for manual local runs (logs to `logs/digest.log`).

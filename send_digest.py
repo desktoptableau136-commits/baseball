@@ -2397,7 +2397,9 @@ def main():
 
     if dry_run:
         fname = f"digest_preview_{team_slug}.html" if override_team else "digest_preview.html"
-        out = Path(__file__).parent / fname
+        previews_dir = Path(__file__).parent / "previews"
+        previews_dir.mkdir(exist_ok=True)
+        out = previews_dir / fname
         out.write_text(html, encoding="utf-8")
         print(f"\n  Dry run — saved to {out}")
         print("\nDone (no email sent).")
