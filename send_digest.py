@@ -626,15 +626,19 @@ def pos_stat_line(r, pos):
     return f'<div style="color:{MUTED};font-size:10px;margin-top:2px;">{line}</div>'
 
 
-def hot_cold_cell(season_val, recent_val, lower_better=False, dec=2, hot_thresh=None, warm_thresh=None):
+def hot_cold_cell(season_val, recent_val, lower_better=False, dec=2, hot_thresh=None, warm_thresh=None, no_data_title=None):
     """Table cell showing recent stat + hot/cold icon vs season baseline."""
+    _dash_cell = (
+        f'<td style="{TDC}"><span style="color:{MUTED};cursor:help;border-bottom:1px dotted {MUTED};" title="{no_data_title}">—</span></td>'
+        if no_data_title else f'<td style="{TDC}color:{MUTED};">—</td>'
+    )
     try:
         sv = float(season_val or 0)
         rv = float(recent_val or 0)
         if sv <= 0 or rv <= 0:
-            return f'<td style="{TDC}color:{MUTED};">—</td>'
+            return _dash_cell
     except (TypeError, ValueError):
-        return f'<td style="{TDC}color:{MUTED};">—</td>'
+        return _dash_cell
 
     ht = hot_thresh  if hot_thresh  is not None else (0.75 if lower_better else 0.050)
     wt = warm_thresh if warm_thresh is not None else (0.25 if lower_better else 0.020)
@@ -1676,7 +1680,7 @@ def build_email(snap):
             )
             rows += (
                 f'<tr style="background:{SURFACE};">'
-                f'<td colspan="8" style="padding:5px 10px;'
+                f'<td colspan="9" style="padding:5px 10px;'
                 f'border-top:1px solid {BORDER};border-bottom:1px solid {BORDER};">'
                 f'<span style="color:{ACCENT};font-size:11px;font-weight:700;'
                 f'text-transform:uppercase;letter-spacing:.5px;">{day_label}</span>'
@@ -1717,15 +1721,25 @@ def build_email(snap):
                         f'border-radius:3px;padding:1px 5px;margin-left:5px;vertical-align:middle;">5K+</span>'
                     )
                 start_badge = "".join(start_badges)
+                _ip_g_s  = _n(r.get("IP_per_G"))
+                _era_vs  = _n(r.get("ERA"))
+                _kip_vs  = _n(r.get("K/IP"))
+                if _ip_g_s > 0:
+                    _proj_er_s = round(_era_vs * _ip_g_s / 9) if _era_vs > 0 else 0
+                    _proj_k_s  = round(_kip_vs * _ip_g_s) if _kip_vs > 0 else 0
+                    proj_line_s = f'<span style="color:{MUTED};font-size:10px;white-space:nowrap;">{_fmt_ip(_ip_g_s)}&nbsp;IP&thinsp;·&thinsp;{_proj_er_s}&nbsp;ER&thinsp;·&thinsp;{_proj_k_s}K</span>'
+                else:
+                    proj_line_s = f'<span style="color:{MUTED}">—</span>'
                 rows += (
                     f'<tr style="{bg}">'
                     f'<td style="{TD_S}font-weight:600;">{team_logo(r.get("Team"))}{name}{inj_tag(r)}{start_badge}</td>'
+                    f'<td style="{TDC}">{proj_line_s}</td>'
                     f'<td style="{TDC}">{opp_logo(ha)}{ha}'
                     f'{"&nbsp;<span style=\"color:#888;font-size:11px\">(proj.)</span>" if r.get("PSP_Projected") else ""}</td>'
                     f'<td style="{TDC}">{v(r.get("Team_OPS_Value"), 3)}</td>'
                     f'<td style="{TDC}">{qsp_str}</td>'
                     f'<td style="{TDC}">{v(r.get("ERA"), 2)}</td>'
-                    + hot_cold_cell(r.get("ERA"), p15r.get("ERA"), lower_better=True, dec=2) +
+                    + hot_cold_cell(r.get("ERA"), p15r.get("ERA"), lower_better=True, dec=2, no_data_title="No 15-day stats — player may not have pitched recently") +
                     f'<td style="{TDC}">{kpct_s_cell}</td>'
                     f'<td style="{TDC}">{badge(pitcher_score(r))}</td>'
                     f'</tr>'
@@ -1746,6 +1760,7 @@ def build_email(snap):
             f'<table style="width:100%;border-collapse:collapse;font-size:13px;">'
             f'<thead><tr>'
             f'<th style="{TH_S}">Pitcher</th>'
+            f'<th style="{TH_S}text-align:center;">Proj. Line</th>'
             f'<th style="{TH_S}text-align:center;">Matchup</th>'
             f'<th style="{TH_S}text-align:center;">Opp OPS</th>'
             f'<th style="{TH_S}text-align:center;">QS%</th>'
@@ -1949,7 +1964,7 @@ def build_email(snap):
                     f'<td style="{TDC}">{v(r.get("Team_OPS_Value"), 3)}</td>'
                     f'<td style="{TDC}">{qsp_str}</td>'
                     f'<td style="{TDC}">{v(r.get("ERA"), 2)}</td>'
-                    + hot_cold_cell(r.get("ERA"), p15r.get("ERA"), lower_better=True, dec=2) +
+                    + hot_cold_cell(r.get("ERA"), p15r.get("ERA"), lower_better=True, dec=2, no_data_title="No 15-day stats — player may not have pitched recently") +
                     f'<td style="{TDC}">{kpct_cell}</td>'
                     f'<td style="{TDC}">{badge(r["_score"])}</td>'
                     f'</tr>'
@@ -2040,7 +2055,7 @@ def build_email(snap):
                 f'<td style="{TDC}">{v(r.get("RBI"), 0)}</td>'
                 f'<td style="{TDC}">{v(r.get("SB"), 0)}</td>'
                 f'<td style="{TDC}">{v(r.get("OPS"), 3)}</td>'
-                + hot_cold_cell(r.get("OPS"), rh.get("OPS"), dec=3) +
+                + hot_cold_cell(r.get("OPS"), rh.get("OPS"), dec=3, no_data_title="No 7-day stats — player may not have played recently") +
                 f'<td style="{TDC}">{badge(r["_score"])}</td>'
                 f'</tr>'
             )

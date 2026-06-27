@@ -96,7 +96,8 @@ Two files; one intermediate artifact:
 - `hitter_score(r)` → 0–100. Prefers wRC+ over OPS. Uses xwOBA, sprint speed, Barrel%, ISO, HR_Probability.
 - `sp_fa_score(r)` → pitcher_score + start bonus (scaled 8–22 by QS probability). Returns 0 if `not _is_sp(r)`.
 - `qs_probability(r)` → 1–99. Calibrated to league-average ~38%, ace ~75%. Uses IP/G (not IP/GS).
-- `_fmt_ip(ip_decimal)` → baseball IP string. Converts true decimal (5.333) to notation (5.1). Formula: `whole = int(d); outs = round((d-whole)*3); if outs>=3: whole+=1, outs=0`. Used in FA SP Proj. Line display.
+- `_fmt_ip(ip_decimal)` → baseball IP string. Converts true decimal (5.333) to notation (5.1). Formula: `whole = int(d); outs = round((d-whole)*3); if outs>=3: whole+=1, outs=0`. Used in Proj. Line display for both FA SP and My Upcoming Starts.
+- `hot_cold_cell(season_val, recent_val, ..., no_data_title=None)` → `<td>` with colored recent stat + 🔥/↑/❄/↓ icon vs season baseline. When recent_val is missing/zero and `no_data_title` is set, renders `—` with a dotted underline and hover tooltip explaining the absence.
 - `band_divider(label, color)` → full-width `<div>` with centered label between `BORDER` lines. Used at band boundaries in final assembly.
 
 ## Key data fields
@@ -139,6 +140,8 @@ Five bands separated by full-width `band_divider()` rules (centered label betwee
 15. League Luck Standings
 
 **FA Starting Pitchers table columns:** Pitcher · Proj. Line · Matchup · Opp OPS · QS% · ERA · L15 ERA · K% · Score. "Pos" was removed (redundant for SPs). "Proj. Line" shows projected `IP · ER · K` per start, with IP in baseball notation via `_fmt_ip()` (decimal 5.333 → "5.1", 5.667 → "5.2"). Date header rows span `colspan="9"` with background on `<tr>` (not `<td>`) for full-width highlight.
+
+**My Upcoming Starts table columns:** Pitcher · Proj. Line · Matchup · Opp OPS · QS% · ERA · L15 ERA · K% · Score. Same Proj. Line formula as FA SP. Date header rows span `colspan="9"`.
 
 **My Upcoming Starts badges:** QS (green) and 5K+ (yellow) badges always shown next to pitcher name. QS fires at qs_probability ≥ 51%; 5K+ fires at K/IP ≥ 0.90 or K% ≥ 24% with IP/G ≥ 4.5.
 
