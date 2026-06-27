@@ -135,6 +135,8 @@ def pitcher_score(r):
     if inj in _DL_STATUSES:
         s -= 22
 
+    # Calibrate to shared 0-100 scale (p50→50, p90→80) derived from observed distribution
+    s = s * 2.14 - 84.8
     return max(0, min(100, round(s)))
 
 
@@ -181,6 +183,8 @@ def hitter_score(r):
     if inj in _DL_STATUSES:
         s -= 22
 
+    # Calibrate to shared 0-100 scale (p50→50, p90→80) derived from observed distribution
+    s = s * 1.58 - 5.3
     return max(0, min(100, round(s)))
 
 
@@ -2175,15 +2179,13 @@ def build_email(snap, override_team=None):
         worst_score = worst["_pscore"] if worst else 0
         fa_depth   = p.get("fa_depth",   0)
         fa_quality = p.get("fa_quality", 0)
-        is_pit     = p.get("ptype") == "pit"
-        # Hitter scores cluster 34–43; pitcher scores 66–79 — separate thresholds
-        q_scarce, q_mod = (68, 75) if is_pit else (37, 42)
-        if fa_quality < q_scarce:
-            depth_color, depth_label, upgrade_thresh = RED,    "scarce",   2
-        elif fa_quality < q_mod:
-            depth_color, depth_label, upgrade_thresh = YELLOW, "moderate", 3
+        # Both score types now on shared 0-100 scale; single set of thresholds
+        if fa_quality < 50:
+            depth_color, depth_label, upgrade_thresh = RED,    "scarce",    5
+        elif fa_quality < 60:
+            depth_color, depth_label, upgrade_thresh = YELLOW, "moderate",  8
         else:
-            depth_color, depth_label, upgrade_thresh = MUTED,  "deep",     5
+            depth_color, depth_label, upgrade_thresh = MUTED,  "deep",     12
         depth_html = (
             f'<div style="color:{depth_color};font-size:10px;margin-top:1px;">'
             f'{fa_depth} avail · {depth_label}</div>'
