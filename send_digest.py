@@ -319,9 +319,10 @@ def luck_standings(roto_rows, standings):
 
 def category_ranks(roto_rows, my_team):
     CATS = ["R", "HR", "RBI", "SB", "OPS", "B_SO", "K", "QS", "W", "ERA", "WHIP", "SVHD"]
+    my_key = " ".join(my_team.split())
     totals = {}
     for row in roto_rows:
-        t = row.get("Team", "")
+        t = " ".join((row.get("Team") or "").split())
         if t not in totals:
             totals[t] = {c: 0 for c in CATS}
         for c in CATS:
@@ -332,7 +333,7 @@ def category_ranks(roto_rows, my_team):
     for c in CATS:
         ranked = sorted(teams, key=lambda t: -totals[t][c])
         for rank, t in enumerate(ranked, 1):
-            if t == my_team:
+            if t == my_key:
                 my_ranks[c] = rank
     return my_ranks, len(teams)
 
@@ -350,6 +351,7 @@ POS_GROUPS = [
 
 
 def positional_breakdown(pitchers, hitters, my_team):
+    my_key = " ".join(my_team.split())
     results = []
     for pos_label, slots, ptype in POS_GROUPS:
         source   = pitchers if ptype == "pit" else hitters
@@ -366,7 +368,7 @@ def positional_breakdown(pitchers, hitters, my_team):
             return any(s in parts for s in slots)
 
         my_p = sorted(
-            [r for r in season if r.get("FantasyTeam", "") == my_team and pos_match(r)],
+            [r for r in season if " ".join((r.get("FantasyTeam") or "").split()) == my_key and pos_match(r)],
             key=lambda r: -score_fn(r),
         )
         for r in my_p:
@@ -404,10 +406,11 @@ def positional_breakdown(pitchers, hitters, my_team):
 
 
 def roster_alerts(pitchers, hitters, my_team):
+    my_key = " ".join(my_team.split())
     seen = set()
     alerts = []
     for r in pitchers + hitters:
-        if r.get("FantasyTeam", "") != my_team or int(r.get("Dataset", 0)) != YEAR:
+        if " ".join((r.get("FantasyTeam") or "").split()) != my_key or int(r.get("Dataset", 0)) != YEAR:
             continue
         name = r["PlayerName"]
         inj = str(r.get("FreeAgentInjuryStatus") or "").upper()
@@ -418,9 +421,10 @@ def roster_alerts(pitchers, hitters, my_team):
 
 
 def my_upcoming_starts(pitchers, my_team, week_end=None):
+    my_key = " ".join(my_team.split())
     sp = [
         r for r in pitchers
-        if r.get("FantasyTeam", "") == my_team
+        if " ".join((r.get("FantasyTeam") or "").split()) == my_key
         and int(r.get("Dataset", 0)) == YEAR
         and r.get("PSP_Date", "") not in ("1999-01-01", "", None)
         and (week_end is None or r.get("PSP_Date", "") <= week_end)
@@ -567,6 +571,17 @@ def _fmt_ip(ip_decimal):
         whole += 1
         outs = 0
     return f"{whole}.{outs}"
+
+
+def _proj_line_html(r):
+    ip_g = _n(r.get("IP_per_G"))
+    if ip_g <= 0:
+        return f'<span style="color:{MUTED}">—</span>'
+    era = _n(r.get("ERA"))
+    kip = _n(r.get("K/IP"))
+    er  = round(era * ip_g / 9) if era > 0 else 0
+    k   = round(kip * ip_g)     if kip > 0 else 0
+    return f'<span style="color:{MUTED};font-size:10px;white-space:nowrap;">{_fmt_ip(ip_g)}&nbsp;IP&thinsp;·&thinsp;{er}&nbsp;ER&thinsp;·&thinsp;{k}K</span>'
 
 
 def band_divider(label, color=None):
@@ -1445,7 +1460,7 @@ def build_email(snap, override_team=None):
     standings     = snap.get("standings", [])
     refreshed     = snap.get("refreshed_at", "")[:10]
     all_matchups  = snap.get("all_matchups", {})
-    matchup       = all_matchups.get(" ".join(my_team.split())) or snap.get("current_matchup", {})
+    matchup       = all_matchups.get(" ".join(my_team.split())) or (snap.get("current_matchup", {}) if not override_team else {})
     recent_hitting  = snap.get("recent_hitting",  [])
     recent_pitching = snap.get("recent_pitching", [])
     weekly_results  = snap.get("weekly_results",  {})
@@ -1490,7 +1505,7 @@ def build_email(snap, override_team=None):
     starts    = my_upcoming_starts(pitchers, my_team)
     pos_data  = positional_breakdown(pitchers, hitters, my_team)
 
-    my_row = next((r for r in luck if r["team"] == my_team), {})
+    my_row = next((r for r in luck if " ".join((r.get("team") or "").split()) == " ".join(my_team.split())), {})
     today  = datetime.now().strftime("%A, %B %d, %Y")
 
     # ── Derived KPI values ─────────────────────────────────────────────────────
@@ -1722,15 +1737,7 @@ def build_email(snap, override_team=None):
                         f'border-radius:3px;padding:1px 5px;margin-left:5px;vertical-align:middle;">5K+</span>'
                     )
                 start_badge = "".join(start_badges)
-                _ip_g_s  = _n(r.get("IP_per_G"))
-                _era_vs  = _n(r.get("ERA"))
-                _kip_vs  = _n(r.get("K/IP"))
-                if _ip_g_s > 0:
-                    _proj_er_s = round(_era_vs * _ip_g_s / 9) if _era_vs > 0 else 0
-                    _proj_k_s  = round(_kip_vs * _ip_g_s) if _kip_vs > 0 else 0
-                    proj_line_s = f'<span style="color:{MUTED};font-size:10px;white-space:nowrap;">{_fmt_ip(_ip_g_s)}&nbsp;IP&thinsp;·&thinsp;{_proj_er_s}&nbsp;ER&thinsp;·&thinsp;{_proj_k_s}K</span>'
-                else:
-                    proj_line_s = f'<span style="color:{MUTED}">—</span>'
+                proj_line_s = _proj_line_html(r)
                 rows += (
                     f'<tr style="{bg}">'
                     f'<td style="{TD_S}font-weight:600;">{team_logo(r.get("Team"))}{name}{inj_tag(r)}{start_badge}</td>'
@@ -1947,15 +1954,7 @@ def build_email(snap, override_team=None):
                     if _kpct_top and _kpct_val > 0
                     else (f"{_kpct_val*100:.1f}%" if _kpct_val > 0 else f'<span style="color:{MUTED}">—</span>')
                 )
-                _ip_g = _n(r.get("IP_per_G"))
-                _era_v = _n(r.get("ERA"))
-                _kip_v = _n(r.get("K/IP"))
-                if _ip_g > 0:
-                    _proj_er = round(_era_v * _ip_g / 9) if _era_v > 0 else 0
-                    _proj_k  = round(_kip_v * _ip_g) if _kip_v > 0 else 0
-                    proj_line_str = f'<span style="color:{MUTED};font-size:10px;white-space:nowrap;">{_fmt_ip(_ip_g)}&nbsp;IP&thinsp;·&thinsp;{_proj_er}&nbsp;ER&thinsp;·&thinsp;{_proj_k}K</span>'
-                else:
-                    proj_line_str = f'<span style="color:{MUTED}">—</span>'
+                proj_line_str = _proj_line_html(r)
                 rows += (
                     f'<tr style="{bg}">'
                     f'<td style="{name_border}{TD_S}font-weight:600;">{team_logo(r.get("Team"))}{r.get("PlayerName","")}{inj_tag(r)}{pickup_badge}</td>'
@@ -2356,8 +2355,11 @@ def main():
     override_team = None
     if "--team" in sys.argv:
         idx = sys.argv.index("--team")
-        if idx + 1 < len(sys.argv):
+        if idx + 1 < len(sys.argv) and not sys.argv[idx + 1].startswith("--"):
             override_team = sys.argv[idx + 1]
+        else:
+            print("WARNING: --team requires a team name argument, e.g. --team \"Houck Tuah\"")
+            sys.exit(1)
 
     LOG_DIR.mkdir(exist_ok=True)
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -2388,9 +2390,8 @@ def main():
     with open(SNAPSHOT) as f:
         snap = json.load(f)
 
-    html       = build_email(snap, override_team=override_team)
-    team_label = override_team or "Guerrero Warfare"
-    team_slug  = team_label.replace(" ", "_")
+    html      = build_email(snap, override_team=override_team)
+    team_slug = team_label.replace(" ", "_")
     date_str   = datetime.now().strftime('%Y-%m-%d')
     subject    = f"⚾ {team_label} Digest — {datetime.now().strftime('%b %d')}"
 

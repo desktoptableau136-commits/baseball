@@ -1059,51 +1059,53 @@ def get_all_matchups(league) -> dict:
         log(f"  Matchup fetch failed: {e}")
         return {}
 
-    LOWER_BETTER_CATS = {"ERA", "WHIP", "B_SO"}
     all_matchups = {}
+    _flip = {"W": "L", "L": "W", "T": "T"}
 
     for b in boxes:
-        home_name = b.home_team.team_name
-        away_name = b.away_team.team_name
+        home_name  = b.home_team.team_name
+        away_name  = b.away_team.team_name
+        home_stats = getattr(b, "home_stats", {}) or {}
+        away_stats = getattr(b, "away_stats", {}) or {}
 
-        for my_name, opp_name, my_side, opp_side in [
-            (home_name, away_name, "home", "away"),
-            (away_name, home_name, "away", "home"),
-        ]:
-            my_stats  = getattr(b, f"{my_side}_stats",  {}) or {}
-            opp_stats = getattr(b, f"{opp_side}_stats", {}) or {}
+        wins = losses = ties = 0
+        cats = []
+        for cat in ROTO_CATS:
+            h_info = home_stats.get(cat, {}) or {}
+            a_info = away_stats.get(cat, {}) or {}
+            h_val  = float(h_info.get("value") or 0)
+            a_val  = float(a_info.get("value") or 0)
 
-            wins = losses = ties = 0
-            categories = []
-            for cat in ROTO_CATS:
-                my_info  = my_stats.get(cat,  {}) or {}
-                opp_info = opp_stats.get(cat, {}) or {}
-                my_val   = float(my_info.get("value")  or 0)
-                opp_val  = float(opp_info.get("value") or 0)
-
-                if my_val == opp_val:
-                    result = "T"; ties += 1
-                elif cat in LOWER_BETTER_CATS:
-                    if my_val < opp_val:
-                        result = "W"; wins += 1
-                    else:
-                        result = "L"; losses += 1
+            if h_val == a_val:
+                result = "T"; ties += 1
+            elif cat in LOWER_BETTER:
+                if h_val < a_val:
+                    result = "W"; wins += 1
                 else:
-                    if my_val > opp_val:
-                        result = "W"; wins += 1
-                    else:
-                        result = "L"; losses += 1
+                    result = "L"; losses += 1
+            else:
+                if h_val > a_val:
+                    result = "W"; wins += 1
+                else:
+                    result = "L"; losses += 1
 
-                categories.append({
-                    "cat": cat, "my_val": my_val, "opp_val": opp_val,
-                    "result": result, "lower_better": cat in LOWER_BETTER_CATS,
-                })
+            cats.append({
+                "cat": cat, "my_val": h_val, "opp_val": a_val,
+                "result": result, "lower_better": cat in LOWER_BETTER,
+            })
 
-            all_matchups[" ".join(my_name.split())] = {
-                "week": current_week, "my_team": my_name,
-                "opp_team": opp_name, "wins": wins, "losses": losses,
-                "ties": ties, "categories": categories,
-            }
+        all_matchups[" ".join(home_name.split())] = {
+            "week": current_week, "my_team": home_name, "opp_team": away_name,
+            "wins": wins, "losses": losses, "ties": ties, "categories": cats,
+        }
+        away_cats = [
+            {**c, "my_val": c["opp_val"], "opp_val": c["my_val"], "result": _flip[c["result"]]}
+            for c in cats
+        ]
+        all_matchups[" ".join(away_name.split())] = {
+            "week": current_week, "my_team": away_name, "opp_team": home_name,
+            "wins": losses, "losses": wins, "ties": ties, "categories": away_cats,
+        }
 
     return all_matchups
 
