@@ -2281,7 +2281,7 @@ def build_email(snap, override_team=None):
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Guerrero Warfare Daily Digest</title>
+  <title>{my_team} Daily Digest</title>
   <style>
     @media only screen and (max-width:600px) {{
       .ew {{ width:100% !important; padding:8px !important; }}
@@ -2316,7 +2316,7 @@ def build_email(snap, override_team=None):
 
 # ── SEND ──────────────────────────────────────────────────────────────────────
 
-def send_email(html, subject):
+def send_email(html, subject, filename=None):
     import smtplib
     from email.mime.multipart import MIMEMultipart
     from email.mime.text import MIMEText
@@ -2338,7 +2338,7 @@ def send_email(html, subject):
     attachment = MIMEText(html, "html", "utf-8")
     attachment.add_header(
         "Content-Disposition", "attachment",
-        filename=f"digest_{datetime.now().strftime('%Y-%m-%d')}.html",
+        filename=filename or f"digest_{datetime.now().strftime('%Y-%m-%d')}.html",
     )
     msg.attach(attachment)
 
@@ -2388,19 +2388,23 @@ def main():
     with open(SNAPSHOT) as f:
         snap = json.load(f)
 
-    html    = build_email(snap, override_team=override_team)
+    html       = build_email(snap, override_team=override_team)
     team_label = override_team or "Guerrero Warfare"
-    subject = f"⚾ {team_label} Digest — {datetime.now().strftime('%b %d')}"
+    team_slug  = team_label.replace(" ", "_")
+    date_str   = datetime.now().strftime('%Y-%m-%d')
+    subject    = f"⚾ {team_label} Digest — {datetime.now().strftime('%b %d')}"
 
     if dry_run:
-        out = Path(__file__).parent / "digest_preview.html"
+        fname = f"digest_preview_{team_slug}.html" if override_team else "digest_preview.html"
+        out = Path(__file__).parent / fname
         out.write_text(html, encoding="utf-8")
         print(f"\n  Dry run — saved to {out}")
         print("\nDone (no email sent).")
         return
 
     print(f"\n[3/3] Sending to {TO_EMAIL}...")
-    send_email(html, subject)
+    attach_name = f"digest_{date_str}_{team_slug}.html" if override_team else f"digest_{date_str}.html"
+    send_email(html, subject, filename=attach_name)
     print("  Sent.")
 
     log_line = f"{ts} | sent | subject={subject}\n"
