@@ -394,14 +394,18 @@ def positional_breakdown(pitchers, hitters, my_team):
         for r in fa:
             r["_pscore"] = score_fn(r)
 
+        top3 = [r["_pscore"] for r in fa[:3]]
+        fa_quality = sum(top3) / len(top3) if top3 else 0
         results.append({
             "pos":          pos_label,
+            "ptype":        ptype,
             "worst_player": my_p[-1] if my_p else None,
             "my_avg":       round(my_avg, 1),
             "rank":         rank,
             "n_teams":      n,
             "top_fa":       fa[:1],
             "fa_depth":     len(fa),
+            "fa_quality":   fa_quality,
         })
     return results
 
@@ -2169,13 +2173,17 @@ def build_email(snap, override_team=None):
         top_fa = p["top_fa"][0] if p["top_fa"] else None
         fa_score = top_fa["_pscore"] if top_fa else 0
         worst_score = worst["_pscore"] if worst else 0
-        fa_depth = p.get("fa_depth", 0)
-        if fa_depth <= 3:
-            depth_color, depth_label, upgrade_thresh = RED,   "scarce", 2
-        elif fa_depth <= 8:
+        fa_depth   = p.get("fa_depth",   0)
+        fa_quality = p.get("fa_quality", 0)
+        is_pit     = p.get("ptype") == "pit"
+        # Hitter scores cluster 34–43; pitcher scores 66–79 — separate thresholds
+        q_scarce, q_mod = (68, 75) if is_pit else (37, 42)
+        if fa_quality < q_scarce:
+            depth_color, depth_label, upgrade_thresh = RED,    "scarce",   2
+        elif fa_quality < q_mod:
             depth_color, depth_label, upgrade_thresh = YELLOW, "moderate", 3
         else:
-            depth_color, depth_label, upgrade_thresh = MUTED,  "deep", 5
+            depth_color, depth_label, upgrade_thresh = MUTED,  "deep",     5
         depth_html = (
             f'<div style="color:{depth_color};font-size:10px;margin-top:1px;">'
             f'{fa_depth} avail · {depth_label}</div>'
