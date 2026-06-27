@@ -1341,9 +1341,10 @@ def build_week_overview(matchup, week_cats, week_n, fa_sp, starts, days_elapsed,
         pit_ties = sum(1 for c in cats_list if c["cat"] in _PIT_CATS and c.get("result") == "T")
         hit_color = GREEN if hit_wins > hit_loss else (RED if hit_loss > hit_wins else YELLOW)
         pit_color = GREEN if pit_wins > pit_loss else (RED if pit_loss > pit_wins else YELLOW)
+        day_clause = f' through Day {days_elapsed}' if days_elapsed > 0 else ' (week starting)'
         bullets.append(
             f'<span style="color:{status_color};font-weight:700;">{status_word} {cw}-{cl}-{ct}</span>'
-            f' vs. {opp} through Day {days_elapsed} — '
+            f' vs. {opp}{day_clause} — '
             f'<span style="color:{hit_color};">batting {hit_wins}-{hit_loss}-{hit_ties}</span>, '
             f'<span style="color:{pit_color};">pitching {pit_wins}-{pit_loss}-{pit_ties}</span>.'
         )
@@ -1490,7 +1491,7 @@ def build_email(snap, override_team=None):
     cats, n   = category_ranks(roto, my_team)
     current_week_num = matchup.get("week") or max((int(r.get("Week", 0)) for r in roto), default=0)
     weekly_avgs  = compute_weekly_avgs(roto, current_week_num)
-    days_elapsed = datetime.now().weekday() + 1   # Mon=1 … Sun=7
+    days_elapsed = datetime.now().weekday()   # Mon=0 (no stats yet) … Sun=6
     _today = datetime.now().date()
     week_end_str = (_today + timedelta(days=6 - _today.weekday())).strftime("%Y-%m-%d")
     week_roto = [r for r in roto if int(r.get("Week", 0)) == current_week_num]
