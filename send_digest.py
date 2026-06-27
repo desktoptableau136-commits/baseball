@@ -401,6 +401,7 @@ def positional_breakdown(pitchers, hitters, my_team):
             "rank":         rank,
             "n_teams":      n,
             "top_fa":       fa[:1],
+            "fa_depth":     len(fa),
         })
     return results
 
@@ -2168,7 +2169,18 @@ def build_email(snap, override_team=None):
         top_fa = p["top_fa"][0] if p["top_fa"] else None
         fa_score = top_fa["_pscore"] if top_fa else 0
         worst_score = worst["_pscore"] if worst else 0
-        upgrade = top_fa and fa_score > worst_score + 5
+        fa_depth = p.get("fa_depth", 0)
+        if fa_depth <= 3:
+            depth_color, depth_label, upgrade_thresh = RED,   "scarce", 2
+        elif fa_depth <= 8:
+            depth_color, depth_label, upgrade_thresh = YELLOW, "moderate", 3
+        else:
+            depth_color, depth_label, upgrade_thresh = MUTED,  "deep", 5
+        depth_html = (
+            f'<div style="color:{depth_color};font-size:10px;margin-top:1px;">'
+            f'{fa_depth} avail · {depth_label}</div>'
+        )
+        upgrade = top_fa and fa_score > worst_score + upgrade_thresh
         if top_fa:
             fa_cell = (
                 f'{team_logo(top_fa.get("Team"), 16)}'
@@ -2177,9 +2189,13 @@ def build_email(snap, override_team=None):
                 f'{top_fa["PlayerName"]}</span> {badge(fa_score)}'
                 f'{"&nbsp;&#8593;" if upgrade else ""}'
                 f'{pos_stat_line(top_fa, p["pos"])}'
+                f'{depth_html}'
             )
         else:
-            fa_cell = f'<span style="color:{MUTED}">—</span>'
+            fa_cell = (
+                f'<span style="color:{MUTED}">—</span>'
+                f'{depth_html}'
+            )
 
         pos_rows += (
             f'<tr style="{bg}">'
