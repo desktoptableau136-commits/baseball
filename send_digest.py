@@ -104,6 +104,8 @@ def pitcher_score(r):
     xfip  = _n(r.get("xFIP"))
     whiff = _n(r.get("WhiffPct"))   # stored as decimal: 0.28 = 28%
     kpct  = _n(r.get("Kpct_P"))
+    w     = _n(r.get("ESPN_W")) or _n(r.get("W"))
+    ip_g  = _n(r.get("IP_per_G"))
     inj   = str(r.get("FreeAgentInjuryStatus") or "").upper()
     is_sp = _is_sp(r)
 
@@ -126,8 +128,10 @@ def pitcher_score(r):
         # SP role: reward starts volume; SVHD is irrelevant
         s += 12 if gs > 10 else 9
     else:
-        # RP role: reward saves+holds opportunity; QS/GS are irrelevant
+        # RP role: SVHD first, then W and IP/G as opportunity signals
         s += 5 + min(7, svhd / 15 * 7)
+        s += min(6, w / 10 * 6)       # wins
+        s += min(5, ip_g / 1.2 * 5)   # opportunity: IP per appearance
 
     if xfip > 0:
         s += 5 if xfip < 3.2 else (2 if xfip < 3.8 else 0)
@@ -136,7 +140,7 @@ def pitcher_score(r):
         s -= 22
 
     # Calibrate to shared 0-100 scale (p50→50, p90→80) derived from observed distribution
-    s = s * 2.14 - 84.8
+    s = s * 1.840 - 70.9
     return max(0, min(100, round(s)))
 
 
@@ -184,7 +188,7 @@ def hitter_score(r):
         s -= 22
 
     # Calibrate to shared 0-100 scale (p50→50, p90→80) derived from observed distribution
-    s = s * 1.58 - 5.3
+    s = s * 1.587 - 5.2
     return max(0, min(100, round(s)))
 
 
@@ -252,13 +256,16 @@ def rp_score(r):
     svhd = _n(r.get("ESPN_SVHD")) or _n(r.get("SVHD"))   # prefer season total from ESPN
     k    = _n(r.get("ESPN_K"))    or _n(r.get("K"))       # prefer season count from ESPN
     w    = _n(r.get("ESPN_W"))    or _n(r.get("W"))
+    ip_g = _n(r.get("IP_per_G"))
     era  = _n(r.get("ERA")) or 5.0
     whip = _n(r.get("WHIP")) or 1.5
+    # Weights (max 100): SVHD 40 · K 22 · W 13 · IP/G 10 · ERA 9 · WHIP 6
     s  = min(40, svhd / 20 * 40)
-    s += min(25, k    / 80 * 25)
-    s += min(15, w    / 10 * 15)
-    s += max(0, min(12, (5.0 - era)  / 3.0 * 12))
-    s += max(0, min(8,  (2.0 - whip) / 1.0 * 8))
+    s += min(22, k    / 80 * 22)
+    s += min(13, w    / 10 * 13)
+    s += min(10, ip_g / 1.2 * 10)   # opportunity: IP per appearance, max at 1.2 IP/G
+    s += max(0, min(9, (5.0 - era)  / 3.0 * 9))
+    s += max(0, min(6, (2.0 - whip) / 1.0 * 6))
     return round(s, 1)
 
 
@@ -389,10 +396,20 @@ def positional_breakdown(pitchers, hitters, my_team):
         n = len(team_avgs)
         rank = n - sum(1 for s in team_avgs if s <= my_avg) + 1 if n else None
 
-        # Best FA at this position (exclude DL players)
+        # Viable check: only count players actually getting opportunities
+        if ptype == "pit":
+            if pos_label == "SP":
+                viable = lambda r: _n(r.get("GS")) >= 3
+            else:
+                viable = lambda r: _n(r.get("ESPN_GP")) >= 8 or _n(r.get("IP")) >= 10
+        else:
+            viable = lambda r: _n(r.get("OPS")) > 0.200 or _n(r.get("R")) + _n(r.get("RBI")) > 5
+
+        # Best FA at this position (exclude DL players and benchies)
         fa = sorted(
             [r for r in season if r.get("FantasyTeam", "") == "" and pos_match(r)
-             and str(r.get("FreeAgentInjuryStatus", "")) not in _DL_STATUSES],
+             and str(r.get("FreeAgentInjuryStatus", "")) not in _DL_STATUSES
+             and viable(r)],
             key=lambda r: -score_fn(r),
         )
         for r in fa:
