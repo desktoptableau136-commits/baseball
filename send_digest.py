@@ -106,6 +106,7 @@ def pitcher_score(r):
     kpct  = _n(r.get("Kpct_P"))
     w     = _n(r.get("ESPN_W")) or _n(r.get("W"))
     ip_g  = _n(r.get("IP_per_G"))
+    ip    = _n(r.get("IP"))
     inj   = str(r.get("FreeAgentInjuryStatus") or "").upper()
     is_sp = _is_sp(r)
 
@@ -139,8 +140,12 @@ def pitcher_score(r):
     if inj in _DL_STATUSES:
         s -= 22
 
+    # Small-sample penalty: rate stats are unreliable below 20 IP
+    if ip > 0:
+        s *= min(1.0, ip / 20)
+
     # Calibrate to shared 0-100 scale (p50→50, p90→80) derived from observed distribution
-    s = s * 1.840 - 70.9
+    s = s * 1.875 - 72.6
     return max(0, min(100, round(s)))
 
 
@@ -401,7 +406,7 @@ def positional_breakdown(pitchers, hitters, my_team):
             if pos_label == "SP":
                 viable = lambda r: _n(r.get("GS")) >= 3
             else:
-                viable = lambda r: _n(r.get("ESPN_GP")) >= 8 or _n(r.get("IP")) >= 10
+                viable = lambda r: _n(r.get("ESPN_GP")) >= 12 or _n(r.get("IP")) >= 20
         else:
             viable = lambda r: _n(r.get("OPS")) > 0.200 or _n(r.get("R")) + _n(r.get("RBI")) > 5
 
