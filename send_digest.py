@@ -95,6 +95,16 @@ def _is_sp(r):
     return False
 
 
+def _blend(r, score_fn, idx_recent, w=0.6):
+    """60/40 blend of best-available recent stats and season score."""
+    s_year = score_fn(r)
+    r_rec = idx_recent.get(r.get("PlayerName", ""))
+    if not r_rec:
+        return s_year
+    s_rec = score_fn(r_rec)
+    return round(w * s_rec + (1 - w) * s_year) if s_rec > 0 else s_year
+
+
 def pitcher_score(r):
     kip   = _n(r.get("K/IP") or r.get("KIP"))
     era   = _n(r.get("ERA"))
@@ -366,12 +376,17 @@ POS_GROUPS = [
 ]
 
 
-def positional_breakdown(pitchers, hitters, my_team):
+def positional_breakdown(pitchers, hitters, my_team, best_recent_p=None, best_recent_h=None):
     my_key = " ".join(my_team.split())
+    if best_recent_p is None:
+        best_recent_p = {r["PlayerName"]: r for r in pitchers if int(r.get("Dataset", 0) or 0) == 30 and r.get("PlayerName")}
+    if best_recent_h is None:
+        best_recent_h = {r["PlayerName"]: r for r in hitters  if int(r.get("Dataset", 0) or 0) == 30 and r.get("PlayerName")}
     results = []
     for pos_label, slots, ptype in POS_GROUPS:
         source   = pitchers if ptype == "pit" else hitters
         score_fn = pitcher_score if ptype == "pit" else hitter_score
+        idx30    = best_recent_p if ptype == "pit" else best_recent_h
         season   = [r for r in source if int(r.get("Dataset", 0) or 0) == YEAR]
 
         def pos_match(r, slots=slots, pos_label=pos_label):
@@ -383,19 +398,22 @@ def positional_breakdown(pitchers, hitters, my_team):
             parts = str(r.get("Position", "")).split(", ")
             return any(s in parts for s in slots)
 
+        def score(r, score_fn=score_fn, idx30=idx30):
+            return _blend(r, score_fn, idx30)
+
         my_p = sorted(
             [r for r in season if " ".join((r.get("FantasyTeam") or "").split()) == my_key and pos_match(r)],
-            key=lambda r: -score_fn(r),
+            key=lambda r: -score(r),
         )
         for r in my_p:
-            r["_pscore"] = score_fn(r)
+            r["_pscore"] = score(r)
 
         # Per-team average score at this position → league rank
         team_scores = {}
         for r in season:
             t = r.get("FantasyTeam", "")
             if t and pos_match(r):
-                team_scores.setdefault(t, []).append(score_fn(r))
+                team_scores.setdefault(t, []).append(score(r))
         team_avgs = sorted(sum(v) / len(v) for v in team_scores.values())
         my_avg = sum(r["_pscore"] for r in my_p) / len(my_p) if my_p else 0
         n = len(team_avgs)
@@ -415,10 +433,10 @@ def positional_breakdown(pitchers, hitters, my_team):
             [r for r in season if r.get("FantasyTeam", "") == "" and pos_match(r)
              and str(r.get("FreeAgentInjuryStatus", "")) not in _DL_STATUSES
              and viable(r)],
-            key=lambda r: -score_fn(r),
+            key=lambda r: -score(r),
         )
         for r in fa:
-            r["_pscore"] = score_fn(r)
+            r["_pscore"] = score(r)
 
         top3 = [r["_pscore"] for r in fa[:3]]
         fa_quality = sum(top3) / len(top3) if top3 else 0
@@ -1498,7 +1516,23 @@ def build_email(snap, override_team=None):
     weekly_results  = snap.get("weekly_results",  {})
     rec_h = {r["PlayerName"]: r for r in recent_hitting  if r.get("PlayerName")}
     rec_p = {r["PlayerName"]: r for r in recent_pitching if r.get("PlayerName")}
+    p7    = {r["PlayerName"]: r for r in pitchers if int(r.get("Dataset", 0) or 0) == 7  and r.get("PlayerName")}
     p15   = {r["PlayerName"]: r for r in pitchers if int(r.get("Dataset", 0) or 0) == 15 and r.get("PlayerName")}
+    p30   = {r["PlayerName"]: r for r in pitchers if int(r.get("Dataset", 0) or 0) == 30 and r.get("PlayerName")}
+    h7    = {r["PlayerName"]: r for r in hitters  if int(r.get("Dataset", 0) or 0) == 7  and r.get("PlayerName")}
+    h15   = {r["PlayerName"]: r for r in hitters  if int(r.get("Dataset", 0) or 0) == 15 and r.get("PlayerName")}
+    h30   = {r["PlayerName"]: r for r in hitters  if int(r.get("Dataset", 0) or 0) == 30 and r.get("PlayerName")}
+
+    # Map Baseball Ref recent rows to add fields pitcher_score expects
+    rec_p_fp = {}
+    for name, r in rec_p.items():
+        ip = _n(r.get("IP")); k = _n(r.get("K")); g = _n(r.get("G"))
+        rec_p_fp[name] = {**r, "K/IP": round(k / ip, 3) if ip > 0 else 0,
+                          "IP_per_G": round(ip / g, 2) if g > 0 else 0}
+
+    # Best-available recent row per player: 30d > 15d > 7d > Baseball Ref (last dict wins in merge)
+    best_recent_p = {**rec_p_fp, **p7, **p15, **p30}
+    best_recent_h = {**rec_h,    **h7, **h15, **h30}
 
     # Players claimed today may not yet have FantasyTeam set in the ESPN roster API.
     # Use today's transactions as a second source of truth, but be precise:
@@ -1535,7 +1569,7 @@ def build_email(snap, override_team=None):
     my_season_pseudo_roto = sum(n - rank + 1 for rank in cats.values() if rank is not None)
     alerts    = roster_alerts(pitchers, hitters, my_team)
     starts    = my_upcoming_starts(pitchers, my_team)
-    pos_data  = positional_breakdown(pitchers, hitters, my_team)
+    pos_data  = positional_breakdown(pitchers, hitters, my_team, best_recent_p, best_recent_h)
 
     my_row = next((r for r in luck if " ".join((r.get("team") or "").split()) == " ".join(my_team.split())), {})
     today  = datetime.now().strftime("%A, %B %d, %Y")
@@ -1781,7 +1815,7 @@ def build_email(snap, override_team=None):
                     f'<td style="{TDC}">{v(r.get("ERA"), 2)}</td>'
                     + hot_cold_cell(r.get("ERA"), p15r.get("ERA"), lower_better=True, dec=2, no_data_title="No 15-day stats — player may not have pitched recently") +
                     f'<td style="{TDC}">{kpct_s_cell}</td>'
-                    f'<td style="{TDC}">{badge(pitcher_score(r))}</td>'
+                    f'<td style="{TDC}">{badge(_blend(r, pitcher_score, best_recent_p))}</td>'
                     f'</tr>'
                 )
 
