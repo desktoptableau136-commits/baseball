@@ -97,6 +97,10 @@ Two files; one intermediate artifact:
 
 **Category Pulse `days_elapsed`:** `days_elapsed = datetime.now().weekday()` (Mon=0 … Sun=6). ESPN stats are through *yesterday*, so today is always remaining — do not add 1. Guard: `day_clause = f' through Day {days_elapsed}' if days_elapsed > 0 else ' (week starting)'`.
 
+**Category Pulse pitcher projections (K, QS, W):** These three use actual remaining starts × per-start rate instead of historical weekly averages. Computed in `build_email` as `pit_proj = {"QS": {"my": ..., "opp": ...}, "K": ..., "W": ...}` from pitchers with `PSP_Date >= today and <= week_end_str`. Passed to `build_category_pulse(remaining_proj=pit_proj)`. Rate/hitter cats (ERA, WHIP, OPS, R, HR, RBI, SB, B_SO, SVHD) still use historical averages via `compute_weekly_avgs`.
+
+**Dry-run preview filenames:** Always `previews/digest_preview_{team_slug}.html` (e.g. `digest_preview_Guerrero_Warfare.html`, `digest_preview_Giga_Vlad.html`). The old `digest_preview.html` fallback is gone — always slug-based regardless of whether `--team` is passed.
+
 ## Scoring functions (send_digest.py)
 
 - `_is_sp(r)` → bool. Usage-based SP/RP detection. Priority: ESPN season GS/GP → dataset GS/G → IP/G → Position field. See gotcha above.
