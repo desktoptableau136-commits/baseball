@@ -1200,7 +1200,7 @@ def _project(current, avg, elapsed_frac, cat):
         return current + remaining * avg                  # counting: add expected remainder
 
 
-def build_category_pulse(matchup, weekly_avgs=None, days_elapsed=None):
+def build_category_pulse(matchup, weekly_avgs=None, days_elapsed=None, remaining_proj=None):
     if not matchup or not matchup.get("categories"):
         return ""
 
@@ -1251,9 +1251,16 @@ def build_category_pulse(matchup, weekly_avgs=None, days_elapsed=None):
         flip = False
         proj_res = None
         proj_html = ""
-        if has_proj and cat in my_avgs and cat in opp_avgs:
+        pm = po = None
+        rp = (remaining_proj or {}).get(cat)
+        if rp is not None:
+            # Use actual remaining starts × per-start rate (K, QS, W)
+            pm = my_v  + rp["my"]
+            po = opp_v + rp["opp"]
+        elif has_proj and cat in my_avgs and cat in opp_avgs:
             pm = _project(my_v,  my_avgs[cat],  elapsed_frac, cat)
             po = _project(opp_v, opp_avgs[cat], elapsed_frac, cat)
+        if pm is not None:
             lower = cat in _LOWER_BETTER
             pm_r = round(pm, dec)
             po_r = round(po, dec)
@@ -1561,6 +1568,38 @@ def build_email(snap, override_team=None):
     week_end_str = (_today + timedelta(days=6 - _today.weekday())).strftime("%Y-%m-%d")
     week_roto = [r for r in roto if int(r.get("Week", 0)) == current_week_num]
     week_cats, week_n = category_ranks(week_roto, my_team)
+
+    # Compute pitcher counting stat projections from actual remaining starts (K, QS, W)
+    _opp_key = " ".join(matchup.get("opp_team", "").split()) if matchup else ""
+    def _remaining_starters(team_key):
+        return [r for r in pitchers
+                if int(r.get("Dataset", 0) or 0) == YEAR
+                and " ".join((r.get("FantasyTeam") or "").split()) == team_key
+                and r.get("PSP_Date", "") not in ("1999-01-01", "", None)
+                and r.get("PSP_Date", "") >= today_str
+                and r.get("PSP_Date", "") <= week_end_str
+                and _is_sp(r)]
+    def _proj_qs(starters):
+        return sum((qs_probability(r) or 0) / 100 for r in starters)
+    def _proj_k(starters):
+        total = 0
+        for r in starters:
+            gs = _n(r.get("GS")); k = _n(r.get("K")); ip_g = _n(r.get("IP_per_G")); kip = _n(r.get("K/IP") or r.get("KIP"))
+            total += (k / gs) if gs > 0 else (ip_g * kip if ip_g > 0 and kip > 0 else 5)
+        return total
+    def _proj_w(starters):
+        total = 0
+        for r in starters:
+            gs = _n(r.get("GS")); w = _n(r.get("ESPN_W") or r.get("W"))
+            total += (w / gs) if gs > 0 else 0.12
+        return total
+    _my_starters  = _remaining_starters(" ".join(my_team.split()))
+    _opp_starters = _remaining_starters(_opp_key)
+    pit_proj = {
+        "QS": {"my": _proj_qs(_my_starters),  "opp": _proj_qs(_opp_starters)},
+        "K":  {"my": _proj_k(_my_starters),   "opp": _proj_k(_opp_starters)},
+        "W":  {"my": _proj_w(_my_starters),   "opp": _proj_w(_opp_starters)},
+    }
     my_week_roto_pts = sum(
         float(r.get("Roto_Score") or 0)
         for r in week_roto
@@ -2339,7 +2378,7 @@ def build_email(snap, override_team=None):
         band_divider("⚑  ALERTS", RED) if alert_section else "",                         # TRIAGE band header
         alert_section,                                                                    # 1  TRIAGE
         week_overview,                                                                    # 2  WEEK INTELLIGENCE
-        build_category_pulse(matchup, weekly_avgs=weekly_avgs, days_elapsed=days_elapsed), # 3
+        build_category_pulse(matchup, weekly_avgs=weekly_avgs, days_elapsed=days_elapsed, remaining_proj=pit_proj), # 3
         week_cat_section,                                                                 # 4  (before matchup panel)
         build_matchup_section(matchup, logos=team_logos, my_team=my_team),               # 5
         band_divider("MY ROSTER"),                                                        # MY TEAM band header
@@ -2479,7 +2518,7 @@ def main():
     subject    = f"⚾ {team_label} Digest — {datetime.now().strftime('%b %d')}"
 
     if dry_run:
-        fname = f"digest_preview_{team_slug}.html" if override_team else "digest_preview.html"
+        fname = f"digest_preview_{team_slug}.html"
         previews_dir = Path(__file__).parent / "previews"
         previews_dir.mkdir(exist_ok=True)
         out = previews_dir / fname
