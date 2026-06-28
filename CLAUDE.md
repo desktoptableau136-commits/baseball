@@ -91,12 +91,19 @@ Two files; one intermediate artifact:
 
 **FA RP requires SVHD ≥ 1:** `fa_relievers` gates on `(_n(r.get("ESPN_SVHD")) or _n(r.get("SVHD"))) >= 1`. A pitcher with zero saves and zero holds all season has no role and should not be recommended.
 
+**Score cascade (`best_recent_p` / `best_recent_h`):** Built in `build_email` by merging `{**rec_p_fp, **p7, **p15, **p30}` (pitchers) and `{**rec_h, **h7, **h15, **h30}` (hitters) — later dicts win, so 30d FP > 15d FP > 7d FP > Baseball Ref. `rec_p_fp` is `recent_pitching` with computed `K/IP = K/IP` and `IP_per_G = IP/G` added so `pitcher_score` can use it. These dicts are passed to `_blend` and `positional_breakdown`. Coverage: ~500 pitchers / ~460 hitters vs 300 from 30d alone.
+
+**`positional_breakdown` viable filter:** FA pool for each position excludes benchies. SP: `GS >= 3`. RP: `ESPN_GP >= 12 or IP >= 20`. Hitters: `OPS > 0.200 or R+RBI > 5`. FA quality (`fa_quality`) = avg blended score of top-3 viable FAs. Scarcity thresholds: `< 50` → scarce (RED), `< 60` → moderate (YELLOW), `>= 60` → deep (MUTED).
+
+**Category Pulse `days_elapsed`:** `days_elapsed = datetime.now().weekday()` (Mon=0 … Sun=6). ESPN stats are through *yesterday*, so today is always remaining — do not add 1. Guard: `day_clause = f' through Day {days_elapsed}' if days_elapsed > 0 else ' (week starting)'`.
+
 ## Scoring functions (send_digest.py)
 
 - `_is_sp(r)` → bool. Usage-based SP/RP detection. Priority: ESPN season GS/GP → dataset GS/G → IP/G → Position field. See gotcha above.
-- `pitcher_score(r)` → 0–100. Role-aware via `_is_sp(r)`. **SP path**: role bonus 9–12 based on GS volume; SVHD ignored. **RP path**: role bonus 5–12 scaled by SVHD; QS/GS ignored. K component uses WhiffPct if available, else Kpct_P, else K/IP. ERA component prefers xFIP over ERA.
-- `rp_score(r)` → composite for RP ranking. Weights: SVHD (40pts), K (25pts), W (15pts), ERA (12pts), WHIP (8pts). Uses `ESPN_SVHD`/`ESPN_K`/`ESPN_W` with FantasyPros fallback. Used by both FA RP and My Relief Pitchers sections. My Relief Pitchers picks the best available dataset per player (YEAR → 30 → 15 → 7) so recently called-up RPs outside FantasyPros' season top-300 still appear.
-- `hitter_score(r)` → 0–100. Prefers wRC+ over OPS. Uses xwOBA, sprint speed, Barrel%, ISO, HR_Probability.
+- `_blend(r, score_fn, idx_recent, w=0.4)` → blended score. 40% recent (best available window) + 60% season. `idx_recent` is `best_recent_p` or `best_recent_h` (see below). Falls back to `score_fn(r)` if player has no recent row. Used in My Upcoming Starts badge and `positional_breakdown`.
+- `pitcher_score(r)` → 0–100. Role-aware via `_is_sp(r)`. **SP path**: role bonus 9–12 based on GS volume; SVHD ignored. **RP path**: role bonus 5–12 scaled by SVHD + W (up to 6pts) + IP/G opportunity (up to 5pts). K component uses WhiffPct if available, else Kpct_P, else K/IP. ERA component prefers xFIP over ERA. **Small-sample penalty**: `s *= min(1.0, ip / 20)` applied before calibration — suppresses sub-20-IP samples. Calibrated to p50=50, p90=80: `s * 1.875 - 72.6`.
+- `rp_score(r)` → composite for RP ranking. Weights: SVHD (40pts) · K (22pts) · W (13pts) · IP/G (10pts) · ERA (9pts) · WHIP (6pts). Uses `ESPN_SVHD`/`ESPN_K`/`ESPN_W` with FantasyPros fallback. Used by both FA RP and My Relief Pitchers sections. My Relief Pitchers picks the best available dataset per player (YEAR → 30 → 15 → 7) so recently called-up RPs outside FantasyPros' season top-300 still appear.
+- `hitter_score(r)` → 0–100. Prefers wRC+ over OPS. Uses xwOBA, sprint speed, Barrel%, ISO, HR_Probability. Calibrated: `s * 1.587 - 5.2`.
 - `sp_fa_score(r)` → pitcher_score + start bonus (scaled 8–22 by QS probability). Returns 0 if `not _is_sp(r)`.
 - `qs_probability(r)` → 1–99. Calibrated to league-average ~38%, ace ~75%. Uses IP/G (not IP/GS).
 - `_fmt_ip(ip_decimal)` → baseball IP string. Converts true decimal (5.333) to notation (5.1). Formula: `whole = int(d); outs = round((d-whole)*3); if outs>=3: whole+=1, outs=0`. Used in Proj. Line display for both FA SP and My Upcoming Starts.
