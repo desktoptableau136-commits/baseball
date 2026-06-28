@@ -95,8 +95,8 @@ def _is_sp(r):
     return False
 
 
-def _blend(r, score_fn, idx_recent, w=0.6):
-    """60/40 blend of best-available recent stats and season score."""
+def _blend(r, score_fn, idx_recent, w=0.4):
+    """40/60 blend of best-available recent stats and season score."""
     s_year = score_fn(r)
     r_rec = idx_recent.get(r.get("PlayerName", ""))
     if not r_rec:
