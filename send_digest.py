@@ -253,12 +253,14 @@ def sp_fa_score(r):
 
 def fa_starters(pitchers, claimed=None, week_end=None):
     claimed = claimed or set()
+    today_str = datetime.now().strftime("%Y-%m-%d")
     fa = [
         r for r in pitchers
         if r.get("FantasyTeam", "") == ""
         and r.get("PlayerName", "") not in claimed
         and int(r.get("Dataset", 0)) == YEAR
         and r.get("PSP_Date", "") not in ("1999-01-01", "", None)
+        and r.get("PSP_Date", "") >= today_str
         and str(r.get("FreeAgentInjuryStatus", "")) not in _DL_STATUSES
         and (week_end is None or r.get("PSP_Date", "") <= week_end)
     ]
@@ -471,11 +473,13 @@ def roster_alerts(pitchers, hitters, my_team):
 
 def my_upcoming_starts(pitchers, my_team, week_end=None):
     my_key = " ".join(my_team.split())
+    today_str = datetime.now().strftime("%Y-%m-%d")
     sp = [
         r for r in pitchers
         if " ".join((r.get("FantasyTeam") or "").split()) == my_key
         and int(r.get("Dataset", 0)) == YEAR
         and r.get("PSP_Date", "") not in ("1999-01-01", "", None)
+        and r.get("PSP_Date", "") >= today_str
         and (week_end is None or r.get("PSP_Date", "") <= week_end)
     ]
     return sorted(sp, key=lambda r: r.get("PSP_Date", ""))
