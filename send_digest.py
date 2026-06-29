@@ -1388,6 +1388,66 @@ _CAT_DISPLAY = {
 }
 
 
+def build_prev_matchup_recap(prev_matchup):
+    if not prev_matchup or not prev_matchup.get("categories"):
+        return ""
+
+    week   = prev_matchup.get("week", "")
+    opp    = prev_matchup.get("opp_team", "Opponent")
+    wins   = prev_matchup.get("wins", 0)
+    losses = prev_matchup.get("losses", 0)
+    ties   = prev_matchup.get("ties", 0)
+    cats   = prev_matchup.get("categories", [])
+
+    if wins > losses:
+        outcome_color, outcome_word = GREEN, "WIN"
+    elif losses > wins:
+        outcome_color, outcome_word = RED, "LOSS"
+    else:
+        outcome_color, outcome_word = YELLOW, "TIE"
+
+    score_str = f"{wins}-{losses}" + (f"-{ties}" if ties else "")
+
+    hit_cats_list = [c for c in cats if c["cat"] in _HIT_CATS]
+    pit_cats_list = [c for c in cats if c["cat"] in _PIT_CATS]
+
+    def _cat_pills(cat_list):
+        pills = ""
+        for c in cat_list:
+            r   = c.get("result", "T")
+            col = GREEN if r == "W" else (RED if r == "L" else YELLOW)
+            lbl = _CAT_DISPLAY.get(c["cat"], c["cat"])
+            mv  = c.get("my_val", 0)
+            ov  = c.get("opp_val", 0)
+            dec = 3 if c["cat"] in {"OPS", "ERA", "WHIP"} else 0
+            val_str = f"{mv:.{dec}f}–{ov:.{dec}f}"
+            pills += (
+                f'<span style="display:inline-block;background:{col}1a;border:1px solid {col}55;'
+                f'border-radius:3px;padding:1px 7px;margin:2px 3px 2px 0;font-size:11px;'
+                f'color:{col};font-weight:600;" title="{val_str}">{lbl}</span>'
+            )
+        return pills
+
+    return (
+        f'<div style="background:{SURFACE};border:1px solid {BORDER};border-radius:6px;'
+        f'padding:12px 16px;margin-bottom:12px;">'
+        f'<div style="color:{MUTED};font-size:10px;font-weight:700;text-transform:uppercase;'
+        f'letter-spacing:.7px;margin-bottom:9px;">Last Week — Final Result</div>'
+        f'<div style="display:flex;align-items:baseline;gap:10px;margin-bottom:8px;">'
+        f'<span style="color:{outcome_color};font-weight:800;font-size:15px;">{outcome_word}</span>'
+        f'<span style="color:{TEXT};font-weight:700;">{score_str}</span>'
+        f'<span style="color:{MUTED};font-size:12px;">vs. {opp} &middot; Week {week}</span>'
+        f'</div>'
+        f'<div style="margin-bottom:4px;font-size:11px;color:{MUTED};font-weight:600;'
+        f'text-transform:uppercase;letter-spacing:.5px;">Batting</div>'
+        f'<div style="margin-bottom:8px;">{_cat_pills(hit_cats_list)}</div>'
+        f'<div style="margin-bottom:4px;font-size:11px;color:{MUTED};font-weight:600;'
+        f'text-transform:uppercase;letter-spacing:.5px;">Pitching</div>'
+        f'<div>{_cat_pills(pit_cats_list)}</div>'
+        f'</div>'
+    )
+
+
 def build_week_overview(matchup, week_cats, week_n, fa_sp, starts, days_elapsed, my_starts_by_day, week_end=None, is_sunday=False):
     bullets = []
 
@@ -1590,6 +1650,7 @@ def build_email(snap, override_team=None):
     recent_hitting  = snap.get("recent_hitting",  [])
     recent_pitching = snap.get("recent_pitching", [])
     weekly_results  = snap.get("weekly_results",  {})
+    prev_matchup    = snap.get("prev_matchup",    {})
     rec_h = {r["PlayerName"]: r for r in recent_hitting  if r.get("PlayerName")}
     rec_p = {r["PlayerName"]: r for r in recent_pitching if r.get("PlayerName")}
     p7    = {r["PlayerName"]: r for r in pitchers if int(r.get("Dataset", 0) or 0) == 7  and r.get("PlayerName")}
@@ -1635,7 +1696,8 @@ def build_email(snap, override_team=None):
     days_elapsed = datetime.now().weekday()   # Mon=0 (no stats yet) … Sun=6
     _today = datetime.now().date()
     week_end_str = (_today + timedelta(days=6 - _today.weekday())).strftime("%Y-%m-%d")
-    is_sunday = _today.weekday() == 6
+    is_sunday  = _today.weekday() == 6
+    is_monday  = _today.weekday() == 0
     next_week_end_str = (_today + timedelta(days=13 - _today.weekday())).strftime("%Y-%m-%d")
     week_roto = [r for r in roto if int(r.get("Week", 0)) == current_week_num]
     week_cats, week_n = category_ranks(week_roto, my_team)
@@ -2450,6 +2512,7 @@ def build_email(snap, override_team=None):
     body_parts += [
         band_divider("⚑  ALERTS", RED) if alert_section else "",                         # TRIAGE band header
         alert_section,                                                                    # 1  TRIAGE
+        build_prev_matchup_recap(prev_matchup) if is_monday else "",                     # 2a MONDAY RECAP
         week_overview,                                                                    # 2  WEEK INTELLIGENCE
         build_category_pulse(matchup, weekly_avgs=weekly_avgs, days_elapsed=days_elapsed, remaining_proj=pit_proj, is_sunday=is_sunday), # 3
         week_cat_section,                                                                 # 4  (before matchup panel)

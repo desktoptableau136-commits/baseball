@@ -1110,6 +1110,67 @@ def get_all_matchups(league) -> dict:
     return all_matchups
 
 
+
+def get_prev_matchup(league, my_team: str) -> dict:
+    """Return the most recently completed matchup for my_team, same structure as current_matchup."""
+    current_week = getattr(league, "currentMatchupPeriod", None)
+    prev_week = current_week - 1 if current_week and current_week > 1 else None
+    if not prev_week:
+        return {}
+    try:
+        boxes = league.box_scores(prev_week)
+    except Exception:
+        return {}
+
+    my_team_norm = " ".join(my_team.split())
+    _flip = {"W": "L", "L": "W", "T": "T"}
+
+    for b in boxes:
+        home_name = " ".join(b.home_team.team_name.split())
+        away_name = " ".join(b.away_team.team_name.split())
+        if my_team_norm not in (home_name, away_name):
+            continue
+
+        is_home = my_team_norm == home_name
+        my_raw  = (getattr(b, "home_stats", {}) or {}) if is_home else (getattr(b, "away_stats", {}) or {})
+        opp_raw = (getattr(b, "away_stats", {}) or {}) if is_home else (getattr(b, "home_stats", {}) or {})
+        opp_name = away_name if is_home else home_name
+
+        wins = losses = ties = 0
+        cats = []
+        for cat in ROTO_CATS:
+            m_info = my_raw.get(cat, {}) or {}
+            o_info = opp_raw.get(cat, {}) or {}
+            m_val  = float(m_info.get("value") or 0)
+            o_val  = float(o_info.get("value") or 0)
+
+            if m_val == o_val:
+                result = "T"; ties += 1
+            elif cat in LOWER_BETTER:
+                if m_val < o_val:
+                    result = "W"; wins += 1
+                else:
+                    result = "L"; losses += 1
+            else:
+                if m_val > o_val:
+                    result = "W"; wins += 1
+                else:
+                    result = "L"; losses += 1
+
+            cats.append({
+                "cat": cat, "my_val": m_val, "opp_val": o_val,
+                "result": result, "lower_better": cat in LOWER_BETTER,
+            })
+
+        return {
+            "week": prev_week, "my_team": my_team,
+            "opp_team": opp_name, "wins": wins, "losses": losses, "ties": ties,
+            "categories": cats,
+        }
+
+    return {}
+
+
 # â”€â”€ MAIN â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def main():
@@ -1153,10 +1214,14 @@ def main():
     print("\n[7/10] Pulling current week matchups...")
     all_matchups    = get_all_matchups(league)
     current_matchup = all_matchups.get(" ".join(my_team.split()), {})
+    prev_matchup    = get_prev_matchup(league, my_team)
     if current_matchup:
         print(f"       Week {current_matchup['week']}: {my_team} vs {current_matchup['opp_team']} ({current_matchup['wins']}-{current_matchup['losses']}) | {len(all_matchups)} teams indexed")
     else:
         print("       No active matchup found.")
+    if prev_matchup:
+        prev_wk = prev_matchup.get("week", "?")
+        print(f"       Prev week {prev_wk}: {prev_matchup['wins']}-{prev_matchup['losses']}-{prev_matchup['ties']} vs {prev_matchup['opp_team']}")
 
     print("\n[8/10] Fetching last-7-day hitter stats...")
     recent_hitting = fetch_recent_hitter_stats(days=7)
@@ -1178,6 +1243,7 @@ def main():
         "weekly_results":  {str(k): v for k, v in weekly_results.items()},
         "transactions":    transactions,
         "current_matchup": current_matchup,
+        "prev_matchup":    prev_matchup,
         "all_matchups":    all_matchups,
         "recent_hitting":  recent_hitting,
         "recent_pitching": recent_pitching,

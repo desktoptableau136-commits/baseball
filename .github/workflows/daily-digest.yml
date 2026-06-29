@@ -2,8 +2,8 @@ name: Daily Fantasy Baseball Digest
 
 on:
   schedule:
-    - cron: '0 8 * * *'   # trigger at 4 AM EDT (UTC-4) — GH Actions delays ~30-60min, lands ~7 AM EDT
-    - cron: '0 17 * * *'  # trigger at 1 PM EDT (UTC-4) — lands ~4 PM EDT
+    - cron: '0 6 * * *'   # trigger at 2 AM EDT (UTC-4) — GH delays 1-4hr, targets ~4-6 AM EDT delivery
+    - cron: '0 15 * * *'  # trigger at 11 AM EDT (UTC-4) — targets ~1-3 PM EDT delivery
   workflow_dispatch:       # allows manual trigger from the GitHub Actions UI
 
 jobs:

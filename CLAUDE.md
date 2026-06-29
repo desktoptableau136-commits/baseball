@@ -176,5 +176,5 @@ My team name is always styled `font-weight:800;color:{ACCENT}` with a ← arrow.
 
 ## Automation
 
-- **GitHub Actions:** `.github/workflows/daily-digest.yml` triggers at 08:00 and 17:00 UTC (4 AM / 1 PM EDT). With typical GitHub runner queue delays of 30–60 min, emails arrive around 7 AM / 4 PM EDT. **Cron is always UTC** — no GitHub account or org timezone setting affects it. ESPN credentials are stored as repo secrets (`ESPN_SWID`, `ESPN_S2`).
+- **GitHub Actions:** `.github/workflows/daily-digest.yml` triggers at 06:00 and 15:00 UTC (2 AM / 11 AM EDT). GitHub's scheduler is unreliable — actual delays vary 1–4 hours, so expected delivery is roughly 4–6 AM / 1–3 PM EDT. **Cron is always UTC** — no GitHub account or org timezone setting affects it. ESPN credentials are stored as repo secrets (`ESPN_SWID`, `ESPN_S2`).
 - **Local runner:** `scripts/run_digest.bat` can be used for manual local runs (logs to `logs/digest.log`).
