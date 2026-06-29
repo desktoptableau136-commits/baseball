@@ -1750,7 +1750,10 @@ def build_week_overview(matchup, week_cats, week_n, fa_sp, starts, days_elapsed,
 
     # Bullet 3: best FA SP pickup — on Sundays always target next week
     if fa_sp:
-        def _best_fa_str(pool, label_prefix="Best FA pickup"):
+        def _pos_label(r):
+            return "SP" if _is_sp(r) else (r.get("Position", "P") or "P")
+
+        def _best_fa_str(pool, label_prefix="Best FA SP pickup"):
             if not pool:
                 return ""
             best = max(pool, key=lambda r: qs_probability(r) or 0)
@@ -1763,6 +1766,7 @@ def build_week_overview(matchup, week_cats, week_n, fa_sp, starts, days_elapsed,
             qc = GREEN if qsp >= 60 else (YELLOW if qsp >= 40 else MUTED)
             s = (
                 f'{label_prefix}: <span style="color:{TEXT};font-weight:700;">{best["PlayerName"]}</span>'
+                f' <span style="color:{MUTED};font-size:10px;">({_pos_label(best)})</span>'
                 f' ({day}'
             )
             if qsp:
@@ -1780,6 +1784,7 @@ def build_week_overview(matchup, week_cats, week_n, fa_sp, starts, days_elapsed,
                 s += (
                     f' · highest score: <span style="color:{TEXT};font-weight:600;">'
                     f'{top["PlayerName"]}</span>'
+                    f' <span style="color:{MUTED};font-size:10px;">({_pos_label(top)})</span>'
                 )
             return s
 
@@ -1810,6 +1815,7 @@ def build_week_overview(matchup, week_cats, week_n, fa_sp, starts, days_elapsed,
                         fa_str = (
                             f'<span style="color:{MUTED};">No FA starters this week</span>'
                             f' — next week: <span style="color:{TEXT};font-weight:700;">{best_nw["PlayerName"]}</span>'
+                            f' <span style="color:{MUTED};font-size:10px;">({_pos_label(best_nw)})</span>'
                             f' ({day_nw}'
                         )
                         if qsp_nw:
@@ -1830,6 +1836,7 @@ def build_week_overview(matchup, week_cats, week_n, fa_sp, starts, days_elapsed,
                     fa_str = (
                         f'<span style="color:{MUTED};">No FA starters this week</span>'
                         f' — next week: <span style="color:{TEXT};font-weight:700;">{best_nw["PlayerName"]}</span>'
+                        f' <span style="color:{MUTED};font-size:10px;">({_pos_label(best_nw)})</span>'
                         f' ({day_nw}'
                     )
                     if qsp_nw:
