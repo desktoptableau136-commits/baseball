@@ -960,6 +960,51 @@ def build_matchup_section(matchup, logos=None, my_team=MY_TEAM,
     my_logo_html  = fantasy_logo(logos.get(_norm(my_team), ""), 36, my_team)
     opp_logo_html = fantasy_logo(logos.get(_norm(opp), ""), 36, opp)
 
+    # Pre-compute projections for all categories
+    proj_map = {}
+    for c in matchup["categories"]:
+        cat  = c["cat"]
+        my_v = c["my_val"]
+        ov   = c["opp_val"]
+        rp   = (remaining_proj or {}).get(cat)
+        if rp is not None:
+            proj_map[cat] = {"pm": my_v + rp["my"], "po": ov + rp["opp"]}
+        elif has_proj and cat in my_avgs and cat in opp_avgs:
+            proj_map[cat] = {
+                "pm": _project(my_v, my_avgs[cat], elapsed_frac, cat),
+                "po": _project(ov,   opp_avgs[cat], elapsed_frac, cat),
+            }
+
+    # Projected record
+    proj_w = proj_l = proj_t = 0
+    for c in matchup["categories"]:
+        cat = c["cat"]
+        p   = proj_map.get(cat)
+        if p is None:
+            continue
+        dec = _CAT_DEC.get(cat, 0)
+        pm_r = round(p["pm"], dec)
+        po_r = round(p["po"], dec)
+        lower = cat in _LOWER_BETTER
+        if pm_r == po_r:
+            proj_t += 1
+        elif (pm_r < po_r) == lower:
+            proj_w += 1
+        else:
+            proj_l += 1
+
+    if proj_map:
+        pw_col = f"{score_color}99"
+        proj_record_html = (
+            f'<div style="font-size:10px;font-weight:400;color:{MUTED};margin-top:3px;">'
+            f'proj <span style="color:{pw_col};font-weight:600;">'
+            f'{proj_w}-{proj_l}'
+            + (f'-{proj_t}' if proj_t else '')
+            + f'</span></div>'
+        )
+    else:
+        proj_record_html = ""
+
     score_banner = (
         f'<table style="width:100%;border-collapse:collapse;background:{SURFACE};'
         f'border-radius:6px;margin-bottom:12px;">'
@@ -969,6 +1014,7 @@ def build_matchup_section(matchup, logos=None, my_team=MY_TEAM,
         f'<td style="width:16%;text-align:center;padding:12px 8px;">'
         f'<div style="font-size:18px;font-weight:900;color:{score_color};">{score_str}</div>'
         f'<div style="font-size:10px;color:{MUTED};text-transform:uppercase;letter-spacing:.5px;">{status}</div>'
+        f'{proj_record_html}'
         f'</td>'
         f'<td style="width:42%;padding:12px 16px;font-size:13px;font-weight:700;color:{TEXT};text-align:center;">'
         f'{opp_logo_html}{opp_short}</td>'
@@ -987,20 +1033,12 @@ def build_matchup_section(matchup, logos=None, my_team=MY_TEAM,
         my_color  = GREEN if res == "W" else (RED   if res == "L" else MUTED)
         opp_color = RED   if res == "W" else (GREEN if res == "L" else MUTED)
 
-        # Projection
-        pm = po = None
-        rp = (remaining_proj or {}).get(cat)
-        if rp is not None:
-            pm = my_v + rp["my"]
-            po = opp_v + rp["opp"]
-        elif has_proj and cat in my_avgs and cat in opp_avgs:
-            pm = _project(my_v, my_avgs[cat], elapsed_frac, cat)
-            po = _project(opp_v, opp_avgs[cat], elapsed_frac, cat)
+        p = proj_map.get(cat)
 
         def _proj_span(val, ref_color):
             if val is None:
                 return ""
-            return (f'<div style="font-size:9px;color:{MUTED};margin-top:2px;">'
+            return (f'<div style="font-size:9px;font-weight:400;color:{MUTED};margin-top:2px;">'
                     f'proj <span style="color:{ref_color}99;">{val:.{dec}f}</span></div>')
 
         cat_label = f'<span style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:{MUTED};">{label}</span>'
@@ -1019,10 +1057,10 @@ def build_matchup_section(matchup, logos=None, my_team=MY_TEAM,
         rows += (
             f'<tr style="{bg}">'
             f'<td style="{TDC}font-weight:700;color:{my_color};font-size:14px;">'
-            f'{my_v:.{dec}f}{_proj_span(pm, my_color)}</td>'
+            f'{my_v:.{dec}f}{_proj_span(p["pm"] if p else None, my_color)}</td>'
             f'<td style="{TDC}color:{mid_color};">{mid}</td>'
             f'<td style="{TDC}font-weight:700;color:{opp_color};font-size:14px;">'
-            f'{opp_v:.{dec}f}{_proj_span(po, opp_color)}</td>'
+            f'{opp_v:.{dec}f}{_proj_span(p["po"] if p else None, opp_color)}</td>'
             f'</tr>'
         )
 
