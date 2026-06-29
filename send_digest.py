@@ -1499,20 +1499,17 @@ def build_prev_matchup_recap(prev_matchup):
     td = f'padding:5px 7px;text-align:center;font-size:11px;font-weight:500;white-space:nowrap;'
     VAL_COLOR = "#94a3b8"  # muted but readable — values are reference, not the focus
 
-    # Header row: cat label + colored W/L/T badge below it
+    # Header row: cat label colored + bordered by result (W=green, L=red, T=muted)
     header_cells = f'<th style="{th}text-align:left;min-width:90px;"></th>'
     for i, cat in enumerate(cat_order):
         lbl = _CAT_DISPLAY.get(cat, cat)
         c   = cat_map.get(cat, {})
         res = c.get("result", "T")
-        badge_col = GREEN if res == "W" else (RED if res == "L" else TEXT)
-        left_border = f'border-left:1px solid {BORDER};' if i == 6 else ''
+        col = GREEN if res == "W" else (RED if res == "L" else MUTED)
+        sep = f'border-left:1px solid {BORDER};' if i == 6 else ''
         header_cells += (
-            f'<th style="{th}{left_border}">'
-            f'{lbl}<br>'
-            f'<span style="color:{badge_col};font-size:9px;font-weight:800;'
-            f'letter-spacing:0;">{res}</span>'
-            f'</th>'
+            f'<th style="{th}{sep}color:{col};border-bottom:2px solid {col}33;">'
+            f'{lbl}</th>'
         )
 
     def _data_row(label, label_color, val_key, row_style=""):
@@ -1525,16 +1522,6 @@ def build_prev_matchup_recap(prev_matchup):
             row += f'<td style="{td}color:{VAL_COLOR};{left_border}">{_fmt(val, cat)}</td>'
         return f'<tr{" " + row_style if row_style else ""}>{row}</tr>'
 
-    def _result_row():
-        row = f'<td style="{td}text-align:left;color:{MUTED};font-size:10px;font-weight:700;">Result</td>'
-        for i, cat in enumerate(cat_order):
-            c   = cat_map.get(cat, {})
-            res = c.get("result", "T")
-            col = GREEN if res == "W" else (RED if res == "L" else TEXT)
-            left_border = f'border-left:1px solid {BORDER};' if i == 6 else ''
-            row += f'<td style="{td}color:{col};font-size:10px;{left_border}">{res}</td>'
-        return f'<tr style="border-top:1px solid {BORDER};">{row}</tr>'
-
     my_short  = " ".join(my_team.split())
     opp_short = opp[:18] + ("…" if len(opp) > 18 else "")
 
@@ -1545,7 +1532,6 @@ def build_prev_matchup_recap(prev_matchup):
         f'<tbody>'
         + _data_row(my_short,  ACCENT, "my_val")
         + _data_row(opp_short, TEXT,   "opp_val")
-        + _result_row()
         + f'</tbody></table></div>'
     )
 
