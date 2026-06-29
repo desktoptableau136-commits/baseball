@@ -155,7 +155,7 @@ def pitcher_score(r):
         s *= min(1.0, ip / 20)
 
     # Calibrate to shared 0-100 scale (p50→50, p90→80) derived from observed distribution
-    s = s * 1.875 - 72.6
+    s = s * 1.875 - 67.6
     return max(0, min(100, round(s)))
 
 
