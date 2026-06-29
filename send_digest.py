@@ -2049,9 +2049,26 @@ def build_email(snap, override_team=None):
     luck_color = GREEN if luck_val > 2 else (RED if luck_val < -2 else MUTED)
 
     # ── Header ─────────────────────────────────────────────────────────────────
+    _data_fresh = (refreshed == today_str)
+    if _data_fresh:
+        _data_badge = (
+            f'<span style="color:{MUTED};font-size:10px;margin-left:10px;vertical-align:middle;">'
+            f'&#10003;&thinsp;data current</span>'
+        )
+    else:
+        try:
+            _ref_dt = datetime.strptime(refreshed, "%Y-%m-%d")
+            _ref_label = f"{_ref_dt.strftime('%b')} {_ref_dt.day}"
+        except Exception:
+            _ref_label = refreshed
+        _data_badge = (
+            f'<span style="color:{YELLOW};font-size:10px;font-weight:600;margin-left:10px;vertical-align:middle;">'
+            f'&#9888;&thinsp;data from {_ref_label} &mdash; run a refresh for today\'s matchup</span>'
+        )
+
     header = f"""
 <div style="background:linear-gradient(135deg,#0b1a38 0%,#0f172a 100%);padding:22px 28px;border-bottom:2px solid {BORDER};">
-  <div style="color:{MUTED};font-size:10px;text-transform:uppercase;letter-spacing:1px;">{today}</div>
+  <div style="color:{MUTED};font-size:10px;text-transform:uppercase;letter-spacing:1px;">{today}{_data_badge}</div>
   <div style="margin-top:6px;vertical-align:middle;">{my_logo_html}<span style="color:{TEXT};font-size:24px;font-weight:900;letter-spacing:-1px;vertical-align:middle;">{my_team}</span></div>
   <div style="color:#4b7bc4;font-size:11px;letter-spacing:.8px;margin-top:4px;text-transform:uppercase;">{_digest_label}</div>
 </div>"""
