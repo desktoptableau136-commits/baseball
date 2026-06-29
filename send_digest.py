@@ -1587,8 +1587,8 @@ def build_prev_matchup_recap(prev_matchup):
             left_border = f'border-left:1px solid {BORDER};' if i == 6 else ''
             val_str = _fmt(val, cat)
             if res == win_result:
-                val_str = (f'<span style="border:1px solid {TEXT}44;border-radius:3px;'
-                           f'padding:1px 4px;">{val_str}</span>')
+                val_str = (f'<span style="outline:1px solid {TEXT}44;outline-offset:3px;'
+                           f'border-radius:3px;display:inline-block;">{val_str}</span>')
             row += f'<td style="{td}color:{VAL_COLOR};{left_border}">{val_str}</td>'
         return f'<tr>{row}</tr>'
 
