@@ -1200,7 +1200,7 @@ def _project(current, avg, elapsed_frac, cat):
         return current + remaining * avg                  # counting: add expected remainder
 
 
-def build_category_pulse(matchup, weekly_avgs=None, days_elapsed=None, remaining_proj=None):
+def build_category_pulse(matchup, weekly_avgs=None, days_elapsed=None, remaining_proj=None, is_sunday=False):
     if not matchup or not matchup.get("categories"):
         return ""
 
@@ -1361,7 +1361,7 @@ def build_category_pulse(matchup, weekly_avgs=None, days_elapsed=None, remaining
         )
 
     return (
-        section_head(f"Category Pulse — Week {week}", f"vs. {opp} · ⚡ = within striking distance") +
+        section_head(f"Category Pulse — Week {week}", f"vs. {opp} · {'Final stretch — week ends today' if is_sunday else '⚡ = within striking distance'}") +
         f'<div style="margin-bottom:8px;font-size:12px;">{summary}</div>' +
         table
     )
@@ -1374,7 +1374,7 @@ _CAT_DISPLAY = {
 }
 
 
-def build_week_overview(matchup, week_cats, week_n, fa_sp, starts, days_elapsed, my_starts_by_day, week_end=None):
+def build_week_overview(matchup, week_cats, week_n, fa_sp, starts, days_elapsed, my_starts_by_day, week_end=None, is_sunday=False):
     bullets = []
 
     def _cat_label(key):
@@ -1397,7 +1397,10 @@ def build_week_overview(matchup, week_cats, week_n, fa_sp, starts, days_elapsed,
         pit_ties = sum(1 for c in cats_list if c["cat"] in _PIT_CATS and c.get("result") == "T")
         hit_color = GREEN if hit_wins > hit_loss else (RED if hit_loss > hit_wins else YELLOW)
         pit_color = GREEN if pit_wins > pit_loss else (RED if pit_loss > pit_wins else YELLOW)
-        day_clause = f' through Day {days_elapsed}' if days_elapsed > 0 else ' (week starting)'
+        if is_sunday:
+            day_clause = ' — final'
+        else:
+            day_clause = f' through Day {days_elapsed}' if days_elapsed > 0 else ' (week starting)'
         bullets.append(
             f'<span style="color:{status_color};font-weight:700;">{status_word} {cw}-{cl}-{ct}</span>'
             f' vs. {opp}{day_clause} — '
@@ -1405,51 +1408,68 @@ def build_week_overview(matchup, week_cats, week_n, fa_sp, starts, days_elapsed,
             f'<span style="color:{pit_color};">pitching {pit_wins}-{pit_loss}-{pit_ties}</span>.'
         )
 
-    # Bullet 2: rotation coverage
-    confirmed = [s for s in starts if s.get("PSP_Date", "1999-01-01") != "1999-01-01"]
-    n_days = len(set(s["PSP_Date"] for s in confirmed))
-    thin_days = sorted(d for d, cnt in my_starts_by_day.items() if cnt < 2)
-    if confirmed:
-        rot_str = (
-            f'<span style="color:{ACCENT};font-weight:700;">{len(confirmed)} starts</span>'
-            f' queued across {n_days} day{"s" if n_days != 1 else ""}'
-        )
-        if thin_days:
-            thin_labels = []
-            for d in thin_days[:3]:
-                try:
-                    thin_labels.append(datetime.strptime(d, "%Y-%m-%d").strftime("%a"))
-                except Exception:
-                    thin_labels.append(d[5:])
-            rot_str += (
-                f' — <span style="color:{YELLOW};">thin on {", ".join(thin_labels)}</span>,'
-                f' consider adding from FA below.'
+    # Bullet 2: rotation coverage — on Sunday, show next-week starts instead
+    if is_sunday:
+        next_confirmed = [s for s in starts if s.get("PSP_Date", "1999-01-01") > (week_end or "")]
+        nw_days = len(set(s["PSP_Date"] for s in next_confirmed))
+        if next_confirmed:
+            rot_str = (
+                f'Next week: <span style="color:{ACCENT};font-weight:700;">{len(next_confirmed)} starts</span>'
+                f' already lined up across {nw_days} day{"s" if nw_days != 1 else ""} — check FA SP below to fill gaps.'
             )
         else:
-            rot_str += ' — rotation well-covered through the week.'
+            rot_str = (
+                f'<span style="color:{YELLOW};font-weight:700;">No confirmed starts next week yet</span>'
+                f' — check FA SP section below and plan your pickups.'
+            )
         bullets.append(rot_str)
     else:
-        bullets.append(
-            f'<span style="color:{RED};font-weight:700;">No confirmed starts</span>'
-            f' yet — check FA SP section below.'
-        )
+        confirmed = [s for s in starts if s.get("PSP_Date", "1999-01-01") != "1999-01-01"]
+        n_days = len(set(s["PSP_Date"] for s in confirmed))
+        thin_days = sorted(d for d, cnt in my_starts_by_day.items() if cnt < 2)
+        if confirmed:
+            rot_str = (
+                f'<span style="color:{ACCENT};font-weight:700;">{len(confirmed)} starts</span>'
+                f' queued across {n_days} day{"s" if n_days != 1 else ""}'
+            )
+            if thin_days:
+                thin_labels = []
+                for d in thin_days[:3]:
+                    try:
+                        thin_labels.append(datetime.strptime(d, "%Y-%m-%d").strftime("%a"))
+                    except Exception:
+                        thin_labels.append(d[5:])
+                rot_str += (
+                    f' — <span style="color:{YELLOW};">thin on {", ".join(thin_labels)}</span>,'
+                    f' consider adding from FA below.'
+                )
+            else:
+                rot_str += ' — rotation well-covered through the week.'
+            bullets.append(rot_str)
+        else:
+            bullets.append(
+                f'<span style="color:{RED};font-weight:700;">No confirmed starts</span>'
+                f' yet — check FA SP section below.'
+            )
 
-    # Bullet 3: best FA SP pickup — restrict to current matchup week
+    # Bullet 3: best FA SP pickup — on Sundays always target next week
     if fa_sp:
-        def _next_week_str():
-            best = max(fa_sp, key=lambda r: qs_probability(r) or 0)
+        def _best_fa_str(pool, label_prefix="Best FA pickup"):
+            if not pool:
+                return ""
+            best = max(pool, key=lambda r: qs_probability(r) or 0)
+            top  = pool[0]
             qsp  = qs_probability(best)
             try:
                 day = datetime.strptime(best.get("PSP_Date", ""), "%Y-%m-%d").strftime("%a %b %d")
             except Exception:
                 day = "?"
+            qc = GREEN if qsp >= 60 else (YELLOW if qsp >= 40 else MUTED)
             s = (
-                f'<span style="color:{MUTED};">No FA starters this week</span>'
-                f' — next week: <span style="color:{TEXT};font-weight:700;">{best["PlayerName"]}</span>'
+                f'{label_prefix}: <span style="color:{TEXT};font-weight:700;">{best["PlayerName"]}</span>'
                 f' ({day}'
             )
             if qsp:
-                qc = GREEN if qsp >= 60 else (YELLOW if qsp >= 40 else MUTED)
                 s += f', QS <span style="color:{qc};font-weight:700;">{qsp}%</span>'
             era = _n(best.get("ERA"))
             if era > 0:
@@ -1460,33 +1480,68 @@ def build_week_overview(matchup, week_cats, week_n, fa_sp, starts, days_elapsed,
                 kc = GREEN if kpct >= 0.26 else (YELLOW if kpct >= 0.22 else TEXT)
                 s += f', K% <span style="color:{kc};">{kpct*100:.1f}%</span>'
             s += ')'
+            if top.get("PlayerName") != best.get("PlayerName"):
+                s += (
+                    f' · highest score: <span style="color:{TEXT};font-weight:600;">'
+                    f'{top["PlayerName"]}</span>'
+                )
             return s
 
-        fa_sp_this_week = [r for r in fa_sp if week_end is None or r.get("PSP_Date", "") <= week_end]
-        if fa_sp_this_week:
-            best_qs   = max(fa_sp_this_week, key=lambda r: qs_probability(r) or 0)
-            top_score = fa_sp_this_week[0]
-            best_qsp  = qs_probability(best_qs)
-            try:
-                best_day = datetime.strptime(best_qs.get("PSP_Date", ""), "%Y-%m-%d").strftime("%a")
-            except Exception:
-                best_day = "?"
-            if best_qsp and best_qsp >= 50:
-                qsp_color = GREEN if best_qsp >= 60 else YELLOW
-                fa_str = (
-                    f'Best FA pickup: <span style="color:{TEXT};font-weight:700;">{best_qs["PlayerName"]}</span>'
-                    f' ({best_day} start, QS <span style="color:{qsp_color};font-weight:700;">{best_qsp}%</span>)'
-                )
-                if top_score.get("PlayerName") != best_qs.get("PlayerName"):
-                    fa_str += (
-                        f' · highest score: <span style="color:{TEXT};font-weight:600;">'
-                        f'{top_score["PlayerName"]}</span>'
-                    )
+        if is_sunday:
+            fa_next = [r for r in fa_sp if r.get("PSP_Date", "") > (week_end or "")]
+            if fa_next:
+                fa_str = _best_fa_str(fa_next, label_prefix="Top FA pickup next week")
             else:
-                fa_str = _next_week_str()
+                fa_str = f'<span style="color:{MUTED};">No confirmed FA starts next week yet — check back Monday.</span>'
+            bullets.append(fa_str)
         else:
-            fa_str = _next_week_str()
-        bullets.append(fa_str)
+            fa_sp_this_week = [r for r in fa_sp if week_end is None or r.get("PSP_Date", "") <= week_end]
+            if fa_sp_this_week:
+                best_qs  = max(fa_sp_this_week, key=lambda r: qs_probability(r) or 0)
+                best_qsp = qs_probability(best_qs)
+                if best_qsp and best_qsp >= 50:
+                    fa_str = _best_fa_str(fa_sp_this_week)
+                else:
+                    fa_next_any = [r for r in fa_sp if week_end is None or r.get("PSP_Date", "") > (week_end or "")]
+                    if fa_next_any:
+                        best_nw = max(fa_next_any, key=lambda r: qs_probability(r) or 0)
+                        qsp_nw  = qs_probability(best_nw)
+                        try:
+                            day_nw = datetime.strptime(best_nw.get("PSP_Date", ""), "%Y-%m-%d").strftime("%a %b %d")
+                        except Exception:
+                            day_nw = "?"
+                        qc_nw = GREEN if qsp_nw >= 60 else (YELLOW if qsp_nw >= 40 else MUTED)
+                        fa_str = (
+                            f'<span style="color:{MUTED};">No FA starters this week</span>'
+                            f' — next week: <span style="color:{TEXT};font-weight:700;">{best_nw["PlayerName"]}</span>'
+                            f' ({day_nw}'
+                        )
+                        if qsp_nw:
+                            fa_str += f', QS <span style="color:{qc_nw};font-weight:700;">{qsp_nw}%</span>'
+                        fa_str += ')'
+                    else:
+                        fa_str = f'<span style="color:{MUTED};">No upcoming FA starts found.</span>'
+            else:
+                fa_next_any = [r for r in fa_sp if r.get("PSP_Date", "") > (week_end or "")]
+                if fa_next_any:
+                    best_nw = max(fa_next_any, key=lambda r: qs_probability(r) or 0)
+                    qsp_nw  = qs_probability(best_nw)
+                    try:
+                        day_nw = datetime.strptime(best_nw.get("PSP_Date", ""), "%Y-%m-%d").strftime("%a %b %d")
+                    except Exception:
+                        day_nw = "?"
+                    qc_nw = GREEN if qsp_nw >= 60 else (YELLOW if qsp_nw >= 40 else MUTED)
+                    fa_str = (
+                        f'<span style="color:{MUTED};">No FA starters this week</span>'
+                        f' — next week: <span style="color:{TEXT};font-weight:700;">{best_nw["PlayerName"]}</span>'
+                        f' ({day_nw}'
+                    )
+                    if qsp_nw:
+                        fa_str += f', QS <span style="color:{qc_nw};font-weight:700;">{qsp_nw}%</span>'
+                    fa_str += ')'
+                else:
+                    fa_str = f'<span style="color:{MUTED};">No upcoming FA starts found.</span>'
+            bullets.append(fa_str)
 
     if not bullets:
         return ""
@@ -1501,7 +1556,7 @@ def build_week_overview(matchup, week_cats, week_n, fa_sp, starts, days_elapsed,
         f'<div style="background:#080e1c;border:1px solid {BORDER};border-radius:6px;'
         f'padding:13px 16px;margin-bottom:20px;">'
         f'<div style="color:{MUTED};font-size:10px;font-weight:700;text-transform:uppercase;'
-        f'letter-spacing:.7px;margin-bottom:8px;">Week at a Glance</div>'
+        f'letter-spacing:.7px;margin-bottom:8px;">{"Next Week Preview" if is_sunday else "Week at a Glance"}</div>'
         f'{items}'
         f'</div>'
     )
@@ -1566,6 +1621,8 @@ def build_email(snap, override_team=None):
     days_elapsed = datetime.now().weekday()   # Mon=0 (no stats yet) … Sun=6
     _today = datetime.now().date()
     week_end_str = (_today + timedelta(days=6 - _today.weekday())).strftime("%Y-%m-%d")
+    is_sunday = _today.weekday() == 6
+    next_week_end_str = (_today + timedelta(days=13 - _today.weekday())).strftime("%Y-%m-%d")
     week_roto = [r for r in roto if int(r.get("Week", 0)) == current_week_num]
     week_cats, week_n = category_ranks(week_roto, my_team)
 
@@ -1612,6 +1669,7 @@ def build_email(snap, override_team=None):
 
     my_row = next((r for r in luck if " ".join((r.get("team") or "").split()) == " ".join(my_team.split())), {})
     today  = datetime.now().strftime("%A, %B %d, %Y")
+    _digest_label = "Weekly Lookahead" if is_sunday else "Daily Fantasy Digest"
 
     # ── Derived KPI values ─────────────────────────────────────────────────────
     my_logo_url = team_logos.get(" ".join(my_team.split()), "")
@@ -1696,7 +1754,7 @@ def build_email(snap, override_team=None):
 <div style="background:linear-gradient(135deg,#0b1a38 0%,#0f172a 100%);padding:22px 28px;border-bottom:2px solid {BORDER};">
   <div style="color:{MUTED};font-size:10px;text-transform:uppercase;letter-spacing:1px;">{today}</div>
   <div style="margin-top:6px;vertical-align:middle;">{my_logo_html}<span style="color:{TEXT};font-size:24px;font-weight:900;letter-spacing:-1px;vertical-align:middle;">{my_team}</span></div>
-  <div style="color:#4b7bc4;font-size:11px;letter-spacing:.8px;margin-top:4px;text-transform:uppercase;">Daily Fantasy Digest</div>
+  <div style="color:#4b7bc4;font-size:11px;letter-spacing:.8px;margin-top:4px;text-transform:uppercase;">{_digest_label}</div>
 </div>"""
 
     # ── KPI row (two lines) ────────────────────────────────────────────────────
@@ -1750,7 +1808,7 @@ def build_email(snap, override_team=None):
   {kpi_cell("Record", wl_val)}
   {kpi_cell("Current Matchup", f'<span style="color:{cat_wl_color};">{cat_wl}</span><div style="color:{MUTED};font-size:9px;margin-top:3px;">{cat_win_pct}</div>')}
   {kpi_cell("Roster", hc_str)}
-  {kpi_cell("Starts This Week", sum(1 for s in starts if s.get("PSP_Date","") <= week_end_str))}
+  {kpi_cell("Starts Next Week" if is_sunday else "Starts This Week", sum(1 for s in starts if s.get("PSP_Date","") > week_end_str) if is_sunday else sum(1 for s in starts if s.get("PSP_Date","") <= week_end_str))}
 </tr>
 <tr style="border-top:1px solid {BORDER};">
   {kpi_cell_sm("Roto Trend", spark_cell_val, font_size="inherit", font_weight="normal")}
@@ -2372,13 +2430,14 @@ def build_email(snap, override_team=None):
 
     # ── Final assembly ─────────────────────────────────────────────────────────
     week_overview = build_week_overview(
-        matchup, week_cats, week_n, fa_sp, starts, days_elapsed, my_starts_by_day, week_end=week_end_str
+        matchup, week_cats, week_n, fa_sp, starts, days_elapsed, my_starts_by_day,
+        week_end=week_end_str, is_sunday=is_sunday
     )
     body_parts += [
         band_divider("⚑  ALERTS", RED) if alert_section else "",                         # TRIAGE band header
         alert_section,                                                                    # 1  TRIAGE
         week_overview,                                                                    # 2  WEEK INTELLIGENCE
-        build_category_pulse(matchup, weekly_avgs=weekly_avgs, days_elapsed=days_elapsed, remaining_proj=pit_proj), # 3
+        build_category_pulse(matchup, weekly_avgs=weekly_avgs, days_elapsed=days_elapsed, remaining_proj=pit_proj, is_sunday=is_sunday), # 3
         week_cat_section,                                                                 # 4  (before matchup panel)
         build_matchup_section(matchup, logos=team_logos, my_team=my_team),               # 5
         band_divider("MY ROSTER"),                                                        # MY TEAM band header
@@ -2515,7 +2574,8 @@ def main():
     html      = build_email(snap, override_team=override_team)
     team_slug = team_label.replace(" ", "_")
     date_str   = datetime.now().strftime('%Y-%m-%d')
-    subject    = f"⚾ {team_label} Digest — {datetime.now().strftime('%b %d')}"
+    _is_sun    = datetime.now().weekday() == 6
+    subject    = f"⚾ {team_label} {'Lookahead' if _is_sun else 'Digest'} — {datetime.now().strftime('%b %d')}"
 
     if dry_run:
         fname = f"digest_preview_{team_slug}.html"
