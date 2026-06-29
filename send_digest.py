@@ -1280,6 +1280,7 @@ def build_category_pulse(matchup, weekly_avgs=None, days_elapsed=None, remaining
     my_avgs  = (weekly_avgs or {}).get(my_team_key,  {})
     opp_avgs = (weekly_avgs or {}).get(opp_team_key, {})
     has_proj = bool(my_avgs and opp_avgs)
+    proj_results = []
 
     def _card(c):
         cat   = c["cat"]
@@ -1361,6 +1362,8 @@ def build_category_pulse(matchup, weekly_avgs=None, days_elapsed=None, remaining
             f'display:flex;gap:2px;align-items:center;">{"".join(corner_parts)}</div>'
         ) if corner_parts else ""
 
+        proj_results.append(proj_res)
+
         return (
             f'<td style="padding:4px;width:16.66%;">'
             f'<div style="position:relative;background:{SURFACE};border:1px solid {border_c}33;'
@@ -1426,6 +1429,24 @@ def build_category_pulse(matchup, weekly_avgs=None, days_elapsed=None, remaining
             f'<span style="color:{YELLOW};">⚡{close_count} close</span>'
         )
 
+    proj_w = sum(1 for r in proj_results if r == "W")
+    proj_l = sum(1 for r in proj_results if r == "L")
+    proj_t = sum(1 for r in proj_results if r == "T")
+    if any(r is not None for r in proj_results):
+        pw_col = f"{GREEN}99"
+        pl_col = f"{RED}99"
+        summary += (
+            f'<span style="color:{MUTED};margin:0 6px;font-size:11px;">→ proj</span>'
+            f'<span style="color:{pw_col};font-weight:600;">{proj_w}W</span>'
+            f'<span style="color:{MUTED};margin:0 4px;">·</span>'
+            f'<span style="color:{pl_col};font-weight:600;">{proj_l}L</span>'
+        )
+        if proj_t:
+            summary += (
+                f'<span style="color:{MUTED};margin:0 4px;">·</span>'
+                f'<span style="color:{TEXT}88;font-weight:600;">{proj_t}T</span>'
+            )
+
     return (
         section_head(f"Category Pulse — Week {week}", f"vs. {opp} · {'Final stretch — week ends today' if is_sunday else '⚡ = within striking distance'}") +
         f'<div style="margin-bottom:8px;font-size:12px;">{summary}</div>' +
@@ -1472,29 +1493,36 @@ def build_prev_matchup_recap(prev_matchup):
             return "—"
 
     # Shared cell styles
-    th = (f'padding:5px 7px;text-align:center;font-size:10px;font-weight:700;'
+    th = (f'padding:4px 7px;text-align:center;font-size:10px;font-weight:700;'
           f'color:{MUTED};text-transform:uppercase;letter-spacing:.4px;'
           f'border-bottom:1px solid {BORDER};white-space:nowrap;')
-    td = f'padding:5px 7px;text-align:center;font-size:11px;font-weight:600;white-space:nowrap;'
+    td = f'padding:5px 7px;text-align:center;font-size:11px;font-weight:500;white-space:nowrap;'
+    VAL_COLOR = "#94a3b8"  # muted but readable — values are reference, not the focus
 
-    # Header row — split batting / pitching with a gap column
+    # Header row: cat label + colored W/L/T badge below it
     header_cells = f'<th style="{th}text-align:left;min-width:90px;"></th>'
     for i, cat in enumerate(cat_order):
         lbl = _CAT_DISPLAY.get(cat, cat)
-        # thin separator before pitching block
+        c   = cat_map.get(cat, {})
+        res = c.get("result", "T")
+        badge_col = GREEN if res == "W" else (RED if res == "L" else TEXT)
         left_border = f'border-left:1px solid {BORDER};' if i == 6 else ''
-        header_cells += f'<th style="{th}{left_border}">{lbl}</th>'
+        header_cells += (
+            f'<th style="{th}{left_border}">'
+            f'{lbl}<br>'
+            f'<span style="color:{badge_col};font-size:9px;font-weight:800;'
+            f'letter-spacing:0;">{res}</span>'
+            f'</th>'
+        )
 
-    def _data_row(label, label_color, val_key, win_col, loss_col, row_style=""):
+    def _data_row(label, label_color, val_key, row_style=""):
         row = (f'<td style="{td}text-align:left;color:{label_color};font-weight:700;'
                f'font-size:11px;padding-right:12px;">{label}</td>')
         for i, cat in enumerate(cat_order):
             c   = cat_map.get(cat, {})
-            res = c.get("result", "T")
             val = c.get(val_key, 0)
-            col = win_col if res == "W" else (loss_col if res == "L" else TEXT)
             left_border = f'border-left:1px solid {BORDER};' if i == 6 else ''
-            row += f'<td style="{td}color:{col};{left_border}">{_fmt(val, cat)}</td>'
+            row += f'<td style="{td}color:{VAL_COLOR};{left_border}">{_fmt(val, cat)}</td>'
         return f'<tr{" " + row_style if row_style else ""}>{row}</tr>'
 
     def _result_row():
@@ -1515,8 +1543,8 @@ def build_prev_matchup_recap(prev_matchup):
         f'<table style="width:100%;border-collapse:collapse;min-width:560px;">'
         f'<thead><tr>{header_cells}</tr></thead>'
         f'<tbody>'
-        + _data_row(my_short,  ACCENT, "my_val",  GREEN, RED)
-        + _data_row(opp_short, TEXT,   "opp_val", RED,   GREEN)
+        + _data_row(my_short,  ACCENT, "my_val")
+        + _data_row(opp_short, TEXT,   "opp_val")
         + _result_row()
         + f'</tbody></table></div>'
     )
