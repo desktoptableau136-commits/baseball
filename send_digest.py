@@ -1259,6 +1259,8 @@ def _project(current, avg, elapsed_frac, cat):
     """Project end-of-week value from current accumulated stat and historical weekly avg."""
     remaining = 1.0 - elapsed_frac
     if cat in _RATE_CATS:
+        if elapsed_frac == 0:
+            return avg  # no innings yet; NaN * 0 = NaN, so skip current entirely
         return current * elapsed_frac + avg * remaining   # weighted blend
     else:
         return current + remaining * avg                  # counting: add expected remainder
