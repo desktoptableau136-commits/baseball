@@ -943,7 +943,7 @@ def build_matchup_section(matchup, logos=None, my_team=MY_TEAM):
     elif losses > wins:
         score_color, status = RED, "Losing"
     else:
-        score_color, status = YELLOW, "Tied"
+        score_color, status = TEXT, "Tied"
 
     opp_short = opp[:16] + ("…" if len(opp) > 16 else "")
 
@@ -1277,7 +1277,7 @@ def build_category_pulse(matchup, weekly_avgs=None, days_elapsed=None, remaining
     elapsed_frac = min(1.0, max(0.0, (days_elapsed or 0) / 7))
     my_avgs  = (weekly_avgs or {}).get(my_team_key,  {})
     opp_avgs = (weekly_avgs or {}).get(opp_team_key, {})
-    has_proj = bool(my_avgs and opp_avgs and elapsed_frac > 0)
+    has_proj = bool(my_avgs and opp_avgs)
 
     def _card(c):
         cat   = c["cat"]
@@ -1390,7 +1390,7 @@ def build_category_pulse(matchup, weekly_avgs=None, days_elapsed=None, remaining
 
     wins   = matchup["wins"]
     losses = matchup["losses"]
-    score_color = GREEN if wins > losses else (RED if losses > wins else YELLOW)
+    score_color = GREEN if wins > losses else (RED if losses > wins else TEXT)
 
     table = (
         f'<div style="overflow-x:auto;-webkit-overflow-scrolling:touch;margin-bottom:24px;">'
@@ -1680,7 +1680,7 @@ def build_week_overview(matchup, week_cats, week_n, fa_sp, starts, days_elapsed,
         cl = matchup.get("losses", 0)
         ct = matchup.get("ties", 0)
         opp = matchup.get("opp_team", "opponent")
-        status_color = GREEN if cw > cl else (RED if cl > cw else YELLOW)
+        status_color = GREEN if cw > cl else (RED if cl > cw else TEXT)
         status_word  = "Leading" if cw > cl else ("Trailing" if cl > cw else "Tied")
         cats_list    = matchup.get("categories", [])
         hit_wins = sum(1 for c in cats_list if c["cat"] in _HIT_CATS and c.get("result") == "W")
@@ -2038,7 +2038,7 @@ def build_email(snap, override_team=None):
 
     # Category W-L this week
     cat_wl = f'{matchup.get("wins","—")}-{matchup.get("losses","—")}-{matchup.get("ties",0)}' if matchup else "—"
-    cat_wl_color = GREEN if matchup and matchup.get("wins", 0) > matchup.get("losses", 0) else (RED if matchup and matchup.get("losses", 0) > matchup.get("wins", 0) else YELLOW)
+    cat_wl_color = GREEN if matchup and matchup.get("wins", 0) > matchup.get("losses", 0) else (RED if matchup and matchup.get("losses", 0) > matchup.get("wins", 0) else TEXT)
     _cw, _cl, _ct = (matchup.get("wins", 0), matchup.get("losses", 0), matchup.get("ties", 0)) if matchup else (0, 0, 0)
     _ctotal = _cw + _cl + _ct
     cat_win_pct = f"{(_cw + 0.5 * _ct) / _ctotal:.3f}" if _ctotal else "—"
