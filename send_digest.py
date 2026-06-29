@@ -926,7 +926,8 @@ _CAT_DEC = {
 }
 
 
-def build_matchup_section(matchup, logos=None, my_team=MY_TEAM):
+def build_matchup_section(matchup, logos=None, my_team=MY_TEAM,
+                          weekly_avgs=None, days_elapsed=None, remaining_proj=None):
     if not matchup or not matchup.get("categories"):
         return ""
 
@@ -936,6 +937,14 @@ def build_matchup_section(matchup, logos=None, my_team=MY_TEAM):
     ties    = matchup["ties"]
     opp     = matchup.get("opp_team", "Opponent")
     week    = matchup.get("week", "")
+
+    # Projection setup (mirrors build_category_pulse)
+    my_team_key  = " ".join(matchup.get("my_team",  "").split())
+    opp_team_key = " ".join(matchup.get("opp_team", "").split())
+    elapsed_frac = min(1.0, max(0.0, (days_elapsed or 0) / 7))
+    my_avgs  = (weekly_avgs or {}).get(my_team_key,  {})
+    opp_avgs = (weekly_avgs or {}).get(opp_team_key, {})
+    has_proj = bool(my_avgs and opp_avgs)
 
     score_str = f"{wins}-{losses}-{ties}"
     if wins > losses:
@@ -978,6 +987,22 @@ def build_matchup_section(matchup, logos=None, my_team=MY_TEAM):
         my_color  = GREEN if res == "W" else (RED   if res == "L" else MUTED)
         opp_color = RED   if res == "W" else (GREEN if res == "L" else MUTED)
 
+        # Projection
+        pm = po = None
+        rp = (remaining_proj or {}).get(cat)
+        if rp is not None:
+            pm = my_v + rp["my"]
+            po = opp_v + rp["opp"]
+        elif has_proj and cat in my_avgs and cat in opp_avgs:
+            pm = _project(my_v, my_avgs[cat], elapsed_frac, cat)
+            po = _project(opp_v, opp_avgs[cat], elapsed_frac, cat)
+
+        def _proj_span(val, ref_color):
+            if val is None:
+                return ""
+            return (f'<div style="font-size:9px;color:{MUTED};margin-top:2px;">'
+                    f'proj <span style="color:{ref_color}99;">{val:.{dec}f}</span></div>')
+
         cat_label = f'<span style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:{MUTED};">{label}</span>'
         arrow_l = f'<span style="color:{ACCENT};">&#9664;</span>' if res == "W" else ''
         arrow_r = f'<span style="color:{YELLOW};">&#9654;</span>' if res == "L" else ''
@@ -993,9 +1018,11 @@ def build_matchup_section(matchup, logos=None, my_team=MY_TEAM):
         bg = f"background:{SURFACE2};" if i % 2 else ""
         rows += (
             f'<tr style="{bg}">'
-            f'<td style="{TDC}font-weight:700;color:{my_color};font-size:14px;">{my_v:.{dec}f}</td>'
+            f'<td style="{TDC}font-weight:700;color:{my_color};font-size:14px;">'
+            f'{my_v:.{dec}f}{_proj_span(pm, my_color)}</td>'
             f'<td style="{TDC}color:{mid_color};">{mid}</td>'
-            f'<td style="{TDC}font-weight:700;color:{opp_color};font-size:14px;">{opp_v:.{dec}f}</td>'
+            f'<td style="{TDC}font-weight:700;color:{opp_color};font-size:14px;">'
+            f'{opp_v:.{dec}f}{_proj_span(po, opp_color)}</td>'
             f'</tr>'
         )
 
@@ -2835,7 +2862,9 @@ def build_email(snap, override_team=None):
         week_overview,                                                                    # 2  WEEK INTELLIGENCE
         build_category_pulse(matchup, weekly_avgs=weekly_avgs, days_elapsed=days_elapsed, remaining_proj=pit_proj, is_sunday=is_sunday), # 3
         week_cat_section,                                                                 # 4  (before matchup panel)
-        build_matchup_section(matchup, logos=team_logos, my_team=my_team),               # 5
+        build_matchup_section(matchup, logos=team_logos, my_team=my_team,
+                              weekly_avgs=weekly_avgs, days_elapsed=days_elapsed,
+                              remaining_proj=pit_proj),                                    # 5
         band_divider("MY ROSTER"),                                                        # MY TEAM band header
         alert_section,                                                                    # 1  ALERTS (top of My Roster)
         starts_section,                                                                   # 6
