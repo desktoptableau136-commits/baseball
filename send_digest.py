@@ -42,6 +42,14 @@ LOG_DIR    = Path(__file__).parent / "logs"
 
 _DL_STATUSES = {"TEN_DAY_DL", "FIFTEEN_DAY_DL", "SIXTY_DAY_DL", "IL", "OUT"}
 _FP_IL_TAGS  = {"IL10", "IL15", "IL60", "IL", "DTD", "O"}   # suffixes in FantasyPros "Player" field
+_STATUS_LABELS = {
+    "TEN_DAY_DL": "10-Day IL", "FIFTEEN_DAY_DL": "15-Day IL", "SIXTY_DAY_DL": "60-Day IL",
+    "IL10": "10-Day IL", "IL15": "15-Day IL", "IL60": "60-Day IL",
+}
+
+
+def _fmt_status(s):
+    return _STATUS_LABELS.get(s, s)
 
 
 def _get_injury_status(r):
@@ -141,7 +149,6 @@ def pitcher_score(r):
     w     = _n(r.get("ESPN_W")) or _n(r.get("W"))
     ip_g  = _n(r.get("IP_per_G"))
     ip    = _n(r.get("IP"))
-    inj   = _get_injury_status(r)
     is_sp = _is_sp(r)
 
     if not kip and not era and not kpct:
@@ -171,9 +178,6 @@ def pitcher_score(r):
     if xfip > 0:
         s += 5 if xfip < 3.2 else (2 if xfip < 3.8 else 0)
 
-    if inj in _DL_STATUSES or inj.startswith("IL"):
-        s -= 22
-
     # Small-sample penalty: rate stats are unreliable below 20 IP
     if ip > 0:
         s *= min(1.0, ip / 20)
@@ -194,7 +198,6 @@ def hitter_score(r):
     xwoba  = _n(r.get("xwOBA"))
     sprint = _n(r.get("SprintSpeed"))
     iso    = _n(r.get("ISO"))
-    inj    = _get_injury_status(r)
 
     if not ops and not hr and not wrc:
         return 0
@@ -222,9 +225,6 @@ def hitter_score(r):
         s += max(0, min(10, (avg - 0.180) / 0.160 * 10))
 
     s += min(8, hrp * 40)
-
-    if inj in _DL_STATUSES or inj.startswith("IL"):
-        s -= 22
 
     # Calibrate to shared 0-100 scale (p50→50, p90→80) derived from observed distribution
     s = s * 1.587 - 5.2
@@ -274,6 +274,32 @@ def sp_fa_score(r):
 
 
 # ── DATA HELPERS ───────────────────────────────────────────────────────────────
+
+def fetch_injury_notes():
+    """Fetch MLB injury return dates + body parts from ESPN sports API (public, no auth)."""
+    try:
+        import urllib.request
+        url = "https://site.api.espn.com/apis/site/v2/sports/baseball/mlb/injuries"
+        with urllib.request.urlopen(url, timeout=8) as resp:
+            data = json.loads(resp.read())
+        notes = {}
+        for team_block in data.get("injuries", []):
+            for inj in team_block.get("injuries", []):
+                name = (inj.get("athlete") or {}).get("displayName", "")
+                if not name:
+                    continue
+                details = inj.get("details") or {}
+                key = name.lower()
+                if key not in notes:
+                    notes[key] = {
+                        "return_date": details.get("returnDate", ""),
+                        "body_part":   details.get("type", ""),
+                        "detail":      details.get("detail", ""),
+                    }
+        return notes
+    except Exception:
+        return {}
+
 
 def fa_starters(pitchers, claimed=None, week_end=None):
     claimed = claimed or set()
@@ -772,7 +798,7 @@ def inj_tag(r):
     if not inj:
         return ""
     color = RED if (inj in _DL_STATUSES or inj.startswith("IL")) else YELLOW
-    return f' <span style="color:{color};font-size:10px;font-weight:600;">{inj}</span>'
+    return f' <span style="color:{color};font-size:10px;font-weight:600;">{_fmt_status(inj)}</span>'
 
 
 def section_head(title, sub=""):
@@ -2093,17 +2119,40 @@ def build_email(snap, override_team=None):
 
     # ── Alerts ─────────────────────────────────────────────────────────────────
     if alerts:
-        items = "".join(
-            f'<div style="padding:5px 0;border-bottom:1px solid {BORDER};font-size:12px;">'
-            f'<span style="color:{YELLOW};">&#9888;</span> '
-            f'<strong style="color:{TEXT};">{a["name"]}</strong>'
-            f' <span style="color:{RED if (a["status"] in _DL_STATUSES or a["status"].startswith("IL")) else YELLOW};">{a["status"]}</span></div>'
-            for a in alerts
-        )
+        inj_notes = fetch_injury_notes()
+        items_html = []
+        for a in alerts:
+            status_color = RED if (a["status"] in _DL_STATUSES or a["status"].startswith("IL")) else YELLOW
+            note = inj_notes.get(a["name"].lower(), {})
+            meta_parts = []
+            bp  = note.get("body_part", "")
+            det = note.get("detail", "")
+            if bp:
+                meta_parts.append(f"{bp}{' — ' + det if det else ''}")
+            rd = note.get("return_date", "")
+            if rd:
+                try:
+                    dt = datetime.strptime(rd, "%Y-%m-%d")
+                    meta_parts.append(f'exp. return <span style="color:{TEXT};">{dt.strftime("%b")} {dt.day}</span>')
+                except Exception:
+                    pass
+            meta_html = (
+                f'<span style="color:{MUTED};font-size:10px;margin-left:8px;">{"&thinsp;·&thinsp;".join(meta_parts)}</span>'
+                if meta_parts else ""
+            )
+            items_html.append(
+                f'<div style="padding:5px 0;border-bottom:1px solid {BORDER};font-size:12px;">'
+                f'<span style="color:{YELLOW};">&#9888;</span> '
+                f'<strong style="color:{TEXT};">{a["name"]}</strong>'
+                f' <span style="color:{status_color};font-weight:600;">{_fmt_status(a["status"])}</span>'
+                f'{meta_html}</div>'
+            )
         alert_section = (
-            f'<div style="background:#1a0f08;border:1px solid #78350f;border-radius:6px;padding:12px 14px;margin-bottom:20px;">'
-            f'<div style="color:{YELLOW};font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.7px;margin-bottom:6px;">&#9888; Roster Alerts</div>'
-            f'{items}</div>'
+            f'<div style="background:{SURFACE};border:1px solid {BORDER};border-left:3px solid {YELLOW};'
+            f'border-radius:6px;padding:12px 14px;margin-bottom:20px;">'
+            f'<div style="color:{YELLOW};font-size:10px;font-weight:700;text-transform:uppercase;'
+            f'letter-spacing:.7px;margin-bottom:6px;">&#9888; Roster Alerts</div>'
+            f'{"".join(items_html)}</div>'
         )
     else:
         alert_section = ""
@@ -2713,14 +2762,13 @@ def build_email(snap, override_team=None):
         week_end=week_end_str, is_sunday=is_sunday, roster_suggestion=roster_suggestion
     )
     body_parts += [
-        band_divider("⚑  ALERTS", RED) if alert_section else "",                         # TRIAGE band header
-        alert_section,                                                                    # 1  TRIAGE
-        build_prev_matchup_recap(prev_matchup) if is_monday else "",                     # 2a MONDAY RECAP
+        build_prev_matchup_recap(prev_matchup) if is_monday and prev_matchup.get("week") != (matchup or {}).get("week") else "",  # 2a MONDAY RECAP
         week_overview,                                                                    # 2  WEEK INTELLIGENCE
         build_category_pulse(matchup, weekly_avgs=weekly_avgs, days_elapsed=days_elapsed, remaining_proj=pit_proj, is_sunday=is_sunday), # 3
         week_cat_section,                                                                 # 4  (before matchup panel)
         build_matchup_section(matchup, logos=team_logos, my_team=my_team),               # 5
         band_divider("MY ROSTER"),                                                        # MY TEAM band header
+        alert_section,                                                                    # 1  ALERTS (top of My Roster)
         starts_section,                                                                   # 6
         my_rp_section,                                                                    # 7
         build_pitcher_hot_cold_section(pitchers, my_team, rec_p),                        # 8
