@@ -168,6 +168,7 @@ def get_pitcher_roster(league) -> pd.DataFrame:
                     "PlayerName":  pl.name,
                     "FantasyTeam": tm.team_name,
                     "Position":    ", ".join(slots),
+                    "ESPN_Status": pl.injuryStatus or "ACTIVE",
                 })
     df = pd.DataFrame(rows).drop_duplicates(subset="PlayerName")
     return apply_name_patches(df, PITCHER_NAME_PATCHES)
@@ -222,6 +223,7 @@ def get_hitter_roster(league) -> pd.DataFrame:
                     "PlayerName":  pl.name,
                     "FantasyTeam": tm.team_name,
                     "Position":    ", ".join(slots),
+                    "ESPN_Status": pl.injuryStatus or "ACTIVE",
                 })
     df = pd.DataFrame(rows).drop_duplicates(subset="PlayerName")
     return apply_name_patches(df, HITTER_NAME_PATCHES)
@@ -943,9 +945,10 @@ def build_hitter_data(league) -> list:
     season_df = season_df.merge(sprint, on="PlayerName", how="left")
     season_df = season_df.merge(fp7,    on="PlayerName", how="left")
 
+    roster_status = roster_df[["PlayerName", "ESPN_Status"]].copy() if "ESPN_Status" in roster_df.columns else roster_df.assign(ESPN_Status="ACTIVE")[["PlayerName", "ESPN_Status"]]
     espn_status = pd.concat([
-        roster_df.assign(ESPN_Status="Rostered"),
-        fa_df.assign(ESPN_Status="FA"),
+        roster_status,
+        fa_df.assign(ESPN_Status="FA")[["PlayerName", "ESPN_Status"]],
     ], ignore_index=True).drop_duplicates("PlayerName")[["PlayerName", "ESPN_Status"]]
     apply_name_patches(espn_status, HITTER_NAME_PATCHES)
 

@@ -41,6 +41,18 @@ LOG_DIR    = Path(__file__).parent / "logs"
 # ── SCORING ────────────────────────────────────────────────────────────────────
 
 _DL_STATUSES = {"TEN_DAY_DL", "FIFTEEN_DAY_DL", "SIXTY_DAY_DL", "IL", "OUT"}
+_FP_IL_TAGS  = {"IL10", "IL15", "IL60", "IL", "DTD", "O"}   # suffixes in FantasyPros "Player" field
+
+def _is_healthy(r):
+    if r.get("ESPN_Status", "") in _DL_STATUSES:
+        return False
+    # FantasyPros embeds status as a trailing word: "Will Smith (LAD - C) IL10"
+    player_str = (r.get("Player") or "").upper()
+    if player_str:
+        last_word = player_str.rsplit(None, 1)[-1] if player_str else ""
+        if last_word in _FP_IL_TAGS or last_word.startswith("IL"):
+            return False
+    return True
 
 
 def _n(val):
@@ -1408,47 +1420,217 @@ def build_prev_matchup_recap(prev_matchup):
 
     score_str = f"{wins}-{losses}" + (f"-{ties}" if ties else "")
 
-    hit_cats_list = [c for c in cats if c["cat"] in _HIT_CATS]
-    pit_cats_list = [c for c in cats if c["cat"] in _PIT_CATS]
-
-    def _cat_pills(cat_list):
-        pills = ""
+    def _group_pills(cat_list):
+        out = ""
         for c in cat_list:
             r   = c.get("result", "T")
-            col = GREEN if r == "W" else (RED if r == "L" else YELLOW)
+            col = GREEN if r == "W" else (RED if r == "L" else TEXT)
             lbl = _CAT_DISPLAY.get(c["cat"], c["cat"])
             mv  = c.get("my_val", 0)
             ov  = c.get("opp_val", 0)
             dec = 3 if c["cat"] in {"OPS", "ERA", "WHIP"} else 0
             val_str = f"{mv:.{dec}f}–{ov:.{dec}f}"
-            pills += (
-                f'<span style="display:inline-block;background:{col}1a;border:1px solid {col}55;'
-                f'border-radius:3px;padding:1px 7px;margin:2px 3px 2px 0;font-size:11px;'
+            out += (
+                f'<span style="flex:1;text-align:center;background:{col}1a;border:1px solid {col}55;'
+                f'border-radius:3px;padding:3px 4px;font-size:11px;'
                 f'color:{col};font-weight:600;" title="{val_str}">{lbl}</span>'
             )
-        return pills
+        return out
+
+    def _group_box(label, cat_list):
+        return (
+            f'<div style="flex:1;border:1px solid {BORDER};border-radius:4px;padding:8px 10px;">'
+            f'<div style="font-size:10px;font-weight:700;color:{MUTED};text-transform:uppercase;'
+            f'letter-spacing:.5px;text-align:center;margin-bottom:7px;">{label}</div>'
+            f'<div style="display:flex;gap:4px;">{_group_pills(cat_list)}</div>'
+            f'</div>'
+        )
+
+    hit_cats_list = [c for c in cats if c["cat"] in _HIT_CATS]
+    pit_cats_list = [c for c in cats if c["cat"] in _PIT_CATS]
 
     return (
         f'<div style="background:{SURFACE};border:1px solid {BORDER};border-radius:6px;'
         f'padding:12px 16px;margin-bottom:12px;">'
         f'<div style="color:{MUTED};font-size:10px;font-weight:700;text-transform:uppercase;'
         f'letter-spacing:.7px;margin-bottom:9px;">Last Week — Final Result</div>'
-        f'<div style="display:flex;align-items:baseline;gap:10px;margin-bottom:8px;">'
+        f'<div style="display:flex;align-items:baseline;gap:10px;margin-bottom:10px;">'
         f'<span style="color:{outcome_color};font-weight:800;font-size:15px;">{outcome_word}</span>'
         f'<span style="color:{TEXT};font-weight:700;">{score_str}</span>'
         f'<span style="color:{MUTED};font-size:12px;">vs. {opp} &middot; Week {week}</span>'
         f'</div>'
-        f'<div style="margin-bottom:4px;font-size:11px;color:{MUTED};font-weight:600;'
-        f'text-transform:uppercase;letter-spacing:.5px;">Batting</div>'
-        f'<div style="margin-bottom:8px;">{_cat_pills(hit_cats_list)}</div>'
-        f'<div style="margin-bottom:4px;font-size:11px;color:{MUTED};font-weight:600;'
-        f'text-transform:uppercase;letter-spacing:.5px;">Pitching</div>'
-        f'<div>{_cat_pills(pit_cats_list)}</div>'
+        f'<div style="display:flex;gap:10px;">'
+        f'{_group_box("Batting", hit_cats_list)}'
+        f'{_group_box("Pitching", pit_cats_list)}'
+        f'</div>'
         f'</div>'
     )
 
 
-def build_week_overview(matchup, week_cats, week_n, fa_sp, starts, days_elapsed, my_starts_by_day, week_end=None, is_sunday=False):
+def _cat_score(r, cat):
+    """Score a player on a single category for trade/add targeting."""
+    if cat == "K":    return _n(r.get("ESPN_K"))   or _n(r.get("K"))
+    if cat == "W":    return _n(r.get("ESPN_W"))   or _n(r.get("W"))
+    if cat == "QS":   return qs_probability(r)
+    if cat == "SVHD": return (_n(r.get("ESPN_SVHD")) or _n(r.get("SVHD")))
+    if cat == "ERA":  era  = _n(r.get("ERA"));  return max(0, 6   - era)  if era  > 0 else 0
+    if cat == "WHIP": whip = _n(r.get("WHIP")); return max(0, 2   - whip) if whip > 0 else 0
+    if cat == "HR":   return _n(r.get("HR"))
+    if cat == "RBI":  return _n(r.get("RBI"))
+    if cat == "R":    return _n(r.get("R"))
+    if cat == "SB":   return _n(r.get("SB"))
+    if cat == "OPS":  return _n(r.get("OPS"))
+    if cat == "B_SO": bso = _n(r.get("B_SO")); return max(0, 200 - bso) if bso > 0 else 0
+    return 0
+
+
+def _roster_suggestion(matchup, pitchers, hitters, fa_sp, fa_rp, fa_hit,
+                        my_team, best_recent_p, best_recent_h,
+                        all_matchups, week_end_str):
+    """Return one add/drop or trade suggestion bullet HTML for Week at a Glance."""
+    if not matchup:
+        return ""
+
+    cats        = matchup.get("categories", [])
+    my_norm     = " ".join(my_team.split())
+    opp         = matchup.get("opp_team", "")
+    losing      = [c for c in cats if c["result"] == "L"]
+    losing_cats = {c["cat"] for c in losing}
+    if not losing_cats:
+        return ""
+
+    losing_pit = losing_cats & _PIT_CATS
+    losing_hit = losing_cats & _HIT_CATS
+    focus_pit  = len(losing_pit) >= len(losing_hit)
+
+    # ── ADD / DROP ────────────────────────────────────────────────────────────
+    add_candidate = drop_candidate = None
+    add_reason    = ""
+
+    # Determine what to ADD based on losing categories
+    if focus_pit:
+        only_svhd = losing_pit == {"SVHD"}
+        if only_svhd:
+            fa_pool    = sorted(fa_rp, key=lambda r: _blend(r, pitcher_score, best_recent_p), reverse=True)
+            add_reason = "SV+H gap"
+        else:
+            fa_pool    = sorted(fa_sp, key=lambda r: sp_fa_score(r), reverse=True)
+            sp_losing  = losing_pit - {"SVHD"}
+            add_reason = "/".join(_CAT_DISPLAY.get(c, c) for c in sorted(sp_losing)) + " gap"
+    else:
+        fa_pool    = sorted(fa_hit, key=lambda r: _blend(r, hitter_score, best_recent_h), reverse=True)
+        add_reason = "/".join(_CAT_DISPLAY.get(c, c) for c in sorted(losing_hit)) + " gap"
+    add_candidate = fa_pool[0] if fa_pool else None
+
+    # Determine what to DROP: weakest rostered player who won't strand a position.
+    # Full roster (all positions, for coverage checking):
+    full_pit = [r for r in pitchers
+                if " ".join((r.get("FantasyTeam") or "").split()) == my_norm
+                and int(r.get("Dataset", 0) or 0) == YEAR]
+    full_hit = [r for r in hitters
+                if " ".join((r.get("FantasyTeam") or "").split()) == my_norm
+                and int(r.get("Dataset", 0) or 0) == YEAR]
+
+    # Droppable candidates: pitchers without an upcoming start this week + all hitters
+    drop_pit = [r for r in full_pit
+                if r.get("PSP_Date", "1999-01-01") in ("1999-01-01", "")
+                or r.get("PSP_Date", "9999-99-99") > week_end_str]
+    scored_drop = sorted(
+        [(r, _blend(r, pitcher_score, best_recent_p)) for r in drop_pit] +
+        [(r, _blend(r, hitter_score,  best_recent_h)) for r in full_hit],
+        key=lambda x: x[1]
+    )
+
+    def _pos_tags(r):
+        pos_str = (r.get("Position") or "").upper()
+        return {p.strip() for p in pos_str.replace("/", ",").split(",") if p.strip()}
+
+    def _can_drop(cand):
+        """True if dropping cand leaves at least one healthy player at every position it fills."""
+        cand_name = cand.get("PlayerName", "")
+        for _, slots, ptype in POS_GROUPS:
+            if not (_pos_tags(cand) & slots):
+                continue
+            pool = full_pit if ptype == "pit" else full_hit
+            healthy_others = [
+                r for r in pool
+                if r.get("PlayerName") != cand_name
+                and _is_healthy(r)
+                and (_pos_tags(r) & slots)
+            ]
+            if not healthy_others:
+                return False
+        return True
+
+    drop_candidate = next((r for r, _ in scored_drop if _can_drop(r)), None)
+
+    if add_candidate and drop_candidate:
+        an = add_candidate.get("PlayerName", "")
+        dn = drop_candidate.get("PlayerName", "")
+        if an and dn and an != dn:
+            return (
+                f'Pickup: Add <span style="color:{TEXT};font-weight:700;">{an}</span>'
+                f'<span style="color:{MUTED};"> ({add_reason})</span>'
+                f' &middot; Drop <span style="color:{MUTED};">{dn}</span>'
+            )
+
+    # ── TRADE ─────────────────────────────────────────────────────────────────
+    opp_matchup = all_matchups.get(" ".join(opp.split()), {}) if opp else {}
+    if not opp_matchup:
+        return ""
+
+    opp_cats_map = {c["cat"]: c for c in opp_matchup.get("categories", [])}
+    opp_winning  = {cat for cat, c in opp_cats_map.items() if c["result"] == "W"}
+    my_winning   = {c["cat"] for c in cats if c["result"] == "W"}
+    they_offer   = opp_winning  & losing_cats   # their surplus = my need
+    i_offer      = my_winning   & {cat for cat, c in opp_cats_map.items() if c["result"] == "L"}
+
+    if not they_offer or not i_offer:
+        return ""
+
+    # Pick primary categories: prefer pitching (more trade value stability)
+    need_cat  = max(they_offer,  key=lambda c: (c in _PIT_CATS, _cat_score({}, c)))
+    offer_cat = max(i_offer,     key=lambda c: (c in _PIT_CATS, _cat_score({}, c)))
+
+    opp_norm = " ".join(opp.split())
+    if need_cat in _PIT_CATS:
+        pool = [r for r in pitchers if " ".join((r.get("FantasyTeam") or "").split()) == opp_norm
+                and int(r.get("Dataset", 0) or 0) == YEAR]
+        their_player = max(pool, key=lambda r: _cat_score(r, need_cat), default=None)
+    else:
+        pool = [r for r in hitters if " ".join((r.get("FantasyTeam") or "").split()) == opp_norm
+                and int(r.get("Dataset", 0) or 0) == YEAR]
+        their_player = max(pool, key=lambda r: _cat_score(r, need_cat), default=None)
+
+    # Offer my 2nd-best in the offer category (skip ace — unrealistic to trade away)
+    if offer_cat in _PIT_CATS:
+        my_pool = sorted(
+            [r for r in pitchers if " ".join((r.get("FantasyTeam") or "").split()) == my_norm
+             and int(r.get("Dataset", 0) or 0) == YEAR],
+            key=lambda r: _cat_score(r, offer_cat), reverse=True)
+    else:
+        my_pool = sorted(
+            [r for r in hitters if " ".join((r.get("FantasyTeam") or "").split()) == my_norm
+             and int(r.get("Dataset", 0) or 0) == YEAR],
+            key=lambda r: _cat_score(r, offer_cat), reverse=True)
+    my_offer = my_pool[1] if len(my_pool) > 1 else (my_pool[0] if my_pool else None)
+
+    if their_player and my_offer:
+        tn = their_player.get("PlayerName", "")
+        mn = my_offer.get("PlayerName", "")
+        nc = _CAT_DISPLAY.get(need_cat, need_cat)
+        oc = _CAT_DISPLAY.get(offer_cat, offer_cat)
+        if tn and mn:
+            return (
+                f'Trade: Offer <span style="color:{TEXT};font-weight:700;">{mn}</span>'
+                f' to {opp} for <span style="color:{TEXT};font-weight:700;">{tn}</span>'
+                f'<span style="color:{MUTED};"> — fills {nc} gap, gives them {oc}</span>'
+            )
+
+    return ""
+
+
+def build_week_overview(matchup, week_cats, week_n, fa_sp, starts, days_elapsed, my_starts_by_day, week_end=None, is_sunday=False, roster_suggestion=""):
     bullets = []
 
     def _cat_label(key):
@@ -1616,6 +1798,9 @@ def build_week_overview(matchup, week_cats, week_n, fa_sp, starts, days_elapsed,
                 else:
                     fa_str = f'<span style="color:{MUTED};">No upcoming FA starts found.</span>'
             bullets.append(fa_str)
+
+    if roster_suggestion:
+        bullets.append(roster_suggestion)
 
     if not bullets:
         return ""
@@ -2505,9 +2690,14 @@ def build_email(snap, override_team=None):
     )
 
     # ── Final assembly ─────────────────────────────────────────────────────────
+    roster_suggestion = _roster_suggestion(
+        matchup, pitchers, hitters, fa_sp, fa_rp, fa_hit,
+        my_team, best_recent_p, best_recent_h,
+        all_matchups, week_end_str
+    )
     week_overview = build_week_overview(
         matchup, week_cats, week_n, fa_sp, starts, days_elapsed, my_starts_by_day,
-        week_end=week_end_str, is_sunday=is_sunday
+        week_end=week_end_str, is_sunday=is_sunday, roster_suggestion=roster_suggestion
     )
     body_parts += [
         band_divider("⚑  ALERTS", RED) if alert_section else "",                         # TRIAGE band header
