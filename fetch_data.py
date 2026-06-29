@@ -801,9 +801,10 @@ def build_pitcher_data(league) -> list:
     fa_df       = get_pitcher_fa(league)
     espn_svhd   = get_pitcher_espn_svhd(league)
 
-    # Merge roster (brings FantasyTeam + Position), then FA status separately
+    # Merge roster (brings FantasyTeam + Position + ESPN_Status), then FA status separately
     # FA_Position avoids Position_x / Position_y collision
-    merged = fp.merge(roster_df[["PlayerName", "FantasyTeam", "Position"]], on="PlayerName", how="left")
+    merged = fp.merge(roster_df[["PlayerName", "FantasyTeam", "Position", "ESPN_Status"]], on="PlayerName", how="left")
+    merged["ESPN_Status"] = merged["ESPN_Status"].fillna("")
     merged = merged.merge(fa_df[["PlayerName", "FreeAgentInjuryStatus", "FA_Position"]], on="PlayerName", how="left")
 
     # Coalesce position: ESPN roster â†’ ESPN FA â†’ FantasyPros player string

@@ -43,16 +43,28 @@ LOG_DIR    = Path(__file__).parent / "logs"
 _DL_STATUSES = {"TEN_DAY_DL", "FIFTEEN_DAY_DL", "SIXTY_DAY_DL", "IL", "OUT"}
 _FP_IL_TAGS  = {"IL10", "IL15", "IL60", "IL", "DTD", "O"}   # suffixes in FantasyPros "Player" field
 
-def _is_healthy(r):
-    if r.get("ESPN_Status", "") in _DL_STATUSES:
-        return False
+
+def _get_injury_status(r):
+    """Return the best available injury status string for any player (rostered or FA)."""
+    # ESPN_Status is merged for hitters (and pitchers once fetch_data.py is updated)
+    espn = str(r.get("ESPN_Status") or "").upper()
+    if espn and espn not in ("", "ACTIVE", "FA", "UNKNOWN"):
+        return espn
+    # FreeAgentInjuryStatus is set for FA players only
+    fa_inj = str(r.get("FreeAgentInjuryStatus") or "").upper()
+    if fa_inj and fa_inj not in ("", "ACTIVE"):
+        return fa_inj
     # FantasyPros embeds status as a trailing word: "Will Smith (LAD - C) IL10"
-    player_str = (r.get("Player") or "").upper()
+    player_str = str(r.get("Player") or "").upper()
     if player_str:
-        last_word = player_str.rsplit(None, 1)[-1] if player_str else ""
+        last_word = player_str.rsplit(None, 1)[-1]
         if last_word in _FP_IL_TAGS or last_word.startswith("IL"):
-            return False
-    return True
+            return last_word
+    return ""
+
+
+def _is_healthy(r):
+    return not bool(_get_injury_status(r))
 
 
 def _n(val):
@@ -129,7 +141,7 @@ def pitcher_score(r):
     w     = _n(r.get("ESPN_W")) or _n(r.get("W"))
     ip_g  = _n(r.get("IP_per_G"))
     ip    = _n(r.get("IP"))
-    inj   = str(r.get("FreeAgentInjuryStatus") or "").upper()
+    inj   = _get_injury_status(r)
     is_sp = _is_sp(r)
 
     if not kip and not era and not kpct:
@@ -159,7 +171,7 @@ def pitcher_score(r):
     if xfip > 0:
         s += 5 if xfip < 3.2 else (2 if xfip < 3.8 else 0)
 
-    if inj in _DL_STATUSES:
+    if inj in _DL_STATUSES or inj.startswith("IL"):
         s -= 22
 
     # Small-sample penalty: rate stats are unreliable below 20 IP
@@ -182,7 +194,7 @@ def hitter_score(r):
     xwoba  = _n(r.get("xwOBA"))
     sprint = _n(r.get("SprintSpeed"))
     iso    = _n(r.get("ISO"))
-    inj    = str(r.get("FreeAgentInjuryStatus") or "").upper()
+    inj    = _get_injury_status(r)
 
     if not ops and not hr and not wrc:
         return 0
@@ -211,7 +223,7 @@ def hitter_score(r):
 
     s += min(8, hrp * 40)
 
-    if inj in _DL_STATUSES:
+    if inj in _DL_STATUSES or inj.startswith("IL"):
         s -= 22
 
     # Calibrate to shared 0-100 scale (p50→50, p90→80) derived from observed distribution
@@ -476,8 +488,8 @@ def roster_alerts(pitchers, hitters, my_team):
         if " ".join((r.get("FantasyTeam") or "").split()) != my_key or int(r.get("Dataset", 0)) != YEAR:
             continue
         name = r["PlayerName"]
-        inj = str(r.get("FreeAgentInjuryStatus") or "").upper()
-        if inj and inj not in ("", "ACTIVE") and name not in seen:
+        inj = _get_injury_status(r)
+        if inj and name not in seen:
             alerts.append({"name": name, "status": inj})
             seen.add(name)
     return alerts
@@ -688,8 +700,8 @@ def pos_stat_line(r, pos):
         svhd = _n(r.get("ESPN_SVHD")) or _n(r.get("SVHD"))
         k    = _n(r.get("ESPN_K"))    or _n(r.get("K"))
         parts = []
-        if svhd >= 0: parts.append(f"SV+H {svhd:.0f}")
-        if k    >= 0: parts.append(f"K {k:.0f}")
+        if svhd > 0: parts.append(f"SV+H {svhd:.0f}")
+        if k    > 0: parts.append(f"K {k:.0f}")
         if not parts:
             return ""
         line = " · ".join(parts)
@@ -756,10 +768,10 @@ def hot_cold_cell(season_val, recent_val, lower_better=False, dec=2, hot_thresh=
 
 
 def inj_tag(r):
-    inj = str(r.get("FreeAgentInjuryStatus") or "").upper()
-    if not inj or inj in ("", "ACTIVE"):
+    inj = _get_injury_status(r)
+    if not inj:
         return ""
-    color = RED if inj in _DL_STATUSES else YELLOW
+    color = RED if (inj in _DL_STATUSES or inj.startswith("IL")) else YELLOW
     return f' <span style="color:{color};font-size:10px;font-weight:600;">{inj}</span>'
 
 
@@ -2085,7 +2097,7 @@ def build_email(snap, override_team=None):
             f'<div style="padding:5px 0;border-bottom:1px solid {BORDER};font-size:12px;">'
             f'<span style="color:{YELLOW};">&#9888;</span> '
             f'<strong style="color:{TEXT};">{a["name"]}</strong>'
-            f' <span style="color:{RED if a["status"] in ("IL","OUT") else YELLOW};">{a["status"]}</span></div>'
+            f' <span style="color:{RED if (a["status"] in _DL_STATUSES or a["status"].startswith("IL")) else YELLOW};">{a["status"]}</span></div>'
             for a in alerts
         )
         alert_section = (
@@ -2582,6 +2594,7 @@ def build_email(snap, override_team=None):
             player_cell = (
                 f'{team_logo(worst.get("Team"), 16)}'
                 f'<span style="font-weight:600;">{worst["PlayerName"]}</span>'
+                f'{inj_tag(worst)}'
                 f' {badge(worst["_pscore"])}'
                 f'{pos_stat_line(worst, p["pos"])}'
             )
