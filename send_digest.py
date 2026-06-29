@@ -2099,7 +2099,7 @@ def build_email(snap, override_team=None):
                 k_fires  = (_n(r.get("K/IP")) >= 0.90 or _n(r.get("Kpct_P")) >= 0.24) and _n(r.get("IP_per_G")) >= 4.5
                 pickup_badges = []
                 name_border = ""
-                if thin_day:
+                if thin_day or date_str > week_end_str:
                     if qs_fires:
                         pickup_badges.append(
                             f'<span style="font-size:9px;font-weight:700;color:{GREEN};'
