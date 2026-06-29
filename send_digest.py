@@ -1492,15 +1492,15 @@ def build_prev_matchup_recap(prev_matchup):
         except (TypeError, ValueError):
             return "—"
 
-    # Shared cell styles
-    th = (f'padding:4px 7px;text-align:center;font-size:10px;font-weight:700;'
-          f'color:{MUTED};text-transform:uppercase;letter-spacing:.4px;'
+    # Shared cell styles — tight padding to minimize horizontal scroll
+    th = (f'padding:3px 5px;text-align:center;font-size:10px;font-weight:700;'
+          f'color:{MUTED};text-transform:uppercase;letter-spacing:0;'
           f'border-bottom:1px solid {BORDER};white-space:nowrap;')
-    td = f'padding:5px 7px;text-align:center;font-size:11px;font-weight:500;white-space:nowrap;'
-    VAL_COLOR = "#94a3b8"  # muted but readable — values are reference, not the focus
+    td = f'padding:4px 5px;text-align:center;font-size:10px;font-weight:500;white-space:nowrap;'
+    VAL_COLOR = "#94a3b8"
 
-    # Header row: cat label colored + bordered by result (W=green, L=red, T=muted)
-    header_cells = f'<th style="{th}text-align:left;min-width:90px;"></th>'
+    # Header row: cat label colored + solid bottom border by result
+    header_cells = f'<th style="{th}text-align:left;min-width:72px;"></th>'
     for i, cat in enumerate(cat_order):
         lbl = _CAT_DISPLAY.get(cat, cat)
         c   = cat_map.get(cat, {})
@@ -1508,13 +1508,13 @@ def build_prev_matchup_recap(prev_matchup):
         col = GREEN if res == "W" else (RED if res == "L" else MUTED)
         sep = f'border-left:1px solid {BORDER};' if i == 6 else ''
         header_cells += (
-            f'<th style="{th}{sep}color:{col};border-bottom:2px solid {col}33;">'
+            f'<th style="{th}{sep}color:{col};border-bottom:2px solid {col};">'
             f'{lbl}</th>'
         )
 
     def _data_row(label, label_color, val_key, row_style=""):
         row = (f'<td style="{td}text-align:left;color:{label_color};font-weight:700;'
-               f'font-size:11px;padding-right:12px;">{label}</td>')
+               f'font-size:11px;">{label}</td>')
         for i, cat in enumerate(cat_order):
             c   = cat_map.get(cat, {})
             val = c.get(val_key, 0)
@@ -1523,11 +1523,11 @@ def build_prev_matchup_recap(prev_matchup):
         return f'<tr{" " + row_style if row_style else ""}>{row}</tr>'
 
     my_short  = " ".join(my_team.split())
-    opp_short = opp[:18] + ("…" if len(opp) > 18 else "")
+    opp_short = opp[:14] + ("…" if len(opp) > 14 else "")
 
     table = (
         f'<div style="overflow-x:auto;-webkit-overflow-scrolling:touch;margin-top:10px;">'
-        f'<table style="width:100%;border-collapse:collapse;min-width:560px;">'
+        f'<table style="width:100%;border-collapse:collapse;min-width:420px;">'
         f'<thead><tr>{header_cells}</tr></thead>'
         f'<tbody>'
         + _data_row(my_short,  ACCENT, "my_val")
