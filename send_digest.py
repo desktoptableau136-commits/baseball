@@ -1577,15 +1577,20 @@ def build_prev_matchup_recap(prev_matchup):
             f'{lbl}</th>'
         )
 
-    def _data_row(label, label_color, val_key, row_style=""):
+    def _data_row(label, label_color, val_key, win_result):
         row = (f'<td style="{td}text-align:left;color:{label_color};font-weight:700;'
                f'font-size:11px;">{label}</td>')
         for i, cat in enumerate(cat_order):
             c   = cat_map.get(cat, {})
             val = c.get(val_key, 0)
+            res = c.get("result", "T")
             left_border = f'border-left:1px solid {BORDER};' if i == 6 else ''
-            row += f'<td style="{td}color:{VAL_COLOR};{left_border}">{_fmt(val, cat)}</td>'
-        return f'<tr{" " + row_style if row_style else ""}>{row}</tr>'
+            val_str = _fmt(val, cat)
+            if res == win_result:
+                val_str = (f'<span style="border:1px solid {TEXT}44;border-radius:3px;'
+                           f'padding:1px 4px;">{val_str}</span>')
+            row += f'<td style="{td}color:{VAL_COLOR};{left_border}">{val_str}</td>'
+        return f'<tr>{row}</tr>'
 
     my_short  = " ".join(my_team.split())
     opp_short = opp[:14] + ("…" if len(opp) > 14 else "")
@@ -1595,8 +1600,8 @@ def build_prev_matchup_recap(prev_matchup):
         f'<table style="width:100%;border-collapse:collapse;min-width:420px;">'
         f'<thead><tr>{header_cells}</tr></thead>'
         f'<tbody>'
-        + _data_row(my_short,  ACCENT, "my_val")
-        + _data_row(opp_short, TEXT,   "opp_val")
+        + _data_row(my_short,  ACCENT, "my_val",  "W")
+        + _data_row(opp_short, TEXT,   "opp_val", "L")
         + f'</tbody></table></div>'
     )
 
