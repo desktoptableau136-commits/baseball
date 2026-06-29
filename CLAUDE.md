@@ -113,6 +113,7 @@ Two files; one intermediate artifact:
 - `sp_fa_score(r)` → pitcher_score + start bonus (scaled 8–22 by QS probability). Returns 0 if `not _is_sp(r)`.
 - `qs_probability(r)` → 1–99. Calibrated to league-average ~38%, ace ~75%. Uses IP/G (not IP/GS).
 - `_fmt_ip(ip_decimal)` → baseball IP string. Converts true decimal (5.333) to notation (5.1). Formula: `whole = int(d); outs = round((d-whole)*3); if outs>=3: whole+=1, outs=0`. Used in Proj. Line display for both FA SP and My Upcoming Starts.
+- `_proj_line_html(r)` → `IP · ER · K` span. ER is adjusted for opponent strength and park: `raw_er * opp_factor * park_factor`. `opp_factor = clamp(opp_ops / 0.717, 0.80, 1.20)` where `_LEAGUE_AVG_OPS = 0.717`. `park_factor = 0.97` if `PSP_HomeVAway` starts with `"vs "` (home), `1.03` if `"@ "` (away), else `1.0`. K is not adjusted (no team K% in snapshot). Both fields are already on the pitcher row.
 - `hot_cold_cell(season_val, recent_val, ..., no_data_title=None)` → `<td>` with colored recent stat + 🔥/↑/❄/↓ icon vs season baseline. When recent_val is missing/zero and `no_data_title` is set, renders `—` with a dotted underline and hover tooltip explaining the absence.
 - `band_divider(label, color)` → full-width `<div>` with centered label between `BORDER` lines. Used at band boundaries in final assembly.
 

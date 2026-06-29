@@ -622,14 +622,24 @@ def _fmt_ip(ip_decimal):
     return f"{whole}.{outs}"
 
 
+_LEAGUE_AVG_OPS = 0.717  # 2026 MLB average across eligible starters in snapshot
+
 def _proj_line_html(r):
     ip_g = _n(r.get("IP_per_G"))
     if ip_g <= 0:
         return f'<span style="color:{MUTED}">—</span>'
     era = _n(r.get("ERA"))
     kip = _n(r.get("K/IP"))
-    er  = round(era * ip_g / 9) if era > 0 else 0
-    k   = round(kip * ip_g)     if kip > 0 else 0
+
+    # Adjust ER for opponent OPS vs league average, and home/away park effect
+    opp_ops  = _n(r.get("Team_OPS_Value"))
+    hva      = str(r.get("PSP_HomeVAway") or "")
+    opp_factor  = min(1.20, max(0.80, opp_ops / _LEAGUE_AVG_OPS)) if opp_ops > 0 else 1.0
+    park_factor = 0.97 if hva.startswith("vs ") else (1.03 if hva.startswith("@ ") else 1.0)
+
+    raw_er = era * ip_g / 9 if era > 0 else 0
+    er = round(raw_er * opp_factor * park_factor)
+    k  = round(kip * ip_g) if kip > 0 else 0
     return f'<span style="color:{MUTED};font-size:10px;white-space:nowrap;">{_fmt_ip(ip_g)}&nbsp;IP&thinsp;·&thinsp;{er}&nbsp;ER&thinsp;·&thinsp;{k}K</span>'
 
 
