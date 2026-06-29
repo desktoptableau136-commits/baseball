@@ -1444,65 +1444,94 @@ def build_prev_matchup_recap(prev_matchup):
     if not prev_matchup or not prev_matchup.get("categories"):
         return ""
 
-    week   = prev_matchup.get("week", "")
-    opp    = prev_matchup.get("opp_team", "Opponent")
-    wins   = prev_matchup.get("wins", 0)
-    losses = prev_matchup.get("losses", 0)
-    ties   = prev_matchup.get("ties", 0)
-    cats   = prev_matchup.get("categories", [])
+    week    = prev_matchup.get("week", "")
+    opp     = prev_matchup.get("opp_team", "Opponent")
+    my_team = prev_matchup.get("my_team", MY_TEAM)
+    wins    = prev_matchup.get("wins", 0)
+    losses  = prev_matchup.get("losses", 0)
+    ties    = prev_matchup.get("ties", 0)
+    cats    = prev_matchup.get("categories", [])
 
     if wins > losses:
         outcome_color, outcome_word = GREEN, "WIN"
     elif losses > wins:
         outcome_color, outcome_word = RED, "LOSS"
     else:
-        outcome_color, outcome_word = YELLOW, "TIE"
+        outcome_color, outcome_word = TEXT, "TIE"
 
     score_str = f"{wins}-{losses}" + (f"-{ties}" if ties else "")
 
-    def _group_pills(cat_list):
-        out = ""
-        for c in cat_list:
-            r   = c.get("result", "T")
-            col = GREEN if r == "W" else (RED if r == "L" else TEXT)
-            lbl = _CAT_DISPLAY.get(c["cat"], c["cat"])
-            mv  = c.get("my_val", 0)
-            ov  = c.get("opp_val", 0)
-            dec = 3 if c["cat"] in {"OPS", "ERA", "WHIP"} else 0
-            val_str = f"{mv:.{dec}f}–{ov:.{dec}f}"
-            out += (
-                f'<span style="flex:1;text-align:center;background:{col}1a;border:1px solid {col}55;'
-                f'border-radius:3px;padding:3px 4px;font-size:11px;'
-                f'color:{col};font-weight:600;" title="{val_str}">{lbl}</span>'
-            )
-        return out
+    cat_order = ["R", "HR", "RBI", "SB", "OPS", "B_SO", "K", "QS", "W", "ERA", "WHIP", "SVHD"]
+    cat_map   = {c["cat"]: c for c in cats}
 
-    def _group_box(label, cat_list):
-        return (
-            f'<div style="flex:1;border:1px solid {BORDER};border-radius:4px;padding:8px 10px;">'
-            f'<div style="font-size:10px;font-weight:700;color:{MUTED};text-transform:uppercase;'
-            f'letter-spacing:.5px;text-align:center;margin-bottom:7px;">{label}</div>'
-            f'<div style="display:flex;gap:4px;">{_group_pills(cat_list)}</div>'
-            f'</div>'
-        )
+    def _fmt(val, cat):
+        dec = 3 if cat == "OPS" else (2 if cat in {"ERA", "WHIP"} else 0)
+        try:
+            return f"{float(val):.{dec}f}"
+        except (TypeError, ValueError):
+            return "—"
 
-    hit_cats_list = [c for c in cats if c["cat"] in _HIT_CATS]
-    pit_cats_list = [c for c in cats if c["cat"] in _PIT_CATS]
+    # Shared cell styles
+    th = (f'padding:5px 7px;text-align:center;font-size:10px;font-weight:700;'
+          f'color:{MUTED};text-transform:uppercase;letter-spacing:.4px;'
+          f'border-bottom:1px solid {BORDER};white-space:nowrap;')
+    td = f'padding:5px 7px;text-align:center;font-size:11px;font-weight:600;white-space:nowrap;'
+
+    # Header row — split batting / pitching with a gap column
+    header_cells = f'<th style="{th}text-align:left;min-width:90px;"></th>'
+    for i, cat in enumerate(cat_order):
+        lbl = _CAT_DISPLAY.get(cat, cat)
+        # thin separator before pitching block
+        left_border = f'border-left:1px solid {BORDER};' if i == 6 else ''
+        header_cells += f'<th style="{th}{left_border}">{lbl}</th>'
+
+    def _data_row(label, label_color, val_key, win_col, loss_col, row_style=""):
+        row = (f'<td style="{td}text-align:left;color:{label_color};font-weight:700;'
+               f'font-size:11px;padding-right:12px;">{label}</td>')
+        for i, cat in enumerate(cat_order):
+            c   = cat_map.get(cat, {})
+            res = c.get("result", "T")
+            val = c.get(val_key, 0)
+            col = win_col if res == "W" else (loss_col if res == "L" else TEXT)
+            left_border = f'border-left:1px solid {BORDER};' if i == 6 else ''
+            row += f'<td style="{td}color:{col};{left_border}">{_fmt(val, cat)}</td>'
+        return f'<tr{" " + row_style if row_style else ""}>{row}</tr>'
+
+    def _result_row():
+        row = f'<td style="{td}text-align:left;color:{MUTED};font-size:10px;font-weight:700;">Result</td>'
+        for i, cat in enumerate(cat_order):
+            c   = cat_map.get(cat, {})
+            res = c.get("result", "T")
+            col = GREEN if res == "W" else (RED if res == "L" else TEXT)
+            left_border = f'border-left:1px solid {BORDER};' if i == 6 else ''
+            row += f'<td style="{td}color:{col};font-size:10px;{left_border}">{res}</td>'
+        return f'<tr style="border-top:1px solid {BORDER};">{row}</tr>'
+
+    my_short  = " ".join(my_team.split())
+    opp_short = opp[:18] + ("…" if len(opp) > 18 else "")
+
+    table = (
+        f'<div style="overflow-x:auto;-webkit-overflow-scrolling:touch;margin-top:10px;">'
+        f'<table style="width:100%;border-collapse:collapse;min-width:560px;">'
+        f'<thead><tr>{header_cells}</tr></thead>'
+        f'<tbody>'
+        + _data_row(my_short,  ACCENT, "my_val",  GREEN, RED)
+        + _data_row(opp_short, TEXT,   "opp_val", RED,   GREEN)
+        + _result_row()
+        + f'</tbody></table></div>'
+    )
 
     return (
         f'<div style="background:{SURFACE};border:1px solid {BORDER};border-radius:6px;'
         f'padding:12px 16px;margin-bottom:12px;">'
         f'<div style="color:{MUTED};font-size:10px;font-weight:700;text-transform:uppercase;'
         f'letter-spacing:.7px;margin-bottom:9px;">Last Week — Final Result</div>'
-        f'<div style="display:flex;align-items:baseline;gap:10px;margin-bottom:10px;">'
+        f'<div style="display:flex;align-items:baseline;gap:10px;">'
         f'<span style="color:{outcome_color};font-weight:800;font-size:15px;">{outcome_word}</span>'
         f'<span style="color:{TEXT};font-weight:700;">{score_str}</span>'
         f'<span style="color:{MUTED};font-size:12px;">vs. {opp} &middot; Week {week}</span>'
         f'</div>'
-        f'<div style="display:flex;gap:10px;">'
-        f'{_group_box("Batting", hit_cats_list)}'
-        f'{_group_box("Pitching", pit_cats_list)}'
-        f'</div>'
+        f'{table}'
         f'</div>'
     )
 
