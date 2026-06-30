@@ -1526,7 +1526,7 @@ _CAT_DISPLAY = {
 }
 
 
-def build_prev_matchup_recap(prev_matchup):
+def build_prev_matchup_recap(prev_matchup, team_logos=None):
     if not prev_matchup or not prev_matchup.get("categories"):
         return ""
 
@@ -1537,6 +1537,7 @@ def build_prev_matchup_recap(prev_matchup):
     losses  = prev_matchup.get("losses", 0)
     ties    = prev_matchup.get("ties", 0)
     cats    = prev_matchup.get("categories", [])
+    _logos  = team_logos or {}
 
     if wins > losses:
         outcome_color, outcome_word = GREEN, "WIN"
@@ -1592,16 +1593,18 @@ def build_prev_matchup_recap(prev_matchup):
             row += f'<td style="{td}color:{VAL_COLOR};{left_border}">{val_str}</td>'
         return f'<tr>{row}</tr>'
 
-    my_short  = " ".join(my_team.split())
-    opp_short = opp[:14] + ("…" if len(opp) > 14 else "")
+    my_logo_url  = _logos.get(" ".join(my_team.split()), "")
+    opp_logo_url = _logos.get(" ".join(opp.split()), "")
+    my_label  = fantasy_logo(my_logo_url,  18, my_team) + "Me"
+    opp_label = fantasy_logo(opp_logo_url, 18, opp)     + "Opp"
 
     table = (
         f'<div style="overflow-x:auto;-webkit-overflow-scrolling:touch;margin-top:10px;">'
         f'<table style="width:100%;border-collapse:collapse;min-width:420px;">'
         f'<thead><tr>{header_cells}</tr></thead>'
         f'<tbody>'
-        + _data_row(my_short,  ACCENT, "my_val",  "W")
-        + _data_row(opp_short, TEXT,   "opp_val", "L")
+        + _data_row(my_label,  ACCENT, "my_val",  "W")
+        + _data_row(opp_label, TEXT,   "opp_val", "L")
         + f'</tbody></table></div>'
     )
 
@@ -2901,7 +2904,7 @@ def build_email(snap, override_team=None):
         week_end=week_end_str, is_sunday=is_sunday, roster_suggestion=roster_suggestion
     )
     body_parts += [
-        build_prev_matchup_recap(prev_matchup) if is_monday and prev_matchup.get("week") != (matchup or {}).get("week") else "",  # 2a MONDAY RECAP
+        build_prev_matchup_recap(prev_matchup, team_logos=team_logos) if is_monday and prev_matchup.get("week") != (matchup or {}).get("week") else "",  # 2a MONDAY RECAP
         week_overview,                                                                    # 2  WEEK INTELLIGENCE
         build_category_pulse(matchup, weekly_avgs=weekly_avgs, days_elapsed=days_elapsed, remaining_proj=pit_proj, is_sunday=is_sunday), # 3
         week_cat_section,                                                                 # 4  (before matchup panel)
