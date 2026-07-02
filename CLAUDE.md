@@ -53,7 +53,7 @@ Two files; one intermediate artifact:
 - FanGraphs returns 403 — never use it directly. pybaseball functions work because they handle headers.
 - `pitching_stats()` (FanGraphs leaderboard) returns 403. Use `pitching_stats_range()` instead, which scrapes Baseball Reference — but it has no `HLD` column.
 - SVHD (saves+holds) is pulled from ESPN player stats via `get_pitcher_espn_svhd()` in fetch_data.py, which reads `pl.stats[0]['breakdown']`. The breakdown uses **string keys** (`'SV'`, `'HLD'`, `'SVHD'`, `'K'`, `'W'`, `'OUTS'`, `'ERA'`, `'WHIP'`, `'GP'`, `'GS'`) — not numeric stat IDs. This is called at fetch time for all rostered and FA pitchers.
-- ESPN season stats (`ESPN_K`, `ESPN_W`, `ESPN_IP`, `ESPN_GS`, `ESPN_GP`, `ESPN_SVHD`) are stored on **all dataset rows** in the snapshot so send_digest.py can use season counts for players who only appear in short-range FantasyPros datasets. `ESPN_SVHD` overrides `SVHD` on `Dataset==YEAR` rows. Use `_n(r.get("ESPN_SVHD")) or _n(r.get("SVHD"))` (not `if >= 0`) for the fallback — `_n` floors negatives to 0 so `>= 0` is always true.
+- ESPN season stats (`ESPN_SV`, `ESPN_K`, `ESPN_W`, `ESPN_IP`, `ESPN_GS`, `ESPN_GP`, `ESPN_SVHD`) are stored on **all dataset rows** in the snapshot so send_digest.py can use season counts for players who only appear in short-range FantasyPros datasets. `ESPN_SVHD`/`ESPN_SV`/`ESPN_HLD` override `SVHD`/`SV`/`HLD` on `Dataset==YEAR` rows; `ESPN_HLD` is then dropped but `ESPN_SV` is kept on all rows (it's the only way `save_role_watch` can tell a real closer from a holds-only reliever for players outside the FP top-300, who have no YEAR row). Use `_n(r.get("ESPN_SVHD")) or _n(r.get("SVHD"))` (not `if >= 0`) for the fallback — `_n` floors negatives to 0 so `>= 0` is always true.
 - xFIP and WhiffPct are not available from FantasyPros pitcher tables. Use `BarrelPctAllowed` and `Kpct_P` (derived K%) instead.
 - ESPN injury statuses are `TEN_DAY_DL`, `FIFTEEN_DAY_DL`, `SIXTY_DAY_DL` — not `IL` or `OUT`. The constant `_DL_STATUSES` in send_digest.py covers all of these. FA views and positional breakdown exclude all DL-status players.
 
@@ -89,9 +89,13 @@ Two files; one intermediate artifact:
 
 **Two-start pitchers (`PSP_Dates`):** `fetch_data.py` now preserves a list of ALL upcoming start dates per pitcher (`PSP_Dates`, plus parallel `PSP_HomeVAways`) via `_attach_start_lists` before the one-row-per-pitcher dedup. The scalar `PSP_Date`/`PSP_HomeVAway`/`PSP_Projected` remain the earliest start (unchanged for existing consumers). `_starts_this_week(r, today, week_end)` in send_digest counts entries within the matchup week (falls back to the scalar `PSP_Date` for old snapshots). A pitcher with ≥ 2 starts Mon–Sun gets a bold green `2-START` chip (`two_start_badge()`) in FA SP + My Upcoming Starts, and is preferred (secondary sort key, NOT a score change) in the Week-at-a-Glance best-FA-SP bullet, which appends "×2 starts this week". Note: two-start weeks are only visible when both starts fall in the window — mid-week runs usually show 0 because the +6 rotation pushes the 2nd start into next week; the signal lights up on Mon/Tue runs. Never fold two-start into the 0–100 score (keeps scores normalized).
 
-**Save-Role Watch (`save_role_watch`):** SVHD is the most volatile category. Per-window (`Dataset` 7/15/30) `SVHD` captures recent **saves only** (holds aren't in the window scrape); season `ESPN_SVHD` has the full SV+H total. The function flags (a) emerging FA closers — FA RP with ≥ 3 saves in the last 15 days — and (b) fading rostered RP — my RP with season SV+H ≥ 8 but 0 recent saves despite pitching (≥ 3 recent appearances). Rendered as a callout appended to the FA Relief Pitchers section. Tracks closer (save-based) roles, not pure setup/hold roles.
+**Save-Role Watch (`save_role_watch`):** SVHD is the most volatile category. **Recent holds are NOT available anywhere in the pipeline** — per-window (`Dataset` 7/15/30) `SVHD` captures recent SAVES only (FantasyPros windows have no HLD), and ESPN exposes only season totals (no rolling 15-day split — verified: `pl.stats` has keys 0/98/99, none a usable window). So recency is save-only. The function flags (a) **emerging FA closers** — FA RP with ≥ 3 saves in the last 15 days — and (b) **fading rostered closers** — my RP gated on **season saves `ESPN_SV` ≥ 5** (a real closer) with 0 recent saves despite pitching (≥ 3 recent appearances). The fading side is gated on season *saves*, not SV+H, specifically so a holds-based reliever (e.g. JoJo Romero: 0 SV / 20 HLD — whose recent hold production we can't see) is never falsely flagged as fading. Rendered as a callout appended to the FA Relief Pitchers section.
 
-**Category classification (`classify_categories`):** Returns `{cat: (proj_res, tier)}` reusing Category Pulse's projection math (`_project` + `pit_proj` for K/QS/W). Tiers from projected margin vs `_CLOSE_THRESH`: `≥ 2.5×thresh` → `locked` (clinched win or dead loss), `≤ thresh` → `tossup`, else `leaning`. When no projection is available (no `weekly_avgs`, no `pit_proj`) it falls back to the current margin under the same 2.5×/1× thresholds. Computed once in `build_email` as `category_classification`, passed to (1) `build_category_pulse` for the 🔒 corner badge on locked cards and (2) `_roster_suggestion`, which drops `locked`-loss categories from the pickup target set so streaming chases only still-winnable cats.
+**Category classification (`classify_categories`):** Returns `{cat: (proj_res, tier)}` reusing Category Pulse's projection math (`_project` + `pit_proj` for K/QS/W). Tiers from margin vs `_CLOSE_THRESH`: `locked` (clinched win or dead loss), `tossup` (≤ thresh), else `leaning`. **The lock bar is time-aware:** `lock_mult = 2.5 + 5×remaining_frac` (Sun ≈ 2.5×thresh, Wed ≈ 5.4×, Mon ≈ 6.8×) and nothing locks before Day 2 (`can_lock = days_elapsed >= 2`) — so a mid-week gap doesn't get called a lock just because it's currently large. Same margin logic in both the projection and no-projection (fallback) branches. Computed once in `build_email` as `category_classification`, passed to (1) `build_category_pulse` for the 🔒 corner badge on locked cards and (2) `_roster_suggestion`, which drops `locked`-loss categories from the pickup target set so streaming chases only still-winnable cats.
+
+**HR% column (`_hrp_cell`):** `HR_Probability` (computed in `fetch_data.compute_hr_probability` from barrel%, hard-hit%, launch angle, HR/AB, xwOBA, ISO, recent HR streak; range ≈ 0.05–0.31, a modeled per-game HR probability) is surfaced as a color-coded `HR%` column in Roster Hot/Cold and FA Hitters via `_hrp_cell`. Green ≥ 20%, yellow ≥ 14%. Already fed into `hitter_score`; this just displays it. HR is heavily weighted in this league, so it's a headline hitter metric.
+
+**Hot/Cold Score columns:** Both `build_pitcher_hot_cold_section` and `build_hot_cold_section` take a `best_recent_*` index and render a role-aware Score badge (pitcher → `_score_p`, hitter → `_blend(hitter_score)`) — same normalized number shown everywhere else for that player.
 
 **Ratio-stat risk guardrail:** In `_roster_suggestion`, when the chosen add is an SP (`_is_sp`) and ERA or WHIP is a currently-won, non-locked category, and the candidate's ERA > 4.20 / WHIP > 1.30, the pickup bullet appends a yellow `⚠ boosts K/W/QS but his {ERA} {cat} over ~{IP} IP risks your thin {cat} lead.` IP is `IP_per_G × _starts_this_week`, formatted via `_fmt_ip`. A good-ERA streamer correctly produces no warning.
 
@@ -135,7 +139,7 @@ Two files; one intermediate artifact:
 
 ## Key data fields
 
-**Pitchers:** `PlayerName`, `FantasyTeam`, `Position`, `Dataset` (7/15/30/2026), `IP`, `K`, `ERA`, `WHIP`, `GS`, `SVHD`, `K/IP`, `Kpct_P`, `IP_per_G`, `PSP_Date`, `PSP_HomeVAway`, `PSP_Projected`, `PSP_Dates` (list of all upcoming starts), `PSP_HomeVAways` (parallel list), `Team_OPS_Value`, `BarrelPctAllowed`, `ESPN_K`, `ESPN_W`, `ESPN_IP`, `ESPN_GS`, `ESPN_GP`, `ESPN_SVHD`
+**Pitchers:** `PlayerName`, `FantasyTeam`, `Position`, `Dataset` (7/15/30/2026), `IP`, `K`, `ERA`, `WHIP`, `GS`, `SVHD`, `K/IP`, `Kpct_P`, `IP_per_G`, `PSP_Date`, `PSP_HomeVAway`, `PSP_Projected`, `PSP_Dates` (list of all upcoming starts), `PSP_HomeVAways` (parallel list), `Team_OPS_Value`, `BarrelPctAllowed`, `ESPN_SV`, `ESPN_K`, `ESPN_W`, `ESPN_IP`, `ESPN_GS`, `ESPN_GP`, `ESPN_SVHD`
 
 **Hitters:** `PlayerName`, `FantasyTeam`, `Position`, `Dataset`, `HR`, `RBI`, `R`, `SB`, `AVG`, `OPS`, `wRCplus`, `xwOBA`, `xBA`, `xSLG`, `SprintSpeed`, `ISO`, `Barrel_Pct`, `HardHit_Pct`, `HR_Probability`
 
@@ -155,14 +159,14 @@ Five bands separated by full-width `band_divider()` rules (centered label betwee
 3. Category Pulse (projection cards)
 4. Current Matchup — category rankings (renamed from "This Week's Category Rankings"; sits above the score banner)
 5. Matchup (score banner + category table)
-5b. Opponent This Week — scouting block (`opponent_week_intel` / `opp_preview_section`): opponent's start count, two-start pitchers, top-3 hot bats by recent OPS. Renders only when the opponent has starters or hot hitters.
+5b. Opponent This Week — scouting block (`opponent_week_intel` / `opp_preview_section`): opponent's start count, two-start pitchers, top-3 hot bats by recent OPS, season roto strengths/weaknesses (top-3 / bottom-3 categories via `category_ranks`), and wire activity (count of their `FA ADDED` transactions in the recent window → very active / moderate / quiet). Logo uses `fantasy_logo()` so a dead ESPN URL falls back to an emoji avatar (raw `<img>` rendered blank). Renders only when the opponent has starters or hot hitters.
 
-**MY ROSTER**
+**MY ROSTER** (Positional Breakdown sits first so the biggest roster holes lead)
+10. Positional Breakdown
 6. My Upcoming Starts
 7. My Relief Pitchers
-8. Pitcher Hot/Cold (15-day vs season ERA)
-9. Roster Hot/Cold (hitters, 7-day vs season OPS)
-10. Positional Breakdown
+8. Pitcher Hot/Cold (15-day vs season ERA; has a role-aware Score badge column via `_score_p`)
+9. Roster Hot/Cold (hitters, 7-day vs season OPS; has HR% and a `hitter_score` Score badge column)
 
 **FREE AGENTS**
 11. FA Pickup — Starting Pitchers

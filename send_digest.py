@@ -380,10 +380,14 @@ def fa_relievers(pitchers, claimed=None):
 def save_role_watch(pitchers, my_team, claimed=None):
     """Detect save-role momentum for the volatile SVHD category. Returns
     (emerging, fading): FAs suddenly closing (recent saves spiking) worth adding,
-    and rostered RP whose save role looks lost (established season SV+H but zero
-    recent saves despite pitching). NOTE: per-window data captures recent SAVES,
-    not holds — so this tracks closer jobs (save-based), which is where the
-    category-swinging volatility lives; pure setup/hold roles won't trigger it."""
+    and rostered CLOSERS whose save role looks lost (real season save total but zero
+    recent saves despite pitching).
+
+    Data limitation: per-window feeds capture recent SAVES but not holds, and ESPN
+    only exposes season totals. So we can't see recent holds at all. To avoid
+    falsely flagging a holds-based reliever (who's still producing SV+H we can't
+    see) as fading, the fading side is gated on SEASON SAVES (`ESPN_SV`) — it only
+    fires for genuine closers, for whom "no recent saves" is a real role signal."""
     claimed = claimed or set()
     my_key  = " ".join(my_team.split())
     year_idx = {r["PlayerName"]: r for r in pitchers if int(r.get("Dataset", 0) or 0) == YEAR and r.get("PlayerName")}
@@ -396,17 +400,18 @@ def save_role_watch(pitchers, my_team, claimed=None):
             continue
         if str(base.get("FreeAgentInjuryStatus", "")) in _DL_STATUSES:
             continue
-        ft       = " ".join((base.get("FantasyTeam") or "").split())
-        season   = _n(base.get("ESPN_SVHD")) or _n(base.get("SVHD"))
-        d15      = d15_idx.get(name, {})
-        recent   = _n(d15.get("SVHD"))          # recent saves (window holds not captured)
-        recent_g = _n(d15.get("G"))
+        ft        = " ".join((base.get("FantasyTeam") or "").split())
+        season    = _n(base.get("ESPN_SVHD")) or _n(base.get("SVHD"))
+        season_sv = _n(base.get("ESPN_SV"))     # season SAVES only — identifies true closers
+        d15       = d15_idx.get(name, {})
+        recent    = _n(d15.get("SVHD"))         # recent saves (window holds not captured)
+        recent_g  = _n(d15.get("G"))
         rec = {"name": name, "team": base.get("Team"), "recent": recent, "season": season}
 
         if ft == "" and name not in claimed and recent >= 3:
             emerging.append(rec)                # a free agent suddenly racking up saves
-        elif ft == my_key and season >= 8 and recent == 0 and recent_g >= 3:
-            fading.append(rec)                  # my established closer, pitching but no saves lately
+        elif ft == my_key and season_sv >= 5 and recent == 0 and recent_g >= 3:
+            fading.append(rec)                  # my closer (real save role), pitching but no saves lately
 
     emerging.sort(key=lambda x: (-x["recent"], -x["season"]))
     fading.sort(key=lambda x: -x["season"])
@@ -812,6 +817,16 @@ def vp(val):
         return f'<span style="color:{MUTED}">—</span>'
 
 
+def _hrp_cell(hr_probability):
+    """Colored HR% cell from the modeled per-game HR probability (HR_Probability,
+    a Statcast contact-quality model: barrel%, hard-hit%, launch angle, xwOBA, ISO)."""
+    hrp = _n(hr_probability)
+    if hrp <= 0:
+        return f'<span style="color:{MUTED};">—</span>'
+    c = GREEN if hrp >= 0.20 else (YELLOW if hrp >= 0.14 else MUTED)
+    return f'<span style="color:{c};font-weight:700;">{hrp*100:.0f}%</span>'
+
+
 def pos_stat_line(r, pos):
     """Build a muted stat line for a player in the positional breakdown."""
     if pos == "RP":
@@ -1174,7 +1189,7 @@ def build_matchup_section(matchup, logos=None, my_team=MY_TEAM,
 
 # ── ROSTER HOT/COLD ──────────────────────────────────────────────────────────
 
-def build_hot_cold_section(hitters, recent_hitting, my_team):
+def build_hot_cold_section(hitters, recent_hitting, my_team, best_recent_h=None):
     if not recent_hitting:
         return ""
 
@@ -1210,6 +1225,8 @@ def build_hot_cold_section(hitters, recent_hitting, my_team):
             "recent_g":   recent_g,
             "delta":      delta,
             "inj":        inj_tag(r),
+            "hrp":        _n(r.get("HR_Probability")),
+            "score":      _blend(r, hitter_score, best_recent_h) if best_recent_h is not None else hitter_score(r),
         })
 
     # Sort: players with recent data first (by delta desc), then no-data players
@@ -1253,12 +1270,14 @@ def build_hot_cold_section(hitters, recent_hitting, my_team):
             f'<td style="{TDC}">{r["season_ops"]:.3f}</td>'
             f'<td style="{TDC}">{recent_str}</td>'
             f'<td style="{TDC}">{delta_html} {arrow}</td>'
+            f'<td style="{TDC}">{_hrp_cell(r["hrp"])}</td>'
+            f'<td style="{TDC}">{badge(r["score"])}</td>'
             f'</tr>'
         )
 
     n_hot  = sum(1 for r in with_data if r["delta"] >= 0.015)
     n_cold = sum(1 for r in with_data if r["delta"] <= -0.015)
-    sub = f"{n_hot} hot · {n_cold} cold · last 7 days vs season OPS"
+    sub = f"{n_hot} hot · {n_cold} cold · last 7 days vs season OPS · HR% = modeled per-game HR probability"
 
     return (
         section_head("Roster Hot/Cold", sub) +
@@ -1269,11 +1288,13 @@ def build_hot_cold_section(hitters, recent_hitting, my_team):
         f'<th style="{TH_S}text-align:center;">Season OPS</th>'
         f'<th style="{TH_S}text-align:center;">Last 7 OPS</th>'
         f'<th style="{TH_S}text-align:center;">Δ</th>'
+        f'<th style="{TH_S}text-align:center;">HR%</th>'
+        f'<th style="{TH_S}text-align:center;">Score</th>'
         f'</tr></thead><tbody>{rows_html}</tbody></table>'
     )
 
 
-def build_pitcher_hot_cold_section(pitchers, my_team, rec_p=None):
+def build_pitcher_hot_cold_section(pitchers, my_team, rec_p=None, best_recent_p=None):
     my_key = " ".join(my_team.split())
 
     # Season rows for my pitchers
@@ -1314,6 +1335,7 @@ def build_pitcher_hot_cold_section(pitchers, my_team, rec_p=None):
             "recent_ip":  recent_ip,
             "delta":      delta,
             "inj":        inj_tag(r),
+            "score":      _score_p(r, best_recent_p),
         })
 
     with_data    = sorted([r for r in rows_data if r["delta"] is not None], key=lambda x: -x["delta"])
@@ -1357,6 +1379,7 @@ def build_pitcher_hot_cold_section(pitchers, my_team, rec_p=None):
             f'<td style="{TDC}">{r["season_era"]:.2f}</td>'
             f'<td style="{TDC}">{recent_str}</td>'
             f'<td style="{TDC}">{delta_html} {arrow}</td>'
+            f'<td style="{TDC}">{badge(r["score"])}</td>'
             f'</tr>'
         )
 
@@ -1373,6 +1396,7 @@ def build_pitcher_hot_cold_section(pitchers, my_team, rec_p=None):
         f'<th style="{TH_S}text-align:center;">Season ERA</th>'
         f'<th style="{TH_S}text-align:center;">Last 15 ERA</th>'
         f'<th style="{TH_S}text-align:center;">Δ</th>'
+        f'<th style="{TH_S}text-align:center;">Score</th>'
         f'</tr></thead><tbody>{rows_html}</tbody></table>'
     )
 
@@ -1432,12 +1456,28 @@ def classify_categories(matchup, weekly_avgs=None, days_elapsed=None, remaining_
     out = {}
     if not matchup or not matchup.get("categories"):
         return out
-    elapsed_frac = min(1.0, max(0.0, (days_elapsed or 0) / 7))
+    de = days_elapsed or 0
+    elapsed_frac = min(1.0, max(0.0, de / 7))
+    remaining    = 1.0 - elapsed_frac
     my_key  = " ".join(matchup.get("my_team",  "").split())
     opp_key = " ".join(matchup.get("opp_team", "").split())
     my_avgs  = (weekly_avgs or {}).get(my_key,  {})
     opp_avgs = (weekly_avgs or {}).get(opp_key, {})
     has_proj = bool(my_avgs and opp_avgs)
+
+    # Time-aware lock buffer: a category only "locks" when the margin dwarfs what the
+    # trailing side could still make up. Early in the week that bar is very high
+    # (lots of games left); by Sunday a 2.5×-threshold gap is enough. Never lock
+    # before Day 2 — too little has happened to call anything.
+    lock_mult   = 2.5 + 5.0 * remaining     # Sun≈2.5×, Wed≈5.4×, Mon≈6.8×
+    can_lock    = de >= 2
+
+    def _tier(margin, thresh):
+        if can_lock and margin >= lock_mult * thresh:
+            return "locked"
+        if margin <= thresh:
+            return "tossup"
+        return "leaning"
 
     for c in matchup["categories"]:
         cat   = c["cat"]
@@ -1446,6 +1486,7 @@ def classify_categories(matchup, weekly_avgs=None, days_elapsed=None, remaining_
         res   = c["result"]
         lower = cat in _LOWER_BETTER
         dec   = _CAT_DEC.get(cat, 0)
+        thresh = _CLOSE_THRESH.get(cat, 999)
 
         rp = (remaining_proj or {}).get(cat)
         if rp is not None:
@@ -1456,17 +1497,10 @@ def classify_categories(matchup, weekly_avgs=None, days_elapsed=None, remaining_
         else:
             pm = po = None
 
-        thresh = _CLOSE_THRESH.get(cat, 999)
         if pm is None:
             # No projection available — judge by the current margin alone.
             margin = abs(round(my_v, dec) - round(opp_v, dec))
-            if margin >= 2.5 * thresh:
-                tier = "locked"
-            elif margin <= thresh:
-                tier = "tossup"
-            else:
-                tier = "leaning"
-            out[cat] = (res, tier)
+            out[cat] = (res, _tier(margin, thresh))
             continue
 
         pm_r, po_r = round(pm, dec), round(po, dec)
@@ -1474,14 +1508,7 @@ def classify_categories(matchup, weekly_avgs=None, days_elapsed=None, remaining_
             proj_res = "W" if pm_r < po_r else ("T" if pm_r == po_r else "L")
         else:
             proj_res = "W" if pm_r > po_r else ("T" if pm_r == po_r else "L")
-        proj_margin = abs(pm_r - po_r)
-        if proj_margin >= 2.5 * thresh:
-            tier = "locked"
-        elif proj_margin <= thresh:
-            tier = "tossup"
-        else:
-            tier = "leaning"
-        out[cat] = (proj_res, tier)
+        out[cat] = (proj_res, _tier(abs(pm_r - po_r), thresh))
     return out
 
 
@@ -2935,6 +2962,7 @@ def build_email(snap, override_team=None):
                 f'<td style="{TDC}">{v(r.get("SB"), 0)}</td>'
                 f'<td style="{TDC}">{v(r.get("OPS"), 3)}</td>'
                 + hot_cold_cell(r.get("OPS"), rh.get("OPS"), dec=3, no_data_title="No 7-day stats — player may not have played recently") +
+                f'<td style="{TDC}">{_hrp_cell(r.get("HR_Probability"))}</td>'
                 f'<td style="{TDC}">{badge(r["_score"])}</td>'
                 f'</tr>'
             )
@@ -2949,6 +2977,7 @@ def build_email(snap, override_team=None):
             f'<th style="{TH_S}text-align:center;">SB</th>'
             f'<th style="{TH_S}text-align:center;">OPS</th>'
             f'<th style="{TH_S}text-align:center;">L7 OPS</th>'
+            f'<th style="{TH_S}text-align:center;">HR%</th>'
             f'<th style="{TH_S}text-align:center;">Score</th>'
             f'</tr></thead><tbody>{rows}</tbody></table>'
         )
@@ -2956,7 +2985,7 @@ def build_email(snap, override_team=None):
     else:
         table = f'<p style="color:{MUTED};font-style:italic;margin-bottom:24px;">No FA hitters found.</p>'
 
-    fa_hit_section = section_head("FA Pickup — Hitters", "Top available hitters · R / HR / RBI / SB / OPS · sorted by composite score") + table
+    fa_hit_section = section_head("FA Pickup — Hitters", "Top available hitters · R / HR / RBI / SB / OPS · HR% = modeled per-game HR probability · sorted by composite score") + table
 
     # ── Category Rankings ──────────────────────────────────────────────────────
     CAT_LABELS = [
@@ -3155,9 +3184,8 @@ def build_email(snap, override_team=None):
     _opp_intel = opponent_week_intel(pitchers, hitters, _opp_name, best_recent_h, today_str, week_end_str)
     opp_preview_section = ""
     if _opp_intel and (_opp_intel["n_starters"] or _opp_intel["hot_hitters"]):
-        _opp_logo = team_logos.get(" ".join(_opp_name.split()), "")
-        _logo_img = (f'<img src="{_opp_logo}" width="18" height="18" '
-                     f'style="vertical-align:middle;border-radius:3px;margin-right:6px;">') if _opp_logo else ""
+        _opp_key   = " ".join(_opp_name.split())
+        _logo_html = fantasy_logo(team_logos.get(_opp_key, ""), 20, _opp_name)
         _lines = []
         if _opp_intel["n_starters"]:
             _two = _opp_intel["two_start"]
@@ -3181,8 +3209,36 @@ def build_email(snap, override_team=None):
                 f'<div style="margin:3px 0;"><span style="color:{MUTED};">Hot bats:</span> '
                 f'<span style="color:{TEXT};">{_hh}</span></div>'
             )
+        # Season category strengths/weaknesses (roto rank per category)
+        _opp_ranks, _n_teams = category_ranks(roto, _opp_name)
+        if _opp_ranks:
+            _sorted = sorted(_opp_ranks.items(), key=lambda kv: kv[1])
+            _strong = [f'{_CAT_DISPLAY.get(c, c)} <span style="color:{MUTED};">#{r}</span>' for c, r in _sorted[:3]]
+            _weak   = [f'{_CAT_DISPLAY.get(c, c)} <span style="color:{MUTED};">#{r}</span>' for c, r in _sorted[-3:][::-1]]
+            _lines.append(
+                f'<div style="margin:3px 0;"><span style="color:{GREEN};">Strong:</span> '
+                f'<span style="color:{TEXT};">{" · ".join(_strong)}</span></div>'
+                f'<div style="margin:3px 0;"><span style="color:{RED};">Weak:</span> '
+                f'<span style="color:{TEXT};">{" · ".join(_weak)}</span></div>'
+            )
+        # Wire activity: how many FA adds this team made in the recent transaction window
+        _opp_adds = sum(
+            1 for t in snap.get("transactions", [])
+            if " ".join((t.get("FantasyTeam") or "").split()) == _opp_key
+            and t.get("TransactionType") == "FA ADDED"
+        )
+        if _opp_adds >= 4:
+            _wire = f'<span style="color:{YELLOW};font-weight:700;">very active</span> — {_opp_adds} pickups in recent days; expect streaming'
+        elif _opp_adds >= 1:
+            _wire = f'{_opp_adds} recent pickup{"s" if _opp_adds != 1 else ""} — moderately active'
+        else:
+            _wire = 'quiet — mostly letting it ride'
+        _lines.append(
+            f'<div style="margin:3px 0;"><span style="color:{MUTED};">Wire:</span> '
+            f'<span style="color:{TEXT};">{_wire}</span></div>'
+        )
         opp_preview_section = (
-            section_head(f"Opponent This Week", f"{_logo_img}What {_opp_name} is bringing — their starts &amp; hottest bats")
+            section_head("Opponent This Week", f"{_logo_html}Scouting {_opp_name} — starts, hot bats, roto strengths &amp; wire activity")
             + f'<div style="background:{SURFACE2};border:1px solid {BORDER};border-radius:8px;'
               f'padding:10px 14px;margin-bottom:24px;font-size:12px;">{"".join(_lines)}</div>'
         )
@@ -3206,11 +3262,11 @@ def build_email(snap, override_team=None):
         opp_preview_section,                                                              # 5b OPPONENT SCOUTING
         band_divider("MY ROSTER"),                                                        # MY TEAM band header
         alert_section,                                                                    # 1  ALERTS (top of My Roster)
+        pos_section,                                                                      # 10 Positional Breakdown (moved to top of My Roster)
         starts_section,                                                                   # 6
         my_rp_section,                                                                    # 7
-        build_pitcher_hot_cold_section(pitchers, my_team, rec_p),                        # 8
-        build_hot_cold_section(hitters, recent_hitting, my_team),                        # 9
-        pos_section,                                                                      # 10
+        build_pitcher_hot_cold_section(pitchers, my_team, rec_p, best_recent_p),         # 8
+        build_hot_cold_section(hitters, recent_hitting, my_team, best_recent_h),         # 9
         band_divider("FREE AGENTS"),                                                      # ACTION band header
         fa_sp_section,                                                                    # 11
         fa_rp_section,                                                                    # 12

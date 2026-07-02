@@ -891,10 +891,12 @@ def build_pitcher_data(league) -> list:
             if espn_col in merged.columns:
                 override = pd.to_numeric(merged.loc[yr_mask, espn_col], errors="coerce")
                 merged.loc[yr_mask, col] = override.where(override >= 0, merged.loc[yr_mask, col])
-        merged.drop(columns=["ESPN_SV", "ESPN_HLD"], inplace=True, errors="ignore")
-        # ESPN_SVHD, ESPN_K, ESPN_W, ESPN_IP, ESPN_GS, ESPN_GP stay on all rows
-        # so send_digest.py can use season counts for players only in short-range FP datasets
-        for c in ["ESPN_SVHD", "ESPN_K", "ESPN_W", "ESPN_IP", "ESPN_GS", "ESPN_GP"]:
+        merged.drop(columns=["ESPN_HLD"], inplace=True, errors="ignore")
+        # ESPN_SV, ESPN_SVHD, ESPN_K, ESPN_W, ESPN_IP, ESPN_GS, ESPN_GP stay on all rows
+        # so send_digest.py can use season counts for players only in short-range FP datasets.
+        # ESPN_SV in particular lets save_role_watch tell a real closer (season saves) from a
+        # holds-only reliever, whose recent-hold activity the data pipeline can't see.
+        for c in ["ESPN_SV", "ESPN_SVHD", "ESPN_K", "ESPN_W", "ESPN_IP", "ESPN_GS", "ESPN_GP"]:
             if c in merged.columns:
                 merged[c] = pd.to_numeric(merged[c], errors="coerce").fillna(-1)
 
