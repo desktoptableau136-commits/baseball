@@ -143,8 +143,6 @@ def pitcher_score(r):
     whip  = _n(r.get("WHIP"))
     gs    = _n(r.get("GS"))
     svhd  = _n(r.get("SVHD")) or _n(r.get("SV"))
-    xfip  = _n(r.get("xFIP"))
-    whiff = _n(r.get("WhiffPct"))   # stored as decimal: 0.28 = 28%
     kpct  = _n(r.get("Kpct_P"))
     w     = _n(r.get("ESPN_W")) or _n(r.get("W"))
     ip_g  = _n(r.get("IP_per_G"))
@@ -154,16 +152,15 @@ def pitcher_score(r):
     if not kip and not era and not kpct:
         return 0
 
+    # K component: FantasyPros gives no WhiffPct, so use derived K% (Kpct_P),
+    # falling back to K/IP. ERA component uses ERA (no xFIP from FantasyPros).
     s = 0
-    if whiff > 0:
-        s += min(28, whiff / 0.135 * 28)
-    elif kpct > 0:
+    if kpct > 0:
         s += min(28, kpct / 0.28 * 28)
     else:
         s += min(28, kip / 1.5 * 28)
 
-    era_base = xfip if xfip > 0 else era
-    s += max(0, min(28, (6.0 - era_base) / 4.0 * 28))
+    s += max(0, min(28, (6.0 - era) / 4.0 * 28))
     s += max(0, min(20, (2.0 - whip) / 1.1 * 20))
 
     if is_sp:
@@ -174,9 +171,6 @@ def pitcher_score(r):
         s += 5 + min(7, svhd / 15 * 7)
         s += min(6, w / 10 * 6)       # wins
         s += min(5, ip_g / 1.2 * 5)   # opportunity: IP per appearance
-
-    if xfip > 0:
-        s += 5 if xfip < 3.2 else (2 if xfip < 3.8 else 0)
 
     # Small-sample penalty: rate stats are unreliable below 20 IP
     if ip > 0:
@@ -2342,11 +2336,11 @@ def build_email(snap, override_team=None):
         "K":  {"my": _proj_k(_my_starters),   "opp": _proj_k(_opp_starters)},
         "W":  {"my": _proj_w(_my_starters),   "opp": _proj_w(_opp_starters)},
     }
-    my_week_roto_pts = sum(
-        float(r.get("Roto_Score") or 0)
-        for r in week_roto
-        if " ".join((r.get("Team") or "").split()) == " ".join(my_team.split())
-    )
+    # Pseudo roto score from the ranks shown in the week table (n - rank + 1 per
+    # category). Matches the Season section's method so the two subtitles are on
+    # the same scale, and matches the ranks rendered directly below it. (Raw
+    # Roto_Score diverges here because ESPN splits points on ties.)
+    my_week_roto_pts = sum(week_n - rank + 1 for rank in week_cats.values() if rank is not None)
     my_season_pseudo_roto = sum(n - rank + 1 for rank in cats.values() if rank is not None)
     alerts    = roster_alerts(pitchers, hitters, my_team)
     starts    = my_upcoming_starts(pitchers, my_team)
@@ -3055,7 +3049,7 @@ def build_email(snap, override_team=None):
             f'</td>'
         )
     week_cat_section = (
-        section_head("Current Matchup", f"Week {current_week_num} · {my_week_roto_pts:.1f} roto pts · vs. this week's matchup") +
+        section_head("Current Matchup", f"Week {current_week_num} · {my_week_roto_pts} roto pts · vs. this week's matchup") +
         f'<table style="width:100%;border-collapse:collapse;background:{SURFACE};border-radius:6px;margin-bottom:24px;overflow:hidden;">'
         f'<tr>{week_cat_cells}</tr></table>'
     )
