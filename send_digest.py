@@ -1014,6 +1014,7 @@ def nav_bar():
         ("#band-myroster", "My Roster"),
         ("#band-fa",       "Free Agents"),
         ("#band-season",   "Season"),
+        ("#band-glossary", "Glossary"),
     ]
     pills = "".join(
         f'<a href="{href}" style="display:inline-block;padding:5px 11px;margin:0 0 5px 5px;'
@@ -2533,6 +2534,105 @@ def build_week_overview(matchup, week_cats, week_n, fa_sp, starts, days_elapsed,
     )
 
 
+def build_glossary_section():
+    """In-digest reference explaining every score, metric, and data source.
+
+    Email-safe: uses <details>/<summary> so it's collapsible in the browser-rendered
+    attachment (and in clients that support it), and degrades to always-visible content
+    in clients that don't toggle (e.g. Outlook) — never JS. Lives at the very bottom so
+    an always-expanded fallback doesn't push the actionable sections down."""
+    def _entry(term, body):
+        return (
+            f'<div style="margin:9px 0;">'
+            f'<div style="color:{TEXT};font-weight:700;font-size:12px;">{term}</div>'
+            f'<div style="color:{MUTED};font-size:11px;line-height:1.5;margin-top:2px;">{body}</div>'
+            f'</div>'
+        )
+
+    def _group(title, entries):
+        return (
+            f'<details style="margin-bottom:8px;background:{SURFACE};border:1px solid {BORDER};'
+            f'border-radius:8px;padding:4px 14px;">'
+            f'<summary style="cursor:pointer;color:{ACCENT};font-weight:700;font-size:12px;'
+            f'padding:8px 0;list-style:none;text-transform:uppercase;letter-spacing:.5px;">{title}</summary>'
+            f'<div style="padding:2px 0 10px;">{"".join(entries)}</div>'
+            f'</details>'
+        )
+
+    scores = _group("Scores (0–100)", [
+        _entry("Role scores are unified",
+               "Every player shows the <b>same</b> 0–100 score in every section, calibrated so the "
+               "median qualified player ≈ 50 and a top-10% player ≈ 80. Benchmarks are derived from "
+               "the live data each run, so “full-time” scales as the season grows."),
+        _entry("Starting-pitcher score",
+               "K% (blended with Baseball Savant whiff percentile) + run prevention (ERA blended with "
+               "Savant xERA) + WHIP + contact-quality allowed (barrel%/xwOBA-against) + a start-volume "
+               "role bonus. Small samples are damped toward the mean. Blended 60% season / 40% recent form."),
+        _entry("Relief-pitcher score",
+               "Skill-weighted, punt-saves build: K, ERA (blended with xERA) and WHIP carry most of the "
+               "weight; <b>SVHD (saves+holds) is deliberately de-emphasized (~15%)</b> since it's the most "
+               "volatile category and one we're willing to sacrifice. A dominant setup man can outrank a "
+               "mediocre closer. Counting stats prefer ESPN season totals."),
+        _entry("Hitter score",
+               "Prefers wRC+ over OPS, plus xwOBA, sprint speed, Barrel%, ISO and modeled HR probability. "
+               "Scaled by an <b>opportunity multiplier</b> (at-bats vs a full-time benchmark) so a part-time "
+               "bat can't score like a regular over a week. Blended 60% season / 40% recent form."),
+        _entry("QS% (quality-start probability)",
+               "Modeled chance a starter throws a quality start (6+ IP, ≤3 ER). League-average ≈ 38%, "
+               "an ace ≈ 75%. Driven by innings-per-start, K%, ERA/WHIP and contact allowed."),
+    ])
+    pitching = _group("Pitching metrics", [
+        _entry("xERA / xwOBA-against", "Baseball Savant “deserved” run prevention from contact quality — "
+               "strips out luck and defense. Lower is better; blended with actual results in the scores."),
+        _entry("Whiff percentile", "Where a pitcher's swing-and-miss rate ranks league-wide (0–100). "
+               "A skill signal that leads strikeout results."),
+        _entry("Barrel% / HardHit% allowed", "Share of batted balls against that are barrels (ideal "
+               "exit-velo + angle) or hit ≥95 mph. Lower is better."),
+        _entry("L15 ERA", "ERA over the last 15 days — the hot/cold window for starters, who pitch "
+               "infrequently (7 days is too noisy). Compared against season ERA."),
+        _entry("Proj. Line (IP · ER · K)", "Projected stat line for one upcoming start. ER adjusts the "
+               "pitcher's ERA for opponent lineup strength (their OPS vs the league mean) and a home/away "
+               "park factor; K uses his K/IP rate. IP is his per-start average."),
+    ])
+    hitting = _group("Hitting metrics", [
+        _entry("wRC+", "Total offensive value indexed so 100 = league average; 150 = 50% better than "
+               "average. Park- and league-adjusted."),
+        _entry("xwOBA / xBA / xSLG", "Statcast “expected” outcomes from exit velo and launch angle — "
+               "what a hitter's contact <i>should</i> yield, independent of defense and luck."),
+        _entry("Barrel% / HardHit% / EV", "Quality-of-contact: barrels (ideal EV+angle), balls hit "
+               "≥95 mph, and average exit velocity. Higher is better for a hitter."),
+        _entry("HR%", "Modeled per-game home-run probability from barrel%, hard-hit%, launch angle, "
+               "HR/AB, xwOBA, ISO and recent HR streak. Green ≥20%, yellow ≥14%. Hover shows the drivers."),
+        _entry("Sprint speed / ISO", "Statcast sprint speed (ft/sec, a steals/​range signal) and Isolated "
+               "Power (SLG − AVG, extra-base power)."),
+    ])
+    proj = _group("Projections & matchup", [
+        _entry("Category Pulse cards", "Per-category snapshot of the current week: your value vs the "
+               "opponent, who's winning, and whether it's within striking distance (⚡)."),
+        _entry("Projected values & flip arrows", "“proj” is the end-of-week estimate — for K/QS/W it uses "
+               "your actual remaining starts × per-start rate; other cats use each team's weekly average. "
+               "The projection is colored by its <b>projected</b> outcome (green = projected win, red = loss). "
+               "An arrow marks a flip vs the current standing: ▲ flipping to a win, ▼ to a loss, ◆ to a tie."),
+        _entry("Luck (standings)", "Roto rank minus record rank. Positive = your W-L is better than your "
+               "category performance suggests (running lucky); negative = unlucky."),
+    ])
+    sources = _group("Data sources", [
+        _entry("FantasyPros", "Pitcher & hitter stat lines across 4 ranges (last 7/15/30 days + season)."),
+        _entry("ESPN Fantasy", "Rosters, free agents, weekly roto box scores, standings, transactions, "
+               "and season counting totals (SV/K/W/IP) for pitchers."),
+        _entry("MLB Stats API", "Probable starters (confirmed + a +6-day rotation projection) and the "
+               "opponent lineup OPS each starter faces."),
+        _entry("Baseball Savant (via pybaseball)", "Statcast: contact quality, expected stats (xERA, "
+               "xwOBA, xBA/xSLG), sprint speed and whiff percentiles."),
+    ])
+
+    return (
+        section_head("Glossary &amp; Methodology",
+                     "How every score and metric is computed, and where the data comes from · tap a section to expand")
+        + f'<div style="margin-bottom:24px;">{scores}{pitching}{hitting}{proj}{sources}</div>'
+    )
+
+
 # ── EMAIL BUILDER ─────────────────────────────────────────────────────────────
 
 def build_email(snap, override_team=None):
@@ -3627,6 +3727,8 @@ def build_email(snap, override_team=None):
         band_divider("SEASON", anchor="band-season"),                                     # SEASON CONTEXT band header
         cat_section,                                                                      # 14
         luck_section,                                                                     # 15
+        band_divider("REFERENCE", anchor="band-glossary"),                                # REFERENCE band header
+        build_glossary_section(),                                                         # 16 Glossary & Methodology
     ]
     body = "\n".join(p for p in body_parts if p)
 
