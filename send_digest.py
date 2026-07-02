@@ -794,15 +794,42 @@ def _proj_line_html(r):
     return f'<span style="color:{MUTED};font-size:10px;white-space:nowrap;">{_fmt_ip(ip_g)}&nbsp;IP&thinsp;·&thinsp;{er}&nbsp;ER&thinsp;·&thinsp;{k}K</span>'
 
 
-def band_divider(label, color=None):
+def band_divider(label, color=None, anchor=None):
     c = color or MUTED
+    # Anchor target for the "jump to" nav. name+id maximizes email-client support;
+    # where in-message anchors don't work the link is harmless and it jumps in the
+    # browser-rendered attachment.
+    anchor_html = f'<a name="{anchor}" id="{anchor}" style="text-decoration:none;"></a>' if anchor else ''
     return (
+        f'{anchor_html}'
         f'<div style="display:flex;align-items:center;margin:32px 0 22px;">'
         f'<div style="flex:1;height:1px;background:{BORDER};"></div>'
         f'<span style="padding:0 14px;color:{c};font-size:10px;font-weight:700;'
         f'letter-spacing:2px;text-transform:uppercase;">{label}</span>'
         f'<div style="flex:1;height:1px;background:{BORDER};"></div>'
         f'</div>'
+    )
+
+
+def nav_bar():
+    """Sticky-feel 'jump to' pill bar at the top of the body. Anchor links behave
+    like tabs without JS/CSS tricks that Gmail strips; they jump in the attachment
+    and degrade to harmless styled links inline."""
+    items = [
+        ("#band-myroster", "My Roster"),
+        ("#band-fa",       "Free Agents"),
+        ("#band-season",   "Season"),
+    ]
+    pills = "".join(
+        f'<a href="{href}" style="display:inline-block;padding:6px 13px;margin:0 3px 6px;'
+        f'background:{SURFACE};border:1px solid {BORDER};border-radius:14px;color:{ACCENT};'
+        f'font-size:11px;font-weight:700;text-decoration:none;letter-spacing:.3px;">{label}</a>'
+        for href, label in items
+    )
+    return (
+        f'<div style="text-align:center;margin:0 0 20px;">'
+        f'<span style="color:{MUTED};font-size:10px;font-weight:700;text-transform:uppercase;'
+        f'letter-spacing:1px;margin-right:6px;">Jump to</span>{pills}</div>'
     )
 
 
@@ -3252,6 +3279,7 @@ def build_email(snap, override_team=None):
         week_end=week_end_str, is_sunday=is_sunday, roster_suggestion=roster_suggestion
     )
     body_parts += [
+        nav_bar(),                                                                        # jump-to pill nav
         build_prev_matchup_recap(prev_matchup, team_logos=team_logos) if is_monday and prev_matchup.get("week") != (matchup or {}).get("week") else "",  # 2a MONDAY RECAP
         week_overview,                                                                    # 2  WEEK INTELLIGENCE
         build_category_pulse(matchup, weekly_avgs=weekly_avgs, days_elapsed=days_elapsed, remaining_proj=pit_proj, is_sunday=is_sunday, classification=category_classification), # 3
@@ -3260,18 +3288,18 @@ def build_email(snap, override_team=None):
                               weekly_avgs=weekly_avgs, days_elapsed=days_elapsed,
                               remaining_proj=pit_proj),                                    # 5
         opp_preview_section,                                                              # 5b OPPONENT SCOUTING
-        band_divider("MY ROSTER"),                                                        # MY TEAM band header
+        band_divider("MY ROSTER", anchor="band-myroster"),                                # MY TEAM band header
         alert_section,                                                                    # 1  ALERTS (top of My Roster)
         pos_section,                                                                      # 10 Positional Breakdown (moved to top of My Roster)
         starts_section,                                                                   # 6
         my_rp_section,                                                                    # 7
         build_pitcher_hot_cold_section(pitchers, my_team, rec_p, best_recent_p),         # 8
         build_hot_cold_section(hitters, recent_hitting, my_team, best_recent_h),         # 9
-        band_divider("FREE AGENTS"),                                                      # ACTION band header
+        band_divider("FREE AGENTS", anchor="band-fa"),                                    # ACTION band header
         fa_sp_section,                                                                    # 11
         fa_rp_section,                                                                    # 12
         fa_hit_section,                                                                   # 13
-        band_divider("SEASON"),                                                           # SEASON CONTEXT band header
+        band_divider("SEASON", anchor="band-season"),                                     # SEASON CONTEXT band header
         cat_section,                                                                      # 14
         luck_section,                                                                     # 15
     ]

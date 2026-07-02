@@ -151,6 +151,8 @@ Numeric missing values are stored as `-1` (not `NaN`) after the merge pipelines 
 
 Five bands separated by full-width `band_divider()` rules (centered label between `BORDER` lines). The Triage divider only renders when `alert_section` is non-empty.
 
+**Jump-to nav (`nav_bar`)** — a pill bar at the very top of the body (`My Roster · Free Agents · Season`) with anchor links to the `band_divider(..., anchor=...)` targets (`band-myroster`, `band-fa`, `band-season`). Anchors are `<a name= id=>` for max email-client support; they jump in the browser-rendered attachment and degrade to harmless styled links inline where Gmail ignores fragment jumps. This is the deliberate substitute for real tabs, which need JS/CSS that Gmail strips.
+
 **⚑ ALERTS** (conditional)
 1. Roster Alerts
 
