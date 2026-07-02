@@ -448,7 +448,24 @@ def get_probable_starters(days: int = SP_DAYS_OUT) -> pd.DataFrame:
     # Sort confirmed before projected so dedup keeps confirmed when pitcher appears in both
     df = pd.DataFrame(frames).sort_values(["PSP_Projected", "PSP_Date"])
     log(f"  Probable starters: {n_confirmed} confirmed + {proj_count} projected over {days} days (batch method)")
-    return df.drop_duplicates(subset="PlayerName", keep="first")
+    return _attach_start_lists(df)
+
+
+def _attach_start_lists(df: pd.DataFrame) -> pd.DataFrame:
+    """Attach PSP_Dates / PSP_HomeVAways (ALL upcoming starts per pitcher, so a
+    two-start week is detectable downstream), then dedup to one row per pitcher.
+    The surviving scalar PSP_Date/PSP_HomeVAway/PSP_Projected remain the earliest
+    start (unchanged behavior for every existing consumer)."""
+    by_player = {}
+    for row in df.sort_values("PSP_Date").itertuples(index=False):
+        # setdefault keeps the confirmed entry (appended first) if a date repeats
+        by_player.setdefault(row.PlayerName, {}).setdefault(row.PSP_Date, row.PSP_HomeVAway)
+    deduped = df.drop_duplicates(subset="PlayerName", keep="first").copy()
+    deduped["PSP_Dates"] = deduped["PlayerName"].map(
+        lambda p: sorted(by_player.get(p, {})))
+    deduped["PSP_HomeVAways"] = deduped["PlayerName"].map(
+        lambda p: [by_player[p][d] for d in sorted(by_player.get(p, {}))])
+    return deduped
 
 
 def _probable_starters_live_feed(days: int) -> pd.DataFrame:
@@ -485,10 +502,11 @@ def _probable_starters_live_feed(days: int) -> pd.DataFrame:
                 except Exception:
                     pass
     if not frames:
-        return pd.DataFrame(columns=["PlayerName", "PSP_HomeVAway", "PSP_Date", "PSP_Projected"])
+        return pd.DataFrame(columns=["PlayerName", "PSP_HomeVAway", "PSP_Date",
+                                     "PSP_Projected", "PSP_Dates", "PSP_HomeVAways"])
     df = pd.DataFrame(frames).sort_values("PSP_Date")
     log(f"  Probable starters: {len(df)} entries over {days} days (live-feed fallback)")
-    return df.drop_duplicates(subset="PlayerName", keep="first")
+    return _attach_start_lists(df)
 
 
 # â”€â”€ OPPONENT OPS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -826,6 +844,12 @@ def build_pitcher_data(league) -> list:
     merged["PSP_Date"]      = merged["PSP_Date"].fillna("1999-01-01")
     merged["PSP_HomeVAway"] = merged["PSP_HomeVAway"].fillna("")
     merged["PSP_Projected"] = merged["PSP_Projected"].fillna(False)
+    # List columns: fillna can't take a list, so coerce non-list (NaN) cells to []
+    for _col in ("PSP_Dates", "PSP_HomeVAways"):
+        if _col in merged.columns:
+            merged[_col] = merged[_col].apply(lambda x: x if isinstance(x, list) else [])
+        else:
+            merged[_col] = [[] for _ in range(len(merged))]
 
     log("Fetching opponent OPSâ€¦")
     opp_ops = get_opponent_ops()

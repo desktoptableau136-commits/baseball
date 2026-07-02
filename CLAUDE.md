@@ -87,6 +87,14 @@ Two files; one intermediate artifact:
 
 **Weekly matchup is Monday–Sunday:** `week_end_str` is computed as the Sunday of the current week (`today + timedelta(days=6 - today.weekday())`). FA SP sections and My Upcoming Starts show all starts including next week, but dates past Sunday get a `NEXT WK` badge. The KPI "Starts This Week" and Week at a Glance bullet 3 count/recommend only within the current matchup week — except on Sundays (see below).
 
+**Two-start pitchers (`PSP_Dates`):** `fetch_data.py` now preserves a list of ALL upcoming start dates per pitcher (`PSP_Dates`, plus parallel `PSP_HomeVAways`) via `_attach_start_lists` before the one-row-per-pitcher dedup. The scalar `PSP_Date`/`PSP_HomeVAway`/`PSP_Projected` remain the earliest start (unchanged for existing consumers). `_starts_this_week(r, today, week_end)` in send_digest counts entries within the matchup week (falls back to the scalar `PSP_Date` for old snapshots). A pitcher with ≥ 2 starts Mon–Sun gets a bold green `2-START` chip (`two_start_badge()`) in FA SP + My Upcoming Starts, and is preferred (secondary sort key, NOT a score change) in the Week-at-a-Glance best-FA-SP bullet, which appends "×2 starts this week". Note: two-start weeks are only visible when both starts fall in the window — mid-week runs usually show 0 because the +6 rotation pushes the 2nd start into next week; the signal lights up on Mon/Tue runs. Never fold two-start into the 0–100 score (keeps scores normalized).
+
+**Save-Role Watch (`save_role_watch`):** SVHD is the most volatile category. Per-window (`Dataset` 7/15/30) `SVHD` captures recent **saves only** (holds aren't in the window scrape); season `ESPN_SVHD` has the full SV+H total. The function flags (a) emerging FA closers — FA RP with ≥ 3 saves in the last 15 days — and (b) fading rostered RP — my RP with season SV+H ≥ 8 but 0 recent saves despite pitching (≥ 3 recent appearances). Rendered as a callout appended to the FA Relief Pitchers section. Tracks closer (save-based) roles, not pure setup/hold roles.
+
+**Category classification (`classify_categories`):** Returns `{cat: (proj_res, tier)}` reusing Category Pulse's projection math (`_project` + `pit_proj` for K/QS/W). Tiers from projected margin vs `_CLOSE_THRESH`: `≥ 2.5×thresh` → `locked` (clinched win or dead loss), `≤ thresh` → `tossup`, else `leaning`. When no projection is available (no `weekly_avgs`, no `pit_proj`) it falls back to the current margin under the same 2.5×/1× thresholds. Computed once in `build_email` as `category_classification`, passed to (1) `build_category_pulse` for the 🔒 corner badge on locked cards and (2) `_roster_suggestion`, which drops `locked`-loss categories from the pickup target set so streaming chases only still-winnable cats.
+
+**Ratio-stat risk guardrail:** In `_roster_suggestion`, when the chosen add is an SP (`_is_sp`) and ERA or WHIP is a currently-won, non-locked category, and the candidate's ERA > 4.20 / WHIP > 1.30, the pickup bullet appends a yellow `⚠ boosts K/W/QS but his {ERA} {cat} over ~{IP} IP risks your thin {cat} lead.` IP is `IP_per_G × _starts_this_week`, formatted via `_fmt_ip`. A good-ERA streamer correctly produces no warning.
+
 **Sunday mode (`is_sunday`):** When `datetime.now().weekday() == 6`, the digest shifts to a next-week preview. Changes: header subtitle → "Weekly Lookahead"; email subject → "Lookahead"; KPI tile → "Starts Next Week" (counts starts after `week_end_str`); Category Pulse subtitle → "Final stretch — week ends today"; Week at a Glance box → "Next Week Preview" label; bullet 1 appends "— final" instead of "through Day N"; bullet 2 shows next-week confirmed starts; bullet 3 shows best FA SP for next week. `next_week_end_str` is `today + timedelta(days=13 - today.weekday())` and is available in `build_email` scope.
 
 **SP/RP role detection uses `_is_sp(r)`:** Never use `"SP" in pos` or `gs > 3` alone. The helper uses a priority chain: ESPN season GS/GP ratio (≥ 5 appearances) → dataset GS/G ratio (≥ 4 appearances) → IP/G → Position field. Thresholds: GS/G ≥ 0.80 → SP, ≤ 0.20 → RP; IP/G ≥ 4.5 → SP, < 2.5 → RP. All SP/RP-sensitive functions use it: `pitcher_score`, `_score_p`, `fa_starters`, `fa_relievers`, My RP filter, `positional_breakdown`.
@@ -112,6 +120,10 @@ Two files; one intermediate artifact:
 - `_is_sp(r)` → bool. Usage-based SP/RP detection. Priority: ESPN season GS/GP → dataset GS/G → IP/G → Position field. See gotcha above.
 - `_blend(r, score_fn, idx_recent, w=0.4)` → blended score. 40% recent (best available window) + 60% season. `idx_recent` is `best_recent_p` or `best_recent_h` (see below). Falls back to `score_fn(r)` if player has no recent row.
 - `_score_p(r, idx_recent=None)` → canonical role-aware pitcher score. SP → `_blend(r, pitcher_score, idx_recent)`; RP → `rp_score(r)` unblended. Used by every pitcher Score display/sort: FA SP (`fa_starters`), My Upcoming Starts badge, `positional_breakdown`, and Week at a Glance add/drop pools. See "Unified role scores" gotcha.
+- `_starts_this_week(r, today, week_end)` → int. Count of the pitcher's upcoming starts within the matchup week (from `PSP_Dates`; falls back to scalar `PSP_Date`). Drives the `2-START` badge and best-FA-SP preference. See "Two-start pitchers" gotcha.
+- `save_role_watch(pitchers, my_team, claimed)` → `(emerging, fading)` lists for the Save-Role Watch callout. See gotcha.
+- `classify_categories(matchup, weekly_avgs, days_elapsed, remaining_proj)` → `{cat: (proj_res, tier)}`. Powers 🔒 lock badges + pickup steering. See gotcha.
+- `opponent_week_intel(pitchers, hitters, opp_team, best_recent_h, today, week_end)` → dict (starts, two-start pitchers, hot hitters) for the Opponent This Week block. Returns None when `opp_team` is empty.
 - `pitcher_score(r)` → 0–100. Role-aware via `_is_sp(r)`. **SP path**: role bonus 9–12 based on GS volume; SVHD ignored. **RP path**: role bonus 5–12 scaled by SVHD + W (up to 6pts) + IP/G opportunity (up to 5pts). K component uses WhiffPct if available, else Kpct_P, else K/IP. ERA component prefers xFIP over ERA. **Small-sample penalty**: `s *= min(1.0, ip / 20)` applied before calibration — suppresses sub-20-IP samples. Calibrated to p50=50, p90=80: `s * 1.875 - 67.6`.
 - `rp_score(r)` → 0–100 composite for RP ranking. Weights (raw, max 100): SVHD (40pts) · K (22pts) · W (13pts) · IP/G (10pts) · ERA (9pts) · WHIP (6pts). Uses `ESPN_SVHD`/`ESPN_K`/`ESPN_W` with FantasyPros fallback. Calibrated to the shared scale: `s * 0.9464 + 16.5` (p50→50, p90→80, from the league RP distribution — elite closers land 84–97). Used by FA RP, My Relief Pitchers, and (via `_score_p`) every other section that scores an RP. My Relief Pitchers picks the best available dataset per player (YEAR → 30 → 15 → 7) so recently called-up RPs outside FantasyPros' season top-300 still appear.
 - `hitter_score(r)` → 0–100. Prefers wRC+ over OPS. Uses xwOBA, sprint speed, Barrel%, ISO, HR_Probability. Calibrated: `s * 1.587 - 5.2`. Displayed everywhere as `_blend(r, hitter_score, best_recent_h)` — `fa_hitters` takes `idx_recent` for this.
@@ -123,7 +135,7 @@ Two files; one intermediate artifact:
 
 ## Key data fields
 
-**Pitchers:** `PlayerName`, `FantasyTeam`, `Position`, `Dataset` (7/15/30/2026), `IP`, `K`, `ERA`, `WHIP`, `GS`, `SVHD`, `K/IP`, `Kpct_P`, `IP_per_G`, `PSP_Date`, `PSP_HomeVAway`, `PSP_Projected`, `Team_OPS_Value`, `BarrelPctAllowed`, `ESPN_K`, `ESPN_W`, `ESPN_IP`, `ESPN_GS`, `ESPN_GP`, `ESPN_SVHD`
+**Pitchers:** `PlayerName`, `FantasyTeam`, `Position`, `Dataset` (7/15/30/2026), `IP`, `K`, `ERA`, `WHIP`, `GS`, `SVHD`, `K/IP`, `Kpct_P`, `IP_per_G`, `PSP_Date`, `PSP_HomeVAway`, `PSP_Projected`, `PSP_Dates` (list of all upcoming starts), `PSP_HomeVAways` (parallel list), `Team_OPS_Value`, `BarrelPctAllowed`, `ESPN_K`, `ESPN_W`, `ESPN_IP`, `ESPN_GS`, `ESPN_GP`, `ESPN_SVHD`
 
 **Hitters:** `PlayerName`, `FantasyTeam`, `Position`, `Dataset`, `HR`, `RBI`, `R`, `SB`, `AVG`, `OPS`, `wRCplus`, `xwOBA`, `xBA`, `xSLG`, `SprintSpeed`, `ISO`, `Barrel_Pct`, `HardHit_Pct`, `HR_Probability`
 
@@ -143,6 +155,7 @@ Five bands separated by full-width `band_divider()` rules (centered label betwee
 3. Category Pulse (projection cards)
 4. Current Matchup — category rankings (renamed from "This Week's Category Rankings"; sits above the score banner)
 5. Matchup (score banner + category table)
+5b. Opponent This Week — scouting block (`opponent_week_intel` / `opp_preview_section`): opponent's start count, two-start pitchers, top-3 hot bats by recent OPS. Renders only when the opponent has starters or hot hitters.
 
 **MY ROSTER**
 6. My Upcoming Starts
@@ -166,7 +179,7 @@ Five bands separated by full-width `band_divider()` rules (centered label betwee
 
 **`--team` flag:** `python send_digest.py --team "Team Name"` shows a full digest from another team's perspective. All sections render correctly including Category Pulse and Matchup score banner. Requires a fresh snapshot (run `fetch_data.py` first) since `all_matchups` must be present. Falls back to `current_matchup` (Guerrero Warfare only) for old snapshots. `build_matchup_section` accepts `my_team` param (default `MY_TEAM` constant) so it renders the correct team name and logo.
 
-**My Upcoming Starts badges:** QS (green) and 5K+ (yellow) badges always shown next to pitcher name. QS fires at qs_probability ≥ 51%; 5K+ fires at K/IP ≥ 0.90 or K% ≥ 24% with IP/G ≥ 4.5.
+**My Upcoming Starts badges:** `2-START` (green, when `_starts_this_week ≥ 2`), QS (green) and 5K+ (yellow) badges shown next to pitcher name. QS fires at qs_probability ≥ 51%; 5K+ fires at K/IP ≥ 0.90 or K% ≥ 24% with IP/G ≥ 4.5.
 
 ## Color palette
 

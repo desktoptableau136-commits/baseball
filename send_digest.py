@@ -340,6 +340,26 @@ def _score_p(r, idx_recent=None):
     return rp_score(r)
 
 
+def _starts_this_week(r, today_str, week_end_str):
+    """Count a pitcher's upcoming starts within the current matchup week [today, week_end].
+    Uses the PSP_Dates list (all scheduled starts); falls back to the single PSP_Date
+    scalar for snapshots predating the list field."""
+    dates = r.get("PSP_Dates")
+    if isinstance(dates, list) and dates:
+        return sum(1 for d in dates if today_str <= d <= week_end_str)
+    d = r.get("PSP_Date", "")
+    return 1 if d and d != "1999-01-01" and today_str <= d <= week_end_str else 0
+
+
+def two_start_badge():
+    """Bold chip flagging a pitcher with two starts inside the matchup week."""
+    return (
+        f'<span style="font-size:9px;font-weight:800;color:#fff;'
+        f'background:{GREEN};border-radius:3px;padding:1px 5px;margin-left:5px;'
+        f'vertical-align:middle;letter-spacing:.3px;">2-START</span>'
+    )
+
+
 def fa_relievers(pitchers, claimed=None):
     claimed = claimed or set()
     fa = [
@@ -355,6 +375,42 @@ def fa_relievers(pitchers, claimed=None):
     for r in fa:
         r["_rp_score"] = rp_score(r)
     return sorted(fa, key=lambda r: -r["_rp_score"])[:3]
+
+
+def save_role_watch(pitchers, my_team, claimed=None):
+    """Detect save-role momentum for the volatile SVHD category. Returns
+    (emerging, fading): FAs suddenly closing (recent saves spiking) worth adding,
+    and rostered RP whose save role looks lost (established season SV+H but zero
+    recent saves despite pitching). NOTE: per-window data captures recent SAVES,
+    not holds — so this tracks closer jobs (save-based), which is where the
+    category-swinging volatility lives; pure setup/hold roles won't trigger it."""
+    claimed = claimed or set()
+    my_key  = " ".join(my_team.split())
+    year_idx = {r["PlayerName"]: r for r in pitchers if int(r.get("Dataset", 0) or 0) == YEAR and r.get("PlayerName")}
+    d15_idx  = {r["PlayerName"]: r for r in pitchers if int(r.get("Dataset", 0) or 0) == 15 and r.get("PlayerName")}
+
+    emerging, fading = [], []
+    for name in set(year_idx) | set(d15_idx):
+        base = year_idx.get(name) or d15_idx.get(name)
+        if "RP" not in str(base.get("Position", "")) or _is_sp(base):
+            continue
+        if str(base.get("FreeAgentInjuryStatus", "")) in _DL_STATUSES:
+            continue
+        ft       = " ".join((base.get("FantasyTeam") or "").split())
+        season   = _n(base.get("ESPN_SVHD")) or _n(base.get("SVHD"))
+        d15      = d15_idx.get(name, {})
+        recent   = _n(d15.get("SVHD"))          # recent saves (window holds not captured)
+        recent_g = _n(d15.get("G"))
+        rec = {"name": name, "team": base.get("Team"), "recent": recent, "season": season}
+
+        if ft == "" and name not in claimed and recent >= 3:
+            emerging.append(rec)                # a free agent suddenly racking up saves
+        elif ft == my_key and season >= 8 and recent == 0 and recent_g >= 3:
+            fading.append(rec)                  # my established closer, pitching but no saves lately
+
+    emerging.sort(key=lambda x: (-x["recent"], -x["season"]))
+    fading.sort(key=lambda x: -x["season"])
+    return emerging[:3], fading[:3]
 
 
 def fa_hitters(hitters, claimed=None, idx_recent=None):
@@ -539,6 +595,36 @@ def my_upcoming_starts(pitchers, my_team, week_end=None):
         and (week_end is None or r.get("PSP_Date", "") <= week_end)
     ]
     return sorted(sp, key=lambda r: r.get("PSP_Date", ""))
+
+
+def opponent_week_intel(pitchers, hitters, opp_team, best_recent_h, today_str, week_end_str):
+    """Scouting data on what the opponent brings this week: their upcoming starts,
+    two-start pitchers, and hottest bats (by recent OPS). Returns a dict or None."""
+    if not opp_team:
+        return None
+    opp_key = " ".join(opp_team.split())
+    opp_sp = [
+        r for r in pitchers
+        if int(r.get("Dataset", 0) or 0) == YEAR
+        and " ".join((r.get("FantasyTeam") or "").split()) == opp_key
+        and r.get("PSP_Date", "") not in ("1999-01-01", "", None)
+        and today_str <= r.get("PSP_Date", "") <= week_end_str
+        and _is_sp(r)
+    ]
+    n_starts  = sum(_starts_this_week(r, today_str, week_end_str) or 1 for r in opp_sp)
+    two_start = [r for r in opp_sp if _starts_this_week(r, today_str, week_end_str) >= 2]
+
+    def _recent_ops(r):
+        rr = best_recent_h.get(r.get("PlayerName", "")) or {}
+        return _n(rr.get("OPS")) or _n(r.get("OPS"))
+
+    opp_hit = [r for r in hitters
+               if int(r.get("Dataset", 0) or 0) == YEAR
+               and " ".join((r.get("FantasyTeam") or "").split()) == opp_key
+               and _recent_ops(r) > 0]
+    hot = sorted(opp_hit, key=_recent_ops, reverse=True)[:3]
+    return {"n_starters": len(opp_sp), "n_starts": n_starts,
+            "two_start": two_start, "hot_hitters": [(r, _recent_ops(r)) for r in hot]}
 
 
 # ── TEAM LOGOS ────────────────────────────────────────────────────────────────
@@ -1337,7 +1423,69 @@ def _project(current, avg, elapsed_frac, cat):
         return current + remaining * avg                  # counting: add expected remainder
 
 
-def build_category_pulse(matchup, weekly_avgs=None, days_elapsed=None, remaining_proj=None, is_sunday=False):
+def classify_categories(matchup, weekly_avgs=None, days_elapsed=None, remaining_proj=None):
+    """Classify each category by how settled it is, using the same projection math
+    as Category Pulse. Returns {cat: (proj_res, tier)} where proj_res is W/L/T and
+    tier is 'locked' (clinched win or dead loss), 'tossup' (within striking distance),
+    or 'leaning'. Consumed by the lock badge in Category Pulse and by pickup steering
+    so we stop chasing dead categories."""
+    out = {}
+    if not matchup or not matchup.get("categories"):
+        return out
+    elapsed_frac = min(1.0, max(0.0, (days_elapsed or 0) / 7))
+    my_key  = " ".join(matchup.get("my_team",  "").split())
+    opp_key = " ".join(matchup.get("opp_team", "").split())
+    my_avgs  = (weekly_avgs or {}).get(my_key,  {})
+    opp_avgs = (weekly_avgs or {}).get(opp_key, {})
+    has_proj = bool(my_avgs and opp_avgs)
+
+    for c in matchup["categories"]:
+        cat   = c["cat"]
+        my_v  = c["my_val"]
+        opp_v = c["opp_val"]
+        res   = c["result"]
+        lower = cat in _LOWER_BETTER
+        dec   = _CAT_DEC.get(cat, 0)
+
+        rp = (remaining_proj or {}).get(cat)
+        if rp is not None:
+            pm, po = my_v + rp["my"], opp_v + rp["opp"]
+        elif has_proj and cat in my_avgs and cat in opp_avgs:
+            pm = _project(my_v,  my_avgs[cat],  elapsed_frac, cat)
+            po = _project(opp_v, opp_avgs[cat], elapsed_frac, cat)
+        else:
+            pm = po = None
+
+        thresh = _CLOSE_THRESH.get(cat, 999)
+        if pm is None:
+            # No projection available — judge by the current margin alone.
+            margin = abs(round(my_v, dec) - round(opp_v, dec))
+            if margin >= 2.5 * thresh:
+                tier = "locked"
+            elif margin <= thresh:
+                tier = "tossup"
+            else:
+                tier = "leaning"
+            out[cat] = (res, tier)
+            continue
+
+        pm_r, po_r = round(pm, dec), round(po, dec)
+        if lower:
+            proj_res = "W" if pm_r < po_r else ("T" if pm_r == po_r else "L")
+        else:
+            proj_res = "W" if pm_r > po_r else ("T" if pm_r == po_r else "L")
+        proj_margin = abs(pm_r - po_r)
+        if proj_margin >= 2.5 * thresh:
+            tier = "locked"
+        elif proj_margin <= thresh:
+            tier = "tossup"
+        else:
+            tier = "leaning"
+        out[cat] = (proj_res, tier)
+    return out
+
+
+def build_category_pulse(matchup, weekly_avgs=None, days_elapsed=None, remaining_proj=None, is_sunday=False, classification=None):
     if not matchup or not matchup.get("categories"):
         return ""
 
@@ -1415,8 +1563,13 @@ def build_category_pulse(matchup, weekly_avgs=None, days_elapsed=None, remaining
                 f'</div>'
             )
 
-        # Top-right corner badge: ⚡ (close) and/or ▲▼ (flip)
+        # Top-right corner badge: 🔒 (locked) and/or ⚡ (close) and/or ▲▼ (flip)
         corner_parts = []
+        _tier = (classification or {}).get(cat, (None, None))[1]
+        if _tier == "locked":
+            # clinched win or dead loss — a lock the manager can stop working
+            lock_c = GREEN if (proj_res or res) == "W" else MUTED
+            corner_parts.append(f'<span style="color:{lock_c};font-size:9px;">🔒</span>')
         if is_close:
             close_c = GREEN if res == "W" else RED
             corner_parts.append(f'<span style="color:{close_c};">⚡</span>')
@@ -1648,15 +1801,20 @@ def _cat_score(r, cat):
 
 def _roster_suggestion(matchup, pitchers, hitters, fa_sp, fa_rp, fa_hit,
                         my_team, best_recent_p, best_recent_h,
-                        all_matchups, week_end_str):
+                        all_matchups, week_end_str, classification=None):
     """Return one add/drop or trade suggestion bullet HTML for Week at a Glance."""
     if not matchup:
         return ""
 
+    classification = classification or {}
     cats        = matchup.get("categories", [])
     my_norm     = " ".join(my_team.split())
     opp         = matchup.get("opp_team", "")
     losing      = [c for c in cats if c["result"] == "L"]
+    # Steer toward still-winnable losses: drop categories projected as a locked loss
+    # (dead — no point streaming for them). Keep all if that would leave nothing.
+    winnable = [c for c in losing if classification.get(c["cat"], (None, "leaning"))[1] != "locked"]
+    losing   = winnable or losing
     losing_cats = {c["cat"] for c in losing}
     if not losing_cats:
         return ""
@@ -1746,6 +1904,30 @@ def _roster_suggestion(matchup, pitchers, hitters, fa_sp, fa_rp, fa_hit,
         or (droppable[0][0] if droppable else None)
     )
 
+    # Ratio-stat risk: streaming a mediocre SP for K/W/QS can flip a thin ERA/WHIP lead.
+    ratio_warn = ""
+    if add_candidate and _is_sp(add_candidate):
+        res_by_cat = {c["cat"]: c["result"] for c in cats}
+        anchors = {"ERA": (_n(add_candidate.get("ERA")),  4.20, "ERA"),
+                   "WHIP": (_n(add_candidate.get("WHIP")), 1.30, "WHIP")}
+        at_risk = [
+            (lbl, val) for rc, (val, anchor, lbl) in anchors.items()
+            if res_by_cat.get(rc) == "W"
+            and classification.get(rc, (None, "leaning"))[1] != "locked"
+            and val > anchor
+        ]
+        if at_risk:
+            lbl, val = at_risk[0]
+            _today = datetime.now().strftime("%Y-%m-%d")
+            ipg  = _n(add_candidate.get("IP_per_G"))
+            n_st = _starts_this_week(add_candidate, _today, week_end_str) or 1
+            ip_est = ipg * n_st
+            ip_txt = f'~{_fmt_ip(ip_est)} IP' if ip_est > 0 else 'his innings'
+            ratio_warn = (
+                f'<span style="color:{YELLOW};"> &#9888; boosts K/W/QS but his '
+                f'{val:.2f} {lbl} over {ip_txt} risks your thin {lbl} lead.</span>'
+            )
+
     if add_candidate and drop_candidate:
         an = add_candidate.get("PlayerName", "")
         dn = drop_candidate.get("PlayerName", "")
@@ -1755,6 +1937,7 @@ def _roster_suggestion(matchup, pitchers, hitters, fa_sp, fa_rp, fa_hit,
                 f'<span style="color:{MUTED};"> ({_pos_disp(add_candidate)})</span>'
                 f'<span style="color:{MUTED};"> ({add_reason})</span>'
                 f' &middot; Drop <span style="color:{MUTED};">{dn} ({_pos_disp(drop_candidate)})</span>'
+                f'{ratio_warn}'
             )
 
     # ── TRADE ─────────────────────────────────────────────────────────────────
@@ -1899,7 +2082,12 @@ def build_week_overview(matchup, week_cats, week_n, fa_sp, starts, days_elapsed,
         def _best_fa_str(pool, label_prefix="Best FA SP pickup"):
             if not pool:
                 return ""
-            best = max(pool, key=lambda r: qs_probability(r) or 0)
+            _today = datetime.now().strftime("%Y-%m-%d")
+            def _two(r):
+                return _starts_this_week(r, _today, week_end or "9999-99-99") >= 2
+            # Prefer a two-start pitcher (double the K/W/QS) among comparable candidates,
+            # then fall back to highest QS probability.
+            best = max(pool, key=lambda r: (_two(r), qs_probability(r) or 0))
             top  = pool[0]
             qsp  = qs_probability(best)
             try:
@@ -1923,6 +2111,8 @@ def build_week_overview(matchup, week_cats, week_n, fa_sp, starts, days_elapsed,
                 kc = GREEN if kpct >= 0.26 else (YELLOW if kpct >= 0.22 else TEXT)
                 s += f', K% <span style="color:{kc};">{kpct*100:.1f}%</span>'
             s += ')'
+            if _two(best):
+                s += f' · <span style="color:{GREEN};font-weight:700;">×2 starts this week</span>'
             if top.get("PlayerName") != best.get("PlayerName"):
                 s += (
                     f' · highest score: <span style="color:{TEXT};font-weight:600;">'
@@ -2378,6 +2568,8 @@ def build_email(snap, override_team=None):
                 qs_fires_s = bool(qsp and qsp >= 51)
                 k_fires_s  = (_n(r.get("K/IP")) >= 0.90 or _n(r.get("Kpct_P")) >= 0.24) and _n(r.get("IP_per_G")) >= 4.5
                 start_badges = []
+                if _starts_this_week(r, today_str, week_end_str) >= 2:
+                    start_badges.append(two_start_badge())
                 if qs_fires_s:
                     start_badges.append(
                         f'<span style="font-size:9px;font-weight:700;color:{GREEN};'
@@ -2600,6 +2792,8 @@ def build_email(snap, override_team=None):
                     elif k_fires:
                         name_border = f"border-left:3px solid {YELLOW};"
                 pickup_badge = "".join(pickup_badges)
+                # Two-start flag always shows — a 2-start FA is a top streaming target
+                two_start_html = two_start_badge() if _starts_this_week(r, today_str, week_end_str) >= 2 else ""
 
                 _kpct_val = _n(r.get("Kpct_P"))
                 _kpct_top = _kpct_val > 0 and _kpct_val in _top3_kpct_fa
@@ -2611,7 +2805,7 @@ def build_email(snap, override_team=None):
                 proj_line_str = _proj_line_html(r)
                 rows += (
                     f'<tr style="{bg}">'
-                    f'<td style="{name_border}{TD_S}font-weight:600;">{team_logo(r.get("Team"))}{r.get("PlayerName","")}{inj_tag(r)}{pickup_badge}</td>'
+                    f'<td style="{name_border}{TD_S}font-weight:600;">{team_logo(r.get("Team"))}{r.get("PlayerName","")}{inj_tag(r)}{two_start_html}{pickup_badge}</td>'
                     f'<td style="{TDC}">{proj_line_str}</td>'
                     f'<td style="{TDC}">{opp_logo(ha)}{ha}'
                     f'{"&nbsp;<span style=\"color:#888;font-size:11px\">(proj.)</span>" if r.get("PSP_Projected") else ""}</td>'
@@ -2693,6 +2887,37 @@ def build_email(snap, override_team=None):
         rp_table = f'<p style="color:{MUTED};font-style:italic;margin-bottom:24px;">No FA relievers found.</p>'
 
     fa_rp_section = section_head("FA Pickup — Relief Pitchers", "Top 3 available RP · ranked by SV+H, K, W, ERA, WHIP") + rp_table
+
+    # Save-Role Watch: emerging FA closers to add + your RP whose save role is slipping
+    _sr_emerging, _sr_fading = save_role_watch(pitchers, my_team, claimed)
+    if _sr_emerging or _sr_fading:
+        _sr_lines = []
+        for e in _sr_emerging:
+            _sr_lines.append(
+                f'<div style="margin:3px 0;">'
+                f'<span style="color:{GREEN};font-weight:700;">▲ Emerging closer:</span> '
+                f'{team_logo(e["team"])}<span style="color:{TEXT};font-weight:600;">{e["name"]}</span> '
+                f'<span style="color:{MUTED};">— {int(e["recent"])} SV in last 15d '
+                f'(season {int(e["season"])} SV+H) · available to add</span>'
+                f'</div>'
+            )
+        for f in _sr_fading:
+            _sr_lines.append(
+                f'<div style="margin:3px 0;">'
+                f'<span style="color:{YELLOW};font-weight:700;">▼ Save role slipping:</span> '
+                f'{team_logo(f["team"])}<span style="color:{TEXT};font-weight:600;">{f["name"]}</span> '
+                f'<span style="color:{MUTED};">— 0 SV in last 15d despite pitching '
+                f'(season {int(f["season"])} SV+H) · role may be lost</span>'
+                f'</div>'
+            )
+        fa_rp_section += (
+            f'<div style="background:{SURFACE2};border:1px solid {BORDER};border-radius:8px;'
+            f'padding:10px 14px;margin:-8px 0 24px;font-size:12px;">'
+            f'<div style="color:{ACCENT};font-weight:700;font-size:11px;text-transform:uppercase;'
+            f'letter-spacing:.5px;margin-bottom:5px;">Save-Role Watch</div>'
+            f'{"".join(_sr_lines)}'
+            f'</div>'
+        )
 
     # ── FA: Hitters ────────────────────────────────────────────────────────────
     if fa_hit:
@@ -2921,10 +3146,50 @@ def build_email(snap, override_team=None):
     )
 
     # ── Final assembly ─────────────────────────────────────────────────────────
+    category_classification = classify_categories(
+        matchup, weekly_avgs=weekly_avgs, days_elapsed=days_elapsed, remaining_proj=pit_proj
+    )
+
+    # Opponent scouting block (placed right after the matchup panel)
+    _opp_name  = matchup.get("opp_team", "") if matchup else ""
+    _opp_intel = opponent_week_intel(pitchers, hitters, _opp_name, best_recent_h, today_str, week_end_str)
+    opp_preview_section = ""
+    if _opp_intel and (_opp_intel["n_starters"] or _opp_intel["hot_hitters"]):
+        _opp_logo = team_logos.get(" ".join(_opp_name.split()), "")
+        _logo_img = (f'<img src="{_opp_logo}" width="18" height="18" '
+                     f'style="vertical-align:middle;border-radius:3px;margin-right:6px;">') if _opp_logo else ""
+        _lines = []
+        if _opp_intel["n_starters"]:
+            _two = _opp_intel["two_start"]
+            _two_html = ""
+            if _two:
+                _two_html = (
+                    ' · <span style="color:' + GREEN + ';font-weight:700;">2-start:</span> '
+                    + ", ".join(t.get("PlayerName", "") for t in _two)
+                )
+            _lines.append(
+                f'<div style="margin:3px 0;"><span style="color:{MUTED};">Pitching:</span> '
+                f'<span style="color:{TEXT};font-weight:600;">{_opp_intel["n_starts"]} starts</span> '
+                f'from {_opp_intel["n_starters"]} SP this week{_two_html}</div>'
+            )
+        if _opp_intel["hot_hitters"]:
+            _hh = " · ".join(
+                f'{r.get("PlayerName","")} <span style="color:{MUTED};">({ops:.3f})</span>'
+                for r, ops in _opp_intel["hot_hitters"]
+            )
+            _lines.append(
+                f'<div style="margin:3px 0;"><span style="color:{MUTED};">Hot bats:</span> '
+                f'<span style="color:{TEXT};">{_hh}</span></div>'
+            )
+        opp_preview_section = (
+            section_head(f"Opponent This Week", f"{_logo_img}What {_opp_name} is bringing — their starts &amp; hottest bats")
+            + f'<div style="background:{SURFACE2};border:1px solid {BORDER};border-radius:8px;'
+              f'padding:10px 14px;margin-bottom:24px;font-size:12px;">{"".join(_lines)}</div>'
+        )
     roster_suggestion = _roster_suggestion(
         matchup, pitchers, hitters, fa_sp, fa_rp, fa_hit,
         my_team, best_recent_p, best_recent_h,
-        all_matchups, week_end_str
+        all_matchups, week_end_str, classification=category_classification
     )
     week_overview = build_week_overview(
         matchup, week_cats, week_n, fa_sp, starts, days_elapsed, my_starts_by_day,
@@ -2933,11 +3198,12 @@ def build_email(snap, override_team=None):
     body_parts += [
         build_prev_matchup_recap(prev_matchup, team_logos=team_logos) if is_monday and prev_matchup.get("week") != (matchup or {}).get("week") else "",  # 2a MONDAY RECAP
         week_overview,                                                                    # 2  WEEK INTELLIGENCE
-        build_category_pulse(matchup, weekly_avgs=weekly_avgs, days_elapsed=days_elapsed, remaining_proj=pit_proj, is_sunday=is_sunday), # 3
+        build_category_pulse(matchup, weekly_avgs=weekly_avgs, days_elapsed=days_elapsed, remaining_proj=pit_proj, is_sunday=is_sunday, classification=category_classification), # 3
         week_cat_section,                                                                 # 4  (before matchup panel)
         build_matchup_section(matchup, logos=team_logos, my_team=my_team,
                               weekly_avgs=weekly_avgs, days_elapsed=days_elapsed,
                               remaining_proj=pit_proj),                                    # 5
+        opp_preview_section,                                                              # 5b OPPONENT SCOUTING
         band_divider("MY ROSTER"),                                                        # MY TEAM band header
         alert_section,                                                                    # 1  ALERTS (top of My Roster)
         starts_section,                                                                   # 6
