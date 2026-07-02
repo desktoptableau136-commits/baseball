@@ -200,4 +200,4 @@ My team name is always styled `font-weight:800;color:{ACCENT}` with a ← arrow.
 ## Automation
 
 - **GitHub Actions:** `.github/workflows/daily-digest.yml` triggers at 06:00 and 15:00 UTC (2 AM / 11 AM EDT). GitHub's scheduler is unreliable — actual delays vary 1–4 hours, so expected delivery is roughly 4–6 AM / 1–3 PM EDT. **Cron is always UTC** — no GitHub account or org timezone setting affects it. ESPN credentials are stored as repo secrets (`ESPN_SWID`, `ESPN_S2`).
-- **Local runner:** `scripts/run_digest.bat` can be used for manual local runs (logs to `logs/digest.log`).
+- **Local runner:** `scripts/run_digest.bat` can be used for manual local runs. It captures full console output (incl. tracebacks) to `logs/run_console.log`; the structured one-line-per-send record is written separately by `send_digest.py` to `logs/digest.log`. They are deliberately kept in **separate files** — the old setup redirected the `.bat`'s stdout into `digest.log` while Python also appended to it, and the two handles collided (`PermissionError` on Windows). The Python write is now wrapped so a locked log can never crash a run that already sent.

@@ -3425,8 +3425,16 @@ def main():
     send_email(html, subject, filename=attach_name)
     print("  Sent.")
 
-    log_line = f"{ts} | sent | subject={subject}\n"
-    (LOG_DIR / "digest.log").open("a", encoding="utf-8").write(log_line)
+    # Structured send-history line. Wrapped so a locked/unwritable log never
+    # crashes a run whose email already went out. run_digest.bat captures full
+    # console output in a SEPARATE file (logs/run_console.log) to avoid the two
+    # processes holding a handle on this same file at once.
+    try:
+        LOG_DIR.mkdir(exist_ok=True)
+        log_line = f"{ts} | sent | subject={subject}\n"
+        (LOG_DIR / "digest.log").open("a", encoding="utf-8").write(log_line)
+    except OSError as e:
+        print(f"  (log write skipped: {e})")
 
     print("\nDone.")
 
