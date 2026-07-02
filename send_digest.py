@@ -17,6 +17,7 @@ Skip refresh:   python send_digest.py --no-refresh
 
 import json
 import os
+import re
 import subprocess
 import sys
 from datetime import datetime, timedelta
@@ -956,80 +957,195 @@ def badge(score):
     return f'<span style="background:{bg};color:{fg};padding:2px 9px;border-radius:12px;font-size:11px;font-weight:800;">{s}</span>'
 
 
-def _breakdown_rows(comps, maxes):
-    """Render a component dict as 'Label N/max · Label N/max …' with the value emphasized."""
-    parts = []
-    for k, val in comps.items():
-        mx = maxes.get(k, "")
-        parts.append(f'{k}&nbsp;<b style="color:{TEXT};">{round(val)}</b>/{mx}')
-    return " · ".join(parts)
+# ── Tap-to-expand Score breakdown (v2) ─────────────────────────────────────────
+# The Score badge links to a hidden, FULL-WIDTH <tr> rendered directly below the
+# player's row; tapping the badge reveals it via CSS :target (browser-opened
+# attachment). This replaces the v1 in-cell <details> panel, which looked cramped
+# expanding inside the narrow Score column. The panel narrates the 2-3 most decisive
+# score DRIVERS in prose (see _score_narrative) instead of a "points/max" list.
+#
+# Degradation: the row carries inline display:none; a `:target { … !important }` rule
+# in the head <style> overrides it when tapped. Gmail's inline body strips <style>, so
+# the rows stay hidden there and the badge link is a harmless no-op — the score badge
+# itself always shows. The user reads the attachment, where the reveal works.
+
+_BD_SEQ = [0]
+
+
+def _bd_uid(prefix, name):
+    """Globally-unique anchor id for one breakdown row (a player can appear in several
+    tables, so the running counter guarantees uniqueness across the document)."""
+    _BD_SEQ[0] += 1
+    slug = re.sub(r"[^a-z0-9]", "", str(name or "").lower())[:16]
+    return f"bd-{prefix}-{slug}-{_BD_SEQ[0]}"
+
+
+def _st(x, dec=3):
+    """Format a stat, dropping the leading zero for sub-1 values (0.272 → '.272')."""
+    s = f"{x:.{dec}f}"
+    return s[1:] if 0 <= x < 1 else s
+
+
+def _hit_clauses(r, comps):
+    """(fill, strength_phrase, weakness_phrase) per hitter component, for narration."""
+    ops = _n(r.get("OPS")); wrc = _n(r.get("wRCplus")); hr = _n(r.get("HR"))
+    iso = _n(r.get("ISO")); rbi = _n(r.get("RBI")); sb = _n(r.get("SB"))
+    sprint = _n(r.get("SprintSpeed")); xwoba = _n(r.get("xwOBA")); hrp = _n(r.get("HR_Probability"))
+    maxes = {"Prod": 30, "HR": 16, "ISO": 6, "RBI": 10, "Speed": 10, "xwOBA": 10, "HR%": 8}
+    out = []
+
+    def add(key, strong, weak):
+        if key in comps:
+            out.append((comps[key] / maxes[key], strong, weak))
+
+    prod_stat = f"wRC+ {int(wrc)}" if wrc > 0 else f"OPS {_st(ops)}"
+    add("Prod", f"strong production ({prod_stat})", f"weak production ({prod_stat})")
+    add("HR", f"real power ({int(hr)} HR)", f"little power ({int(hr)} HR)")
+    if iso > 0:
+        add("ISO", f"big raw power (ISO {_st(iso)})", f"flat ISO ({_st(iso)})")
+    add("RBI", f"drives in runs ({int(rbi)} RBI)", f"few RBI ({int(rbi)})")
+    if sprint > 0:
+        add("Speed", f"plus speed ({sprint:.1f} ft/s)", f"slow ({sprint:.1f} ft/s)")
+    else:
+        add("Speed", f"steals bags ({int(sb)} SB)", f"no steals ({int(sb)} SB)")
+    if xwoba > 0:
+        add("xwOBA", f"quality contact (xwOBA {_st(xwoba)})", f"empty contact (xwOBA {_st(xwoba)})")
+    if hrp > 0:
+        add("HR%", f"high HR odds ({hrp * 100:.0f}%/gm)", None)   # low HR odds isn't a real weakness
+    return out
+
+
+def _sp_clauses(r, comps):
+    """(fill, strength, weakness) per SP component."""
+    kpct = _n(r.get("Kpct_P")); kip = _n(r.get("K/IP")); era = _n(r.get("ERA"))
+    whip = _n(r.get("WHIP")); brl = _n(r.get("BarrelPctAllowed")); xwoba_ag = _n(r.get("xwOBA_against"))
+    maxes = {"K": 28, "RunPrev": 28, "WHIP": 20, "Contact": 12, "Role": 12}
+    out = []
+
+    def add(key, strong, weak):
+        if key in comps:
+            out.append((comps[key] / maxes[key], strong, weak))
+
+    kstat = f"{kpct * 100:.0f}% K" if kpct > 0 else (f"{kip:.2f} K/IP" if kip > 0 else "K rate")
+    add("K", f"swing-and-miss ({kstat})", f"low strikeouts ({kstat})")
+    add("RunPrev", f"prevents runs ({era:.2f} ERA)", f"gets hit hard ({era:.2f} ERA)")
+    add("WHIP", f"limits baserunners ({whip:.2f} WHIP)", f"high WHIP ({whip:.2f})")
+    if brl > 0:
+        add("Contact", f"soft contact ({brl:.1f}% barrels)", f"hard contact ({brl:.1f}% barrels)")
+    elif xwoba_ag > 0:
+        add("Contact", f"soft contact (xwOBA-ag {_st(xwoba_ag)})", f"hard contact (xwOBA-ag {_st(xwoba_ag)})")
+    return out   # Role (start volume) is a marker, not a skill — left out of the narrative
+
+
+def _rp_clauses(r, comps):
+    """(fill, strength, weakness) per RP component."""
+    svhd = _n(r.get("ESPN_SVHD")) or _n(r.get("SVHD"))
+    k = _n(r.get("ESPN_K")) or _n(r.get("K"))
+    w = _n(r.get("ESPN_W")) or _n(r.get("W"))
+    ipg = _n(r.get("IP_per_G")); era = _n(r.get("ERA")); whip = _n(r.get("WHIP"))
+    brl = _n(r.get("BarrelPctAllowed"))
+    maxes = {"SVHD": 15, "K": 26, "W": 15, "IP/G": 8, "RunPrev": 16, "WHIP": 12, "Contact": 8}
+    out = []
+
+    def add(key, strong, weak):
+        if key in comps:
+            out.append((comps[key] / maxes[key], strong, weak))
+
+    add("SVHD", f"save/hold volume ({int(svhd)} SV+H)", None)   # punt-saves: low SVHD isn't a knock
+    add("K", f"racks up Ks ({int(k)} K)", f"low K total ({int(k)})")
+    add("W", f"vulturing wins ({int(w)} W)", None)
+    add("IP/G", f"multi-inning role ({ipg:.1f} IP/app)", None)
+    add("RunPrev", f"prevents runs ({era:.2f} ERA)", f"gets hit ({era:.2f} ERA)")
+    add("WHIP", f"limits baserunners ({whip:.2f} WHIP)", f"high WHIP ({whip:.2f})")
+    if brl > 0:
+        add("Contact", f"soft contact ({brl:.1f}% barrels)", f"hard contact ({brl:.1f}% barrels)")
+    return out
+
+
+def _score_narrative(clauses):
+    """Turn per-component (fill, strength, weakness) tuples into a prose sentence naming
+    the 2 strongest drivers (fill ≥ .60) and the 2 weakest (fill ≤ .35)."""
+    strengths = sorted([(f, s) for (f, s, w) in clauses if s and f >= 0.60], key=lambda x: -x[0])
+    weaks     = sorted([(f, w) for (f, s, w) in clauses if w and f <= 0.35], key=lambda x: x[0])
+    s_txt = [t for _, t in strengths[:2]]
+    w_txt = [t for _, t in weaks[:2]]
+    if s_txt and w_txt:
+        return f"Carried by {' and '.join(s_txt)}; held back by {', '.join(w_txt)}."
+    if s_txt:
+        return f"Carried by {' and '.join(s_txt)}; no glaring holes."
+    if w_txt:
+        return f"Held back by {', '.join(w_txt)}."
+    return "Balanced across the board — no standout strength or weakness."
 
 
 def _hitter_score_breakdown(r, idx_recent=None):
-    """Plain-language breakdown of a hitter's Score, as HTML, for the tap-to-expand panel."""
+    """Prose breakdown of a hitter's Score for the tap-to-expand panel."""
     comps, mult = hitter_score(r, _parts=True)
     if not comps:
         return ""
-    maxes = {"Prod": 30, "HR": 16, "ISO": 6, "RBI": 10, "Speed": 10, "xwOBA": 10, "HR%": 8}
     season = hitter_score(r)
-    html = (f'<b style="color:{TEXT};">Season {season}</b> '
-            f'<span style="color:{MUTED};">(raw components, /max)</span><br>'
-            f'{_breakdown_rows(comps, maxes)}')
+    html = f'<b style="color:{TEXT};">Hitter score {season}.</b> {_score_narrative(_hit_clauses(r, comps))}'
     if mult < 0.995:
-        html += f'<br>× {round(mult * 100)}% playing-time (at-bats vs a full-time regular)'
+        html += f' Trimmed to {round(mult * 100)}% for thin playing time (few at-bats vs a regular).'
     if idx_recent:
         rec = idx_recent.get(r.get("PlayerName", ""))
         if rec:
             rs = hitter_score(rec)
             if rs > 0:
-                html += (f'<br>Recent form {rs} → shown = '
-                         f'{round((1 - _BLEND_W) * 100)}% season + {round(_BLEND_W * 100)}% recent')
+                tag = "hot" if rs > season else ("cold" if rs < season else "steady")
+                html += (f' Recent form {rs} ({tag}) → shown blends '
+                         f'{round((1 - _BLEND_W) * 100)}% season / {round(_BLEND_W * 100)}% recent.')
     return html
 
 
 def _pitcher_score_breakdown(r, idx_recent=None):
-    """Plain-language breakdown of a pitcher's Score, as HTML, for the tap-to-expand panel.
-    Role-aware: SP → pitcher_score components (blended with recent form); RP → rp_score."""
+    """Prose breakdown of a pitcher's Score. Role-aware: SP → pitcher_score components
+    (blended with recent form); RP → rp_score (unblended)."""
     if _is_sp(r):
         comps, mult = pitcher_score(r, _parts=True)
-        maxes = {"K": 28, "RunPrev": 28, "WHIP": 20, "Contact": 12, "Role": 12}
-        season, role = pitcher_score(r), "SP"
+        season, role, clauses = pitcher_score(r), "SP", _sp_clauses(r, comps)
     else:
         comps, mult = rp_score(r, _parts=True)
-        maxes = {"SVHD": 15, "K": 26, "W": 15, "IP/G": 8, "RunPrev": 16, "WHIP": 12, "Contact": 8}
-        season, role = rp_score(r), "RP"
+        season, role, clauses = rp_score(r), "RP", _rp_clauses(r, comps)
     if not comps:
         return ""
-    html = (f'<b style="color:{TEXT};">{role} {season}</b> '
-            f'<span style="color:{MUTED};">(raw components, /max)</span><br>'
-            f'{_breakdown_rows(comps, maxes)}')
+    html = f'<b style="color:{TEXT};">{role} score {season}.</b> {_score_narrative(clauses)}'
     if mult < 0.995:
-        html += f'<br>× {round(mult * 100)}% sample (innings-reliability floor)'
+        html += f' Trimmed to {round(mult * 100)}% for small innings sample.'
     if role == "SP" and idx_recent:
         rec = idx_recent.get(r.get("PlayerName", ""))
         if rec:
             rs = pitcher_score(rec)
             if rs > 0:
-                html += (f'<br>Recent form {rs} → shown = '
-                         f'{round((1 - _BLEND_W) * 100)}% season + {round(_BLEND_W * 100)}% recent')
+                tag = "hot" if rs > season else ("cold" if rs < season else "steady")
+                html += (f' Recent form {rs} ({tag}) → shown blends '
+                         f'{round((1 - _BLEND_W) * 100)}% season / {round(_BLEND_W * 100)}% recent.')
     return html
 
 
-def score_reveal(score, breakdown_html):
-    """Tap-to-expand Score badge. The <summary> shows the badge; tapping reveals the
-    component breakdown. Native <details> works on mobile in the browser-rendered
-    attachment; where a client strips it, the badge (and text) simply show inline.
-    Falls back to a plain badge when there is no breakdown."""
-    if not breakdown_html:
-        return badge(score)
-    return (
-        f'<details class="scorebd" style="display:inline-block;text-align:left;">'
-        f'<summary style="list-style:none;cursor:pointer;text-align:center;">{badge(score)}</summary>'
-        f'<div style="margin-top:6px;font-size:10px;line-height:1.6;color:{MUTED};'
-        f'background:{SURFACE2};border:1px solid {BORDER};border-radius:6px;'
-        f'padding:7px 9px;max-width:230px;white-space:normal;font-weight:400;">{breakdown_html}</div>'
-        f'</details>'
+def score_reveal(score, breakdown_html, uid=None, colspan=1):
+    """Return (cell_html, row_html): the Score-cell badge and the full-width breakdown
+    <tr> to append immediately after the player's row. The badge is an anchor to the
+    hidden row, revealed via CSS :target in the browser attachment. Falls back to a
+    plain badge with an empty row when there is no breakdown or no uid."""
+    if not breakdown_html or not uid:
+        return badge(score), ""
+    cell = (
+        f'<a href="#{uid}" class="bdlink" title="Tap for score breakdown" '
+        f'style="text-decoration:none;white-space:nowrap;">{badge(score)}'
+        f'<span style="color:{MUTED};font-size:9px;font-weight:700;">&nbsp;&#9662;</span></a>'
     )
+    row = (
+        f'<tr id="{uid}" class="scorebd-row" style="display:none;">'
+        f'<td colspan="{colspan}" style="padding:0;border-bottom:1px solid {BORDER};">'
+        f'<div style="background:{SURFACE2};padding:8px 14px;font-size:11px;line-height:1.55;'
+        f'color:{MUTED};font-weight:400;border-left:3px solid {ACCENT};">'
+        f'{breakdown_html}'
+        f'<a href="#{uid}x" style="color:{MUTED};text-decoration:none;font-weight:700;'
+        f'float:right;margin-left:10px;">&#10005;</a>'
+        f'</div></td></tr>'
+    )
+    return cell, row
 
 
 def v(val, dec=2):
@@ -1626,6 +1742,9 @@ def build_hot_cold_section(hitters, recent_hitting, my_team, best_recent_h=None)
             if r["recent_ops"] else f'<span style="color:{MUTED};">—</span>'
         )
 
+        _cell, _bdrow = score_reveal(
+            r["score"], _hitter_score_breakdown(r["srow"], best_recent_h),
+            _bd_uid("rhc", r["name"]), 7)
         rows_html += (
             f'<tr style="{bg}">'
             f'<td style="{TD_S}font-weight:600;">{team_logo(r["team"])}{r["name"]}{r["inj"]}</td>'
@@ -1634,8 +1753,9 @@ def build_hot_cold_section(hitters, recent_hitting, my_team, best_recent_h=None)
             f'<td style="{TDC}">{recent_str}</td>'
             f'<td style="{TDC}">{delta_html} {arrow}</td>'
             f'<td style="{TDC}">{_hrp_cell(r["srow"])}</td>'
-            f'<td style="{TDC}">{score_reveal(r["score"], _hitter_score_breakdown(r["srow"], best_recent_h))}</td>'
+            f'<td style="{TDC}">{_cell}</td>'
             f'</tr>'
+            f'{_bdrow}'
         )
 
     n_hot  = sum(1 for r in with_data if r["delta"] >= 0.015)
@@ -1736,6 +1856,9 @@ def build_pitcher_hot_cold_section(pitchers, my_team, rec_p=None, best_recent_p=
             if r["recent_era"] else f'<span style="color:{MUTED};">—</span>'
         )
 
+        _cell, _bdrow = score_reveal(
+            r["score"], _pitcher_score_breakdown(r["srow"], best_recent_p),
+            _bd_uid("phc", r["name"]), 6)
         rows_html += (
             f'<tr style="{bg}">'
             f'<td style="{TD_S}font-weight:600;">{team_logo(r["team"])}{r["name"]}{r["inj"]}</td>'
@@ -1743,8 +1866,9 @@ def build_pitcher_hot_cold_section(pitchers, my_team, rec_p=None, best_recent_p=
             f'<td style="{TDC}">{r["season_era"]:.2f}</td>'
             f'<td style="{TDC}">{recent_str}</td>'
             f'<td style="{TDC}">{delta_html} {arrow}</td>'
-            f'<td style="{TDC}">{score_reveal(r["score"], _pitcher_score_breakdown(r["srow"], best_recent_p))}</td>'
+            f'<td style="{TDC}">{_cell}</td>'
             f'</tr>'
+            f'{_bdrow}'
         )
 
     n_hot  = sum(1 for r in with_data if r["delta"] >= 0.40)
@@ -2670,10 +2794,12 @@ def build_glossary_section():
                "median qualified player ≈ 50 and a top-10% player ≈ 80. Benchmarks are derived from "
                "the live data each run, so “full-time” scales as the season grows."),
         _entry("Tap a Score badge for the breakdown",
-               "Every Score badge expands on tap to show exactly which components produced it "
-               "(each shown as points earned / max) plus the season-vs-recent blend — so you can see "
-               "<i>why</i> two similar-looking players score differently. Works in the browser-opened "
-               "attachment; the ▸ caret marks a tappable badge."),
+               "Every Score badge expands on tap into a full-width row below the player that "
+               "explains, in plain English, the 2-3 drivers behind the number (e.g. &ldquo;carried "
+               "by swing-and-miss and a low WHIP; held back by hard contact&rdquo;) plus the "
+               "season-vs-recent blend — so you can see <i>why</i> two similar-looking players score "
+               "differently. Works in the browser-opened attachment; the ▾ caret marks a tappable "
+               "badge, and the ✕ (or tapping another badge) closes it."),
         _entry("Starting-pitcher score",
                "K% (blended with Baseball Savant whiff percentile) + run prevention (ERA blended with "
                "Savant xERA) + WHIP + contact-quality allowed (barrel%/xwOBA-against) + a start-volume "
@@ -3171,6 +3297,9 @@ def build_email(snap, override_team=None):
                     )
                 start_badge = "".join(start_badges)
                 proj_line_s = _proj_line_html(r)
+                _cell, _bdrow = score_reveal(
+                    _score_p(r, best_recent_p), _pitcher_score_breakdown(r, best_recent_p),
+                    _bd_uid("mus", name), 9)
                 rows += (
                     f'<tr style="{bg}">'
                     f'<td style="{TD_S}font-weight:600;">{team_logo(r.get("Team"))}{name}{inj_tag(r)}{start_badge}</td>'
@@ -3182,8 +3311,9 @@ def build_email(snap, override_team=None):
                     f'<td style="{TDC}">{v(r.get("ERA"), 2)}</td>'
                     + hot_cold_cell(r.get("ERA"), p15r.get("ERA"), lower_better=True, dec=2, no_data_title="No 15-day stats — player may not have pitched recently") +
                     f'<td style="{TDC}">{kpct_s_cell}</td>'
-                    f'<td style="{TDC}">{score_reveal(_score_p(r, best_recent_p), _pitcher_score_breakdown(r, best_recent_p))}</td>'
+                    f'<td style="{TDC}">{_cell}</td>'
                     f'</tr>'
+                    f'{_bdrow}'
                 )
 
         _this_wk_n = sum(1 for s in starts if s.get("PSP_Date", "") <= week_end_str)
@@ -3252,6 +3382,9 @@ def build_email(snap, override_team=None):
                 f'border-radius:3px;padding:1px 4px;margin-left:5px;vertical-align:middle;">'
                 f'{ds_label}</span>'
             ) if ds_label and no_espn else ""
+            _cell, _bdrow = score_reveal(
+                r[score_key], _pitcher_score_breakdown(r),
+                _bd_uid("myrp", r.get("PlayerName", "")), 8)
             return (
                 f'<tr style="{bg}">'
                 f'<td style="{TD_S}font-weight:600;">{team_logo(r.get("Team"))}{r.get("PlayerName","")}{inj_tag(r)}{ds_badge}</td>'
@@ -3261,8 +3394,9 @@ def build_email(snap, override_team=None):
                 f'<td style="{TDC}">{v(w, 0)}</td>'
                 f'<td style="{TDC}">{f"{era:.2f}" if era > 0 else "—"}</td>'
                 f'<td style="{TDC}">{f"{whip:.2f}" if whip > 0 else "—"}</td>'
-                f'<td style="{TDC}">{score_reveal(r[score_key], _pitcher_score_breakdown(r))}</td>'
+                f'<td style="{TDC}">{_cell}</td>'
                 f'</tr>'
+                f'{_bdrow}'
             )
 
         rp_rows = "".join(_rp_row(r, i) for i, r in enumerate(my_rp))
@@ -3390,6 +3524,9 @@ def build_email(snap, override_team=None):
                     else (f"{_kpct_val*100:.1f}%" if _kpct_val > 0 else f'<span style="color:{MUTED}">—</span>')
                 )
                 proj_line_str = _proj_line_html(r)
+                _cell, _bdrow = score_reveal(
+                    r["_score"], _pitcher_score_breakdown(r, best_recent_p),
+                    _bd_uid("fasp", r.get("PlayerName", "")), 9)
                 rows += (
                     f'<tr style="{bg}">'
                     f'<td style="{name_border}{TD_S}font-weight:600;">{team_logo(r.get("Team"))}{r.get("PlayerName","")}{inj_tag(r)}{two_start_html}{pickup_badge}</td>'
@@ -3401,8 +3538,9 @@ def build_email(snap, override_team=None):
                     f'<td style="{TDC}">{v(r.get("ERA"), 2)}</td>'
                     + hot_cold_cell(r.get("ERA"), p15r.get("ERA"), lower_better=True, dec=2, no_data_title="No 15-day stats — player may not have pitched recently") +
                     f'<td style="{TDC}">{kpct_cell}</td>'
-                    f'<td style="{TDC}">{score_reveal(r["_score"], _pitcher_score_breakdown(r, best_recent_p))}</td>'
+                    f'<td style="{TDC}">{_cell}</td>'
                     f'</tr>'
+                    f'{_bdrow}'
                 )
         table = (
             f'<div style="overflow-x:auto;-webkit-overflow-scrolling:touch;margin-bottom:24px;">'
@@ -3443,6 +3581,9 @@ def build_email(snap, override_team=None):
                 f'border-radius:3px;padding:1px 4px;margin-left:5px;vertical-align:middle;">'
                 f'{ds_label}</span>'
             ) if ds_label and no_espn else ""
+            _cell, _bdrow = score_reveal(
+                r["_rp_score"], _pitcher_score_breakdown(r),
+                _bd_uid("farp", r.get("PlayerName", "")), 9)
             return (
                 f'<tr style="{bg}">'
                 f'<td style="{TD_S}font-weight:600;">{team_logo(r.get("Team"))}{r.get("PlayerName","")}{inj_tag(r)}{ds_badge}</td>'
@@ -3453,8 +3594,9 @@ def build_email(snap, override_team=None):
                 f'<td style="{TDC}">{f"{era:.2f}" if era > 0 else "—"}</td>'
                 f'<td style="{TDC}">{f"{whip:.2f}" if whip > 0 else "—"}</td>'
                 f'{_cats_cell(r, rp_pctile, _FA_RP_CATS, need_cats)}'
-                f'<td style="{TDC}">{score_reveal(r["_rp_score"], _pitcher_score_breakdown(r))}</td>'
+                f'<td style="{TDC}">{_cell}</td>'
                 f'</tr>'
+                f'{_bdrow}'
             )
         rp_table = (
             f'<div style="overflow-x:auto;-webkit-overflow-scrolling:touch;margin-bottom:24px;">'
@@ -3514,6 +3656,9 @@ def build_email(snap, override_team=None):
         for i, r in enumerate(fa_hit):
             bg = f"background:{SURFACE2};" if i % 2 else ""
             rh = rec_h.get(r.get("PlayerName", ""), {})
+            _cell, _bdrow = score_reveal(
+                r["_score"], _hitter_score_breakdown(r, best_recent_h),
+                _bd_uid("fahit", r.get("PlayerName", "")), 11)
             rows += (
                 f'<tr style="{bg}">'
                 f'<td style="{TD_S}font-weight:600;">{team_logo(r.get("Team"))}{r.get("PlayerName","")}{inj_tag(r)}</td>'
@@ -3526,8 +3671,9 @@ def build_email(snap, override_team=None):
                 + hot_cold_cell(r.get("OPS"), rh.get("OPS"), dec=3, no_data_title="No 7-day stats — player may not have played recently") +
                 f'<td style="{TDC}">{_hrp_cell(r)}</td>'
                 f'{_cats_cell(r, hit_pctile, _FA_HIT_CATS, need_cats)}'
-                f'<td style="{TDC}">{score_reveal(r["_score"], _hitter_score_breakdown(r, best_recent_h))}</td>'
+                f'<td style="{TDC}">{_cell}</td>'
                 f'</tr>'
+                f'{_bdrow}'
             )
         table = (
             f'<table style="width:100%;border-collapse:collapse;margin-bottom:0;font-size:13px;">'
@@ -3625,13 +3771,23 @@ def build_email(snap, override_team=None):
 
         rank_str = f"#{rank} of {n_teams}" if rank else "—"
 
+        # Role-aware breakdown for this position's players (SP/RP vs hitter)
+        _is_pit_pos = p["ptype"] == "pit"
+
+        def _pb_reveal(pl, tag):
+            bd = (_pitcher_score_breakdown(pl, best_recent_p) if _is_pit_pos
+                  else _hitter_score_breakdown(pl, best_recent_h))
+            return score_reveal(pl["_pscore"], bd, _bd_uid(tag, pl.get("PlayerName", "")), 4)
+
+        _worst_bdrow = _fa_bdrow = ""
         worst = p["worst_player"]
         if worst:
+            _worst_badge, _worst_bdrow = _pb_reveal(worst, "posw")
             player_cell = (
                 f'{team_logo(worst.get("Team"), 16)}'
                 f'<span style="font-weight:600;">{worst["PlayerName"]}</span>'
                 f'{inj_tag(worst)}'
-                f' {badge(worst["_pscore"])}'
+                f' {_worst_badge}'
                 f'{pos_stat_line(worst, p["pos"])}'
             )
         else:
@@ -3655,11 +3811,12 @@ def build_email(snap, override_team=None):
         )
         upgrade = top_fa and fa_score > worst_score + upgrade_thresh
         if top_fa:
+            _fa_badge, _fa_bdrow = _pb_reveal(top_fa, "posfa")
             fa_cell = (
                 f'{team_logo(top_fa.get("Team"), 16)}'
                 f'<span style="{"font-weight:600;" if upgrade else ""}'
                 f'color:{GREEN if upgrade else MUTED};">'
-                f'{top_fa["PlayerName"]}</span> {badge(fa_score)}'
+                f'{top_fa["PlayerName"]}</span> {_fa_badge}'
                 f'{"&nbsp;&#8593;" if upgrade else ""}'
                 f'{pos_stat_line(top_fa, p["pos"])}'
                 f'{depth_html}'
@@ -3678,6 +3835,7 @@ def build_email(snap, override_team=None):
             f'{strength}<br><span style="color:{MUTED};font-size:10px;">{rank_str}</span></td>'
             f'<td style="{TD_S}font-size:12px;color:{MUTED};">{fa_cell}</td>'
             f'</tr>'
+            f'{_worst_bdrow}{_fa_bdrow}'
         )
 
     pos_section = (
@@ -3849,13 +4007,13 @@ def build_email(snap, override_team=None):
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>{my_team} Daily Digest</title>
   <style>
-    /* Tap-to-expand Score badges: hide the native disclosure triangle and show our own
-       caret so the badge stays clean until tapped. Renders in the browser-opened
-       attachment (mobile Safari/Chrome support <details> natively). */
-    details.scorebd summary {{ list-style:none; outline:none; }}
-    details.scorebd summary::-webkit-details-marker {{ display:none; }}
-    details.scorebd summary::after {{ content:" \\25B8"; color:{MUTED}; font-size:9px; }}
-    details.scorebd[open] summary::after {{ content:" \\25BE"; color:{MUTED}; font-size:9px; }}
+    /* Tap-to-expand Score breakdown (v2): each breakdown <tr> carries inline
+       display:none; tapping its badge sets the URL fragment and this :target rule
+       reveals the full-width row below the player (!important beats the inline style).
+       Renders in the browser-opened attachment; Gmail strips <style> so the rows stay
+       hidden there (the score badge itself always shows). */
+    tr.scorebd-row:target {{ display:table-row !important; }}
+    a.bdlink {{ outline:none; }}
     @media only screen and (max-width:600px) {{
       .ew {{ width:100% !important; padding:8px !important; }}
       table th, table td {{ padding:5px 4px !important; }}
