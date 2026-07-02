@@ -1317,11 +1317,14 @@ def pos_stat_line(r, pos):
     return f'<div style="color:{MUTED};font-size:10px;margin-top:2px;">{line}</div>'
 
 
-def hot_cold_cell(season_val, recent_val, lower_better=False, dec=2, hot_thresh=None, warm_thresh=None, no_data_title=None):
-    """Table cell showing recent stat + hot/cold icon vs season baseline."""
+def hot_cold_cell(season_val, recent_val, lower_better=False, dec=2, hot_thresh=None, warm_thresh=None, no_data_title=None, td_style=None):
+    """Table cell showing recent stat + hot/cold icon vs season baseline.
+    td_style overrides the cell style (defaults to TDC) so a caller can render a
+    tighter cell that matches a compacted table."""
+    tdc = td_style or TDC
     _dash_cell = (
-        f'<td style="{TDC}"><span style="color:{MUTED};cursor:help;border-bottom:1px dotted {MUTED};" title="{no_data_title}">—</span></td>'
-        if no_data_title else f'<td style="{TDC}color:{MUTED};">—</td>'
+        f'<td style="{tdc}"><span style="color:{MUTED};cursor:help;border-bottom:1px dotted {MUTED};" title="{no_data_title}">—</span></td>'
+        if no_data_title else f'<td style="{tdc}color:{MUTED};">—</td>'
     )
     try:
         sv = float(season_val or 0)
@@ -1349,7 +1352,7 @@ def hot_cold_cell(season_val, recent_val, lower_better=False, dec=2, hot_thresh=
 
     val_str = f"{rv:.{dec}f}"
     return (
-        f'<td style="{TDC}">'
+        f'<td style="{tdc}">'
         f'<span style="color:{color};">{val_str}</span>'
         f'{"&nbsp;" + icon if icon else ""}'
         f'</td>'
@@ -3235,6 +3238,13 @@ def build_email(snap, override_team=None):
         for r in starts:
             by_date.setdefault(r.get("PSP_Date", ""), []).append(r)
 
+        # Compacted cell styles for this 9-column table so it fits an iPad width
+        # without horizontal scroll (tighter horizontal padding + 12px body font).
+        # Scoped locally — the shared TH_S/TDC/TD_S constants are unchanged.
+        _th  = TH_S.replace("padding:8px 10px", "padding:8px 6px")
+        _tdc = TDC.replace("padding:7px 10px", "padding:7px 6px").replace("font-size:13px", "font-size:12px")
+        _tds = TD_S.replace("padding:7px 10px", "padding:7px 6px").replace("font-size:13px", "font-size:12px")
+
         _top3_kpct_starts = set(sorted((_n(r.get("Kpct_P")) for r in starts), reverse=True)[:3])
         rows = ""
         row_idx = 0
@@ -3302,16 +3312,16 @@ def build_email(snap, override_team=None):
                     _bd_uid("mus", name), 9)
                 rows += (
                     f'<tr style="{bg}">'
-                    f'<td style="{TD_S}font-weight:600;">{team_logo(r.get("Team"))}{name}{inj_tag(r)}{start_badge}</td>'
-                    f'<td style="{TDC}">{proj_line_s}</td>'
-                    f'<td style="{TDC}">{opp_logo(ha)}{ha}'
+                    f'<td style="{_tds}font-weight:600;">{team_logo(r.get("Team"))}{name}{inj_tag(r)}{start_badge}</td>'
+                    f'<td style="{_tdc}">{proj_line_s}</td>'
+                    f'<td style="{_tdc}">{opp_logo(ha)}{ha}'
                     f'{"&nbsp;<span style=\"color:#888;font-size:11px\">(proj.)</span>" if r.get("PSP_Projected") else ""}</td>'
-                    f'<td style="{TDC}">{v(r.get("Team_OPS_Value"), 3)}</td>'
-                    f'<td style="{TDC}">{qsp_str}</td>'
-                    f'<td style="{TDC}">{v(r.get("ERA"), 2)}</td>'
-                    + hot_cold_cell(r.get("ERA"), p15r.get("ERA"), lower_better=True, dec=2, no_data_title="No 15-day stats — player may not have pitched recently") +
-                    f'<td style="{TDC}">{kpct_s_cell}</td>'
-                    f'<td style="{TDC}">{_cell}</td>'
+                    f'<td style="{_tdc}">{v(r.get("Team_OPS_Value"), 3)}</td>'
+                    f'<td style="{_tdc}">{qsp_str}</td>'
+                    f'<td style="{_tdc}">{v(r.get("ERA"), 2)}</td>'
+                    + hot_cold_cell(r.get("ERA"), p15r.get("ERA"), lower_better=True, dec=2, no_data_title="No 15-day stats — player may not have pitched recently", td_style=_tdc) +
+                    f'<td style="{_tdc}">{kpct_s_cell}</td>'
+                    f'<td style="{_tdc}">{_cell}</td>'
                     f'</tr>'
                     f'{_bdrow}'
                 )
@@ -3328,17 +3338,17 @@ def build_email(snap, override_team=None):
         starts_section = (
             section_head("My Upcoming Starts", _starts_sub) +
             f'<div style="overflow-x:auto;-webkit-overflow-scrolling:touch;margin-bottom:24px;">'
-            f'<table style="width:100%;border-collapse:collapse;font-size:13px;">'
+            f'<table style="width:100%;border-collapse:collapse;font-size:12px;">'
             f'<thead><tr>'
-            f'<th style="{TH_S}">Pitcher</th>'
-            f'<th style="{TH_S}text-align:center;">Proj. Line</th>'
-            f'<th style="{TH_S}text-align:center;">Matchup</th>'
-            f'<th style="{TH_S}text-align:center;">Opp OPS</th>'
-            f'<th style="{TH_S}text-align:center;">QS%</th>'
-            f'<th style="{TH_S}text-align:center;">ERA</th>'
-            f'<th style="{TH_S}text-align:center;">L15 ERA</th>'
-            f'<th style="{TH_S}text-align:center;">K%</th>'
-            f'<th style="{TH_S}text-align:center;">Score</th>'
+            f'<th style="{_th}">Pitcher</th>'
+            f'<th style="{_th}text-align:center;">Proj. Line</th>'
+            f'<th style="{_th}text-align:center;">Matchup</th>'
+            f'<th style="{_th}text-align:center;">Opp OPS</th>'
+            f'<th style="{_th}text-align:center;">QS%</th>'
+            f'<th style="{_th}text-align:center;">ERA</th>'
+            f'<th style="{_th}text-align:center;">L15 ERA</th>'
+            f'<th style="{_th}text-align:center;">K%</th>'
+            f'<th style="{_th}text-align:center;">Score</th>'
             f'</tr></thead><tbody>{rows}</tbody></table>'
             f'</div>'
         )
@@ -3433,6 +3443,12 @@ def build_email(snap, override_team=None):
         by_date_fa = {}
         for r in fa_sp:
             by_date_fa.setdefault(r.get("PSP_Date", ""), []).append(r)
+
+        # Compacted cell styles (match My Upcoming Starts) so this 9-column table
+        # fits an iPad width without horizontal scroll. Scoped locally.
+        _th  = TH_S.replace("padding:8px 10px", "padding:8px 6px")
+        _tdc = TDC.replace("padding:7px 10px", "padding:7px 6px").replace("font-size:13px", "font-size:12px")
+        _tds = TD_S.replace("padding:7px 10px", "padding:7px 6px").replace("font-size:13px", "font-size:12px")
 
         _top3_kpct_fa = set(sorted((_n(r.get("Kpct_P")) for r in fa_sp), reverse=True)[:3])
         rows = ""
@@ -3529,32 +3545,32 @@ def build_email(snap, override_team=None):
                     _bd_uid("fasp", r.get("PlayerName", "")), 9)
                 rows += (
                     f'<tr style="{bg}">'
-                    f'<td style="{name_border}{TD_S}font-weight:600;">{team_logo(r.get("Team"))}{r.get("PlayerName","")}{inj_tag(r)}{two_start_html}{pickup_badge}</td>'
-                    f'<td style="{TDC}">{proj_line_str}</td>'
-                    f'<td style="{TDC}">{opp_logo(ha)}{ha}'
+                    f'<td style="{name_border}{_tds}font-weight:600;">{team_logo(r.get("Team"))}{r.get("PlayerName","")}{inj_tag(r)}{two_start_html}{pickup_badge}</td>'
+                    f'<td style="{_tdc}">{proj_line_str}</td>'
+                    f'<td style="{_tdc}">{opp_logo(ha)}{ha}'
                     f'{"&nbsp;<span style=\"color:#888;font-size:11px\">(proj.)</span>" if r.get("PSP_Projected") else ""}</td>'
-                    f'<td style="{TDC}">{v(r.get("Team_OPS_Value"), 3)}</td>'
-                    f'<td style="{TDC}">{qsp_str}</td>'
-                    f'<td style="{TDC}">{v(r.get("ERA"), 2)}</td>'
-                    + hot_cold_cell(r.get("ERA"), p15r.get("ERA"), lower_better=True, dec=2, no_data_title="No 15-day stats — player may not have pitched recently") +
-                    f'<td style="{TDC}">{kpct_cell}</td>'
-                    f'<td style="{TDC}">{_cell}</td>'
+                    f'<td style="{_tdc}">{v(r.get("Team_OPS_Value"), 3)}</td>'
+                    f'<td style="{_tdc}">{qsp_str}</td>'
+                    f'<td style="{_tdc}">{v(r.get("ERA"), 2)}</td>'
+                    + hot_cold_cell(r.get("ERA"), p15r.get("ERA"), lower_better=True, dec=2, no_data_title="No 15-day stats — player may not have pitched recently", td_style=_tdc) +
+                    f'<td style="{_tdc}">{kpct_cell}</td>'
+                    f'<td style="{_tdc}">{_cell}</td>'
                     f'</tr>'
                     f'{_bdrow}'
                 )
         table = (
             f'<div style="overflow-x:auto;-webkit-overflow-scrolling:touch;margin-bottom:24px;">'
-            f'<table style="width:100%;border-collapse:collapse;font-size:13px;">'
+            f'<table style="width:100%;border-collapse:collapse;font-size:12px;">'
             f'<thead><tr>'
-            f'<th style="{TH_S}">Pitcher</th>'
-            f'<th style="{TH_S}text-align:center;">Proj. Line</th>'
-            f'<th style="{TH_S}text-align:center;">Matchup</th>'
-            f'<th style="{TH_S}text-align:center;">Opp OPS</th>'
-            f'<th style="{TH_S}text-align:center;">QS%</th>'
-            f'<th style="{TH_S}text-align:center;">ERA</th>'
-            f'<th style="{TH_S}text-align:center;">L15 ERA</th>'
-            f'<th style="{TH_S}text-align:center;">K%</th>'
-            f'<th style="{TH_S}text-align:center;">Score</th>'
+            f'<th style="{_th}">Pitcher</th>'
+            f'<th style="{_th}text-align:center;">Proj. Line</th>'
+            f'<th style="{_th}text-align:center;">Matchup</th>'
+            f'<th style="{_th}text-align:center;">Opp OPS</th>'
+            f'<th style="{_th}text-align:center;">QS%</th>'
+            f'<th style="{_th}text-align:center;">ERA</th>'
+            f'<th style="{_th}text-align:center;">L15 ERA</th>'
+            f'<th style="{_th}text-align:center;">K%</th>'
+            f'<th style="{_th}text-align:center;">Score</th>'
             f'</tr></thead><tbody>{rows}</tbody></table>'
             f'</div>'
         )
