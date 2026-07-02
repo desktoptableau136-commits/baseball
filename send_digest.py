@@ -137,6 +137,64 @@ def _blend(r, score_fn, idx_recent, w=0.4):
     return round(w * s_rec + (1 - w) * s_year) if s_rec > 0 else s_year
 
 
+# Role-aware pitcher volume benchmarks, derived per snapshot (compute_pitcher_benchmarks)
+# so "enough of a sample" and "a real workload" scale with the season instead of a fixed
+# IP/GS/GP minimum that goes stale. Keyed by (window, role) → leader IP/GS/GP for that
+# slice; the fractions below turn a leader into a threshold. Cold-start fallbacks are the
+# old hard-coded minimums, used when a window/role slice has too few pitchers.
+_PIT_BENCH      = {}      # (window:int, role:"SP"|"RP") -> {"IP":.., "GS":.., "GP":..}
+_IP_RELY_FRAC   = 0.20    # rate stats trusted once IP reaches this fraction of the role/window leader
+_GS_VIABLE_FRAC = 0.17    # a viable SP has made this fraction of the leader's starts
+_GP_VIABLE_FRAC = 0.30    # a viable RP has this fraction of the leader's appearances…
+_IP_VIABLE_FRAC = 0.38    # …or this fraction of the leader's innings
+_PIT_FALLBACK   = {"IP_RELY": 20.0, "GS_VIABLE": 3.0, "GP_VIABLE": 12.0, "IP_VIABLE": 20.0}
+
+
+def compute_pitcher_benchmarks(pitchers):
+    """Leader IP/GS/GP per (window, role) from the live snapshot, so pitcher volume
+    thresholds (small-sample reliability + positional viability) track the season rather
+    than tripping a fixed minimum. Uses p95 as an outlier-robust 'leader'. Writes the
+    module global _PIT_BENCH; slices with too few pitchers are left unset (→ fallback)."""
+    _PIT_BENCH.clear()
+    for ds in (7, 15, 30, YEAR):
+        rows = [r for r in pitchers if int(_n(r.get("Dataset")) or 0) == ds]
+        for role in ("SP", "RP"):
+            grp = [r for r in rows if _is_sp(r) == (role == "SP")]
+            def _p95(field):
+                v = sorted(_n(x.get(field)) for x in grp if _n(x.get(field)) > 0)
+                return v[int(len(v) * 0.95)] if len(v) >= 12 else 0.0
+            _PIT_BENCH[(ds, role)] = {"IP": _p95("IP"),
+                                      "GS": _p95("GS") or _p95("ESPN_GS"),
+                                      "GP": _p95("ESPN_GP") or _p95("GP")}
+    return _PIT_BENCH
+
+
+def _ip_reliability_mult(r):
+    """Small-sample multiplier (≤ 1.0) for pitcher_score: rate stats are trusted once a
+    pitcher reaches _IP_RELY_FRAC of the role/window leader's innings, scaling down below
+    that. Role- and window-aware so an SP and an RP aren't held to the same absolute IP."""
+    ip = _n(r.get("IP"))
+    if ip <= 0:
+        return 1.0
+    ds = int(_n(r.get("Dataset")) or 0) or 7
+    role = "SP" if _is_sp(r) else "RP"
+    leader = _PIT_BENCH.get((ds, role), {}).get("IP") or 0
+    thresh = leader * _IP_RELY_FRAC if leader > 0 else _PIT_FALLBACK["IP_RELY"]
+    return min(1.0, ip / thresh) if thresh > 0 else 1.0
+
+
+def _pit_viable_min(role, stat):
+    """Season (YEAR) volume floor for the positional-breakdown 'viable FA' filter and the
+    recalibration population — a fraction of the role's season leader, so 'getting real
+    opportunities' scales with the season. Falls back to the old hard-coded minimum."""
+    b = _PIT_BENCH.get((YEAR, role), {})
+    if stat == "GS":
+        return (b.get("GS") or 0) * _GS_VIABLE_FRAC or _PIT_FALLBACK["GS_VIABLE"]
+    if stat == "GP":
+        return (b.get("GP") or 0) * _GP_VIABLE_FRAC or _PIT_FALLBACK["GP_VIABLE"]
+    return (b.get("IP") or 0) * _IP_VIABLE_FRAC or _PIT_FALLBACK["IP_VIABLE"]
+
+
 def pitcher_score(r, _raw=False):
     kip   = _n(r.get("K/IP") or r.get("KIP"))
     era   = _n(r.get("ERA"))
@@ -190,15 +248,53 @@ def pitcher_score(r, _raw=False):
         s += min(6, w / 10 * 6)       # wins
         s += min(5, ip_g / 1.2 * 5)   # opportunity: IP per appearance
 
-    # Small-sample penalty: rate stats are unreliable below 20 IP
-    if ip > 0:
-        s *= min(1.0, ip / 20)
+    # Small-sample penalty: rate stats are unreliable below a role/window-relative innings
+    # floor (derived from the leader, so it scales with the season — not a fixed 20 IP).
+    s *= _ip_reliability_mult(r)
 
     if _raw:
         return s
     # Calibrate to shared 0-100 scale (p50→50, p90→80) — see recalibrate_scores.py
     s = s * 1.4341 - 39.957
     return max(0, min(100, round(s)))
+
+
+# Full-time AB benchmark per window, used to scale a hitter's score by playing time
+# (a part-time bat accumulates fewer weekly PAs — see the opportunity adjustment in
+# hitter_score). Populated at runtime by compute_ab_benchmarks() as a fraction of each
+# window's leader, so it tracks the season instead of a stale hard-coded minimum. The
+# dict below is only a cold-start fallback (early season / a window with too few players).
+_AB_BENCH    = {}                                  # window -> full-time AB, set per snapshot
+_FULLTIME_AB = {7: 18, 15: 38, 30: 74, YEAR: 225}  # fallback only
+_AB_FLOOR    = 0.40   # extreme part-timers keep at least this fraction of their rate score
+_AB_LEADER_FRAC = 0.62  # a regular starter reaches ~62% of the window's leader → full credit
+
+
+def compute_ab_benchmarks(hitters):
+    """Full-time AB benchmark per window = _AB_LEADER_FRAC × the window's leader AB
+    (p95, outlier-robust). Derived from the live snapshot so 'full-time' scales as the
+    season progresses rather than tripping a fixed minimum. Writes the module global
+    _AB_BENCH; windows with too few players fall back to _FULLTIME_AB."""
+    _AB_BENCH.clear()
+    for ds in (7, 15, 30, YEAR):
+        abs_ = sorted(_n(r.get("AB")) for r in hitters
+                      if int(_n(r.get("Dataset")) or 0) == ds and _n(r.get("AB")) > 0)
+        if len(abs_) >= 20:
+            leader = abs_[int(len(abs_) * 0.95)]   # p95 ≈ healthy everyday leader
+            _AB_BENCH[ds] = max(1.0, leader * _AB_LEADER_FRAC)
+    return _AB_BENCH
+
+
+def _ab_opportunity_mult(r):
+    """Playing-time multiplier (≥ _AB_FLOOR, ≤ 1.0) from a hitter's at-bats vs the
+    full-time benchmark for its window. rec_h rows carry no Dataset → treated as 7-day.
+    No AB on the row → 1.0 (never penalize missing data)."""
+    ab = _n(r.get("AB"))
+    if ab <= 0:
+        return 1.0
+    ds = int(_n(r.get("Dataset")) or 0) or 7
+    full = _AB_BENCH.get(ds) or _FULLTIME_AB.get(ds) or _FULLTIME_AB[7]
+    return max(_AB_FLOOR, min(1.0, ab / full))
 
 
 def hitter_score(r):
@@ -239,6 +335,12 @@ def hitter_score(r):
         s += max(0, min(10, (avg - 0.180) / 0.160 * 10))
 
     s += min(8, hrp * 40)
+
+    # Opportunity adjustment: the rate components above reward a part-time masher as
+    # much as a regular, but over a week a bench bat who gets ~1 AB every few games
+    # can't accumulate counting stats. Scale by at-bats vs a full-time benchmark that
+    # is derived from the live data (compute_ab_benchmarks), so it tracks the season.
+    s *= _ab_opportunity_mult(r)
 
     # Calibrate to shared 0-100 scale (p50→50, p90→80) derived from observed distribution
     s = s * 1.587 - 5.2
@@ -567,9 +669,12 @@ def positional_breakdown(pitchers, hitters, my_team, best_recent_p=None, best_re
         # Viable check: only count players actually getting opportunities
         if ptype == "pit":
             if pos_label == "SP":
-                viable = lambda r: _n(r.get("GS")) >= 3
+                gs_min = _pit_viable_min("SP", "GS")
+                viable = lambda r: _n(r.get("GS")) >= gs_min
             else:
-                viable = lambda r: _n(r.get("ESPN_GP")) >= 12 or _n(r.get("IP")) >= 20
+                gp_min = _pit_viable_min("RP", "GP")
+                ip_min = _pit_viable_min("RP", "IP")
+                viable = lambda r: _n(r.get("ESPN_GP")) >= gp_min or _n(r.get("IP")) >= ip_min
         else:
             viable = lambda r: _n(r.get("OPS")) > 0.200 or _n(r.get("R")) + _n(r.get("RBI")) > 5
 
@@ -826,12 +931,24 @@ def band_divider(label, color=None, anchor=None):
     # where in-message anchors don't work the link is harmless and it jumps in the
     # browser-rendered attachment.
     anchor_html = f'<a name="{anchor}" id="{anchor}" style="text-decoration:none;"></a>' if anchor else ''
+    # "↑ Top" back-link on the right of each anchored band, so a reader who jumped
+    # down via the nav pills can return without scrolling. A matching-width left
+    # spacer keeps the label visually centered. Jumps in the attachment; harmless
+    # inline where fragment links are ignored.
+    top_link = (
+        f'<a href="#top" style="color:{MUTED};font-size:10px;font-weight:700;'
+        f'letter-spacing:1px;text-decoration:none;white-space:nowrap;">↑&nbsp;TOP</a>'
+    ) if anchor else ''
+    right_cell = f'<span style="padding-left:14px;">{top_link}</span>' if anchor else ''
+    left_spacer = '<span style="padding-right:14px;">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span>' if anchor else ''
     return (
         f'{anchor_html}'
         f'<div style="display:flex;align-items:center;margin:32px 0 22px;">'
         f'<div style="flex:1;height:1px;background:{BORDER};"></div>'
+        f'{left_spacer}'
         f'<span style="padding:0 14px;color:{c};font-size:10px;font-weight:700;'
         f'letter-spacing:2px;text-transform:uppercase;">{label}</span>'
+        f'{right_cell}'
         f'<div style="flex:1;height:1px;background:{BORDER};"></div>'
         f'</div>'
     )
@@ -853,6 +970,7 @@ def nav_bar():
         for href, label in items
     )
     return (
+        f'<a name="top" id="top" style="text-decoration:none;"></a>'
         f'<div style="text-align:center;margin:0 0 20px;">'
         f'<span style="color:{MUTED};font-size:10px;font-weight:700;text-transform:uppercase;'
         f'letter-spacing:1px;margin-right:6px;">Jump to</span>{pills}</div>'
@@ -2116,9 +2234,14 @@ def build_week_overview(matchup, week_cats, week_n, fa_sp, starts, days_elapsed,
             )
         bullets.append(rot_str)
     else:
-        confirmed = [s for s in starts if s.get("PSP_Date", "1999-01-01") != "1999-01-01"]
+        # Scope to the current matchup week so this matches the "Starts This Week" KPI
+        # (PSP_Dates can run into next week; those get a NEXT WK badge elsewhere).
+        wk_end = week_end or "9999-99-99"
+        confirmed = [s for s in starts
+                     if s.get("PSP_Date", "1999-01-01") != "1999-01-01"
+                     and s.get("PSP_Date", "") <= wk_end]
         n_days = len(set(s["PSP_Date"] for s in confirmed))
-        thin_days = sorted(d for d, cnt in my_starts_by_day.items() if cnt < 2)
+        thin_days = sorted(d for d, cnt in my_starts_by_day.items() if cnt < 2 and d <= wk_end)
         if confirmed:
             rot_str = (
                 f'<span style="color:{ACCENT};font-weight:700;">{len(confirmed)} starts</span>'
@@ -2294,6 +2417,11 @@ def build_email(snap, override_team=None):
     h7    = {r["PlayerName"]: r for r in hitters  if int(r.get("Dataset", 0) or 0) == 7  and r.get("PlayerName")}
     h15   = {r["PlayerName"]: r for r in hitters  if int(r.get("Dataset", 0) or 0) == 15 and r.get("PlayerName")}
     h30   = {r["PlayerName"]: r for r in hitters  if int(r.get("Dataset", 0) or 0) == 30 and r.get("PlayerName")}
+
+    # Derive volume benchmarks from this snapshot so scoring/viability thresholds scale
+    # with the season instead of stale hard-coded minimums (hitter AB, pitcher IP/GS/GP).
+    compute_ab_benchmarks(hitters)
+    compute_pitcher_benchmarks(pitchers)
 
     # Map Baseball Ref recent rows to add fields pitcher_score expects
     rec_p_fp = {}

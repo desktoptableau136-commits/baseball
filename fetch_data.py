@@ -99,6 +99,58 @@ def lf_to_name(x):
     return x
 
 
+_NAME_SUFFIXES = {"jr", "sr", "ii", "iii", "iv", "v"}
+
+
+def _name_key(name):
+    """Normalized join key for roster matching: accent-stripped, lowercased, and with
+    trailing generational suffixes (Jr./Sr./II/III/…) and punctuation removed. Lets
+    FantasyPros 'Luis Garcia' match ESPN 'Luis García Jr.' without a per-player patch.
+    Keeps at least the first+last token so it never collapses a real name."""
+    if not isinstance(name, str):
+        return ""
+    s = "".join(c for c in unicodedata.normalize("NFD", name) if unicodedata.category(c) != "Mn")
+    toks = s.lower().replace(".", " ").replace(",", " ").split()
+    while len(toks) > 2 and toks[-1] in _NAME_SUFFIXES:
+        toks.pop()
+    return " ".join(toks)
+
+
+def merge_on_name(fp, right, cols, how="left"):
+    """Merge right[cols] onto fp by exact PlayerName, then fill any rows the exact match
+    missed using an accent/suffix-insensitive key (_name_key). Exact matches always win;
+    the fallback only fills NaNs, so it can add roster/FA matches but never change or
+    remove an existing one. To avoid guessing between name-twins (e.g. the several MLB
+    'Luis Garcia' pitchers), a key is only trusted when it maps to a single player on
+    BOTH sides — ambiguous keys are left as-is."""
+    merged = fp.merge(right[cols], on="PlayerName", how=how)
+    val_cols = [c for c in cols if c != "PlayerName"]
+
+    # Right side: key -> row, but only keys that map to exactly one player.
+    r2 = right[["PlayerName", *val_cols]].copy()
+    r2["_k"] = r2["PlayerName"].map(_name_key)
+    r2 = r2[r2["_k"] != ""]
+    r2 = r2[r2.groupby("_k")["PlayerName"].transform("nunique") == 1]
+    r2 = r2.drop_duplicates("_k").set_index("_k")
+
+    # fp side: keys that are ambiguous among distinct fp players (never rescue those).
+    fkeys = fp["PlayerName"].map(_name_key)
+    ambig = set(pd.Series(fp["PlayerName"].values, index=fkeys.values)
+                .groupby(level=0).nunique().loc[lambda s: s > 1].index)
+
+    for vc in val_cols:
+        if vc not in r2.columns:
+            continue
+        missing = merged[vc].isna()
+        if not missing.any():
+            continue
+        cand = fkeys[missing]
+        cand = cand[(cand != "") & (~cand.isin(ambig)) & (cand.isin(r2.index))]
+        if not cand.empty:
+            merged.loc[cand.index, vc] = cand.map(r2[vc])
+    return merged
+
+
 # â”€â”€ ESPN CONNECTION â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def connect_espn():
@@ -867,10 +919,11 @@ def build_pitcher_data(league) -> list:
     espn_svhd   = get_pitcher_espn_svhd(league)
 
     # Merge roster (brings FantasyTeam + Position + ESPN_Status), then FA status separately
-    # FA_Position avoids Position_x / Position_y collision
-    merged = fp.merge(roster_df[["PlayerName", "FantasyTeam", "Position", "ESPN_Status"]], on="PlayerName", how="left")
+    # FA_Position avoids Position_x / Position_y collision. merge_on_name adds an
+    # accent/suffix-insensitive fallback so ESPN 'Luis García Jr.' matches FP 'Luis Garcia'.
+    merged = merge_on_name(fp, roster_df, ["PlayerName", "FantasyTeam", "Position", "ESPN_Status"])
     merged["ESPN_Status"] = merged["ESPN_Status"].fillna("")
-    merged = merged.merge(fa_df[["PlayerName", "FreeAgentInjuryStatus", "FA_Position"]], on="PlayerName", how="left")
+    merged = merge_on_name(merged, fa_df, ["PlayerName", "FreeAgentInjuryStatus", "FA_Position"])
 
     # Coalesce position: ESPN roster â†’ ESPN FA â†’ FantasyPros player string
     merged["Position"] = merged["Position"].fillna("").str.strip()
@@ -982,9 +1035,10 @@ def build_hitter_data(league) -> list:
     roster_df = get_hitter_roster(league)
     fa_df     = get_hitter_fa(league)
 
-    # Same pattern: avoid Position_x / Position_y collision
-    merged = fp.merge(roster_df[["PlayerName", "FantasyTeam", "Position"]], on="PlayerName", how="left")
-    merged = merged.merge(fa_df[["PlayerName", "FreeAgentInjuryStatus", "FA_Position"]], on="PlayerName", how="left")
+    # Same pattern: avoid Position_x / Position_y collision. merge_on_name adds the
+    # accent/suffix-insensitive fallback (FP 'Luis Garcia' ↔ ESPN 'Luis García Jr.').
+    merged = merge_on_name(fp, roster_df, ["PlayerName", "FantasyTeam", "Position"])
+    merged = merge_on_name(merged, fa_df, ["PlayerName", "FreeAgentInjuryStatus", "FA_Position"])
 
     merged["Position"] = merged["Position"].fillna("").str.strip()
     fa_pos = merged.get("FA_Position", pd.Series("", index=merged.index)).fillna("").str.strip()

@@ -9,7 +9,9 @@ Run:  python recalibrate_scores.py
 Then paste the printed constants into pitcher_score / rp_score in send_digest.py.
 """
 import json
-from send_digest import pitcher_score, rp_score, _is_sp, _n, YEAR
+from send_digest import (pitcher_score, rp_score, _is_sp, _n, YEAR,
+                         compute_pitcher_benchmarks, _pit_viable_min,
+                         _PIT_BENCH, _IP_RELY_FRAC, _PIT_FALLBACK)
 
 
 def pctl(sorted_vals, q):
@@ -40,12 +42,20 @@ def solve(raws, name, form):
 
 def main():
     d = json.load(open("data/snapshot.json", encoding="utf-8"))
+    # Match send_digest's dynamic, role-relative volume thresholds so the qualified
+    # population tracks the season (mirrors _ip_reliability_mult / _pit_viable_min).
+    compute_pitcher_benchmarks(d["pitchers"])
     ps = [r for r in d["pitchers"] if int(r.get("Dataset", 0) or 0) == YEAR]
+    # SP qualification = the same small-sample reliability floor pitcher_score applies
+    # (_IP_RELY_FRAC of the season SP leader); RP uses the positional viability floors.
+    sp_ip_min = (_PIT_BENCH.get((YEAR, "SP"), {}).get("IP") or 0) * _IP_RELY_FRAC \
+                or _PIT_FALLBACK["IP_RELY"]
 
     sp_raw = [pitcher_score(r, _raw=True) for r in ps
-              if _is_sp(r) and _n(r.get("IP")) >= 20]
+              if _is_sp(r) and _n(r.get("IP")) >= sp_ip_min]
     rp_raw = [rp_score(r, _raw=True) for r in ps
-              if not _is_sp(r) and (_n(r.get("ESPN_GP")) >= 12 or _n(r.get("IP")) >= 20)]
+              if not _is_sp(r) and (_n(r.get("ESPN_GP")) >= _pit_viable_min("RP", "GP")
+                                    or _n(r.get("IP")) >= _pit_viable_min("RP", "IP"))]
 
     solve(sp_raw, "pitcher_score (SP path)", "minus")
     solve(rp_raw, "rp_score", "plus")
