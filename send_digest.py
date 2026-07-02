@@ -297,6 +297,50 @@ def _ab_opportunity_mult(r):
     return max(_AB_FLOOR, min(1.0, ab / full))
 
 
+# League-average reference points, derived per snapshot (compute_league_averages) so the
+# projection/probability math tracks the season instead of stale magic numbers — replaces
+# the "league-average OPS" trio (_LEAGUE_AVG_OPS 0.717 / fetch_data LG_OPS 0.720 / the
+# inline 0.730 in qs_probability) and qs_probability's fixed ERA/WHIP/K%/IP-per-start/barrel
+# anchors. ONLY genuine "league average X" values live here; calibration/scaling constants
+# (score-component spans, park factor, recalibration constants) deliberately do NOT.
+_LG = {}   # key -> league-average value; callers fall back to the old literal when unset
+
+
+def compute_league_averages(hitters, pitchers):
+    """Populate the _LG module global from qualified YEAR rows: hitter `ops` (full-time
+    regulars), `team_ops` (mean opponent OPS faced), and starter `era`/`whip`/`k_pct`/
+    `ip_per_start`/`barrel_allowed`. Each key is left unset when its population is empty,
+    so consumers keep their hard-coded fallback."""
+    _LG.clear()
+
+    def _mean(vals):
+        vals = [x for x in vals if x is not None and x > 0]
+        return sum(vals) / len(vals) if vals else None
+
+    # Hitter OPS over full-time regulars (AB ≥ 55% of the season full-time benchmark).
+    ab_floor = (_AB_BENCH.get(YEAR) or _FULLTIME_AB[YEAR]) * 0.55
+    ops = _mean([_n(r.get("OPS")) for r in hitters
+                 if int(_n(r.get("Dataset")) or 0) == YEAR and _n(r.get("AB")) >= ab_floor])
+    if ops:
+        _LG["ops"] = round(ops, 4)
+
+    # Opponent strength faced by pitchers (per-start opponent team OPS).
+    team_ops = _mean([_n(r.get("Team_OPS_Value")) for r in pitchers])
+    if team_ops:
+        _LG["team_ops"] = round(team_ops, 4)
+
+    # Starter league averages for qs_probability anchors — qualified SPs only.
+    ip_min = _pit_viable_min("SP", "IP")
+    sps = [r for r in pitchers
+           if int(_n(r.get("Dataset")) or 0) == YEAR and _is_sp(r) and _n(r.get("IP")) >= ip_min]
+    for key, field in (("era", "ERA"), ("whip", "WHIP"), ("k_pct", "Kpct_P"),
+                       ("ip_per_start", "IP_per_G"), ("barrel_allowed", "BarrelPctAllowed")):
+        m = _mean([_n(r.get(field)) for r in sps])
+        if m:
+            _LG[key] = round(m, 4)
+    return _LG
+
+
 def hitter_score(r):
     ops    = _n(r.get("OPS"))
     hr     = _n(r.get("HR"))
@@ -362,19 +406,23 @@ def qs_probability(r):
     kpct     = _n(r.get("Kpct_P"))     # 0.0–0.50 scale
     opp      = _n(r.get("Team_OPS_Value"))
 
-    score = 38  # league-average baseline
+    # League-average anchors are derived from the live snapshot (_LG) with the old fixed
+    # values as fallback. The intercept (38 = league QS rate) and the multipliers stay
+    # fixed, so a league-average starter still scores ~38 regardless of the anchors — only
+    # the reference point tracks the season. Keeps the function calibrated (avg ~38, ace ~75).
+    score = 38  # league-average QS-rate baseline
     if ip_per_g > 0:
-        score += (ip_per_g - 5.4) * 16  # biggest driver: avg innings per appearance
+        score += (ip_per_g - (_LG.get("ip_per_start") or 5.4)) * 16  # biggest driver: IP/appearance
     if era > 0:
-        score += (4.2 - era) * 8
+        score += ((_LG.get("era") or 4.2) - era) * 8
     if whip > 0:
-        score += (1.35 - whip) * 12
+        score += ((_LG.get("whip") or 1.35) - whip) * 12
     if brl > 0:
-        score += (7.5 - brl) * 0.5
+        score += ((_LG.get("barrel_allowed") or 7.5) - brl) * 0.5
     if kpct > 0:
-        score += (kpct - 0.22) * 20
+        score += (kpct - (_LG.get("k_pct") or 0.22)) * 20
     if opp > 0:
-        score += (0.730 - opp) * 60     # matchup adjustment
+        score += ((_LG.get("team_ops") or 0.730) - opp) * 60     # matchup adjustment
 
     return max(1, min(99, round(score)))
 
@@ -904,7 +952,7 @@ def _fmt_ip(ip_decimal):
     return f"{whole}.{outs}"
 
 
-_LEAGUE_AVG_OPS = 0.717  # 2026 MLB average across eligible starters in snapshot
+_LEAGUE_AVG_OPS = 0.717  # fallback only — league team-OPS is derived per snapshot into _LG
 
 def _proj_line_html(r):
     ip_g = _n(r.get("IP_per_G"))
@@ -916,7 +964,7 @@ def _proj_line_html(r):
     # Adjust ER for opponent OPS vs league average, and home/away park effect
     opp_ops  = _n(r.get("Team_OPS_Value"))
     hva      = str(r.get("PSP_HomeVAway") or "")
-    opp_factor  = min(1.20, max(0.80, opp_ops / _LEAGUE_AVG_OPS)) if opp_ops > 0 else 1.0
+    opp_factor  = min(1.20, max(0.80, opp_ops / (_LG.get("team_ops") or _LEAGUE_AVG_OPS))) if opp_ops > 0 else 1.0
     park_factor = 0.97 if hva.startswith("vs ") else (1.03 if hva.startswith("@ ") else 1.0)
 
     raw_er = era * ip_g / 9 if era > 0 else 0
@@ -1597,6 +1645,70 @@ _CLOSE_THRESH = {
 
 _HIT_CATS = {"R", "HR", "RBI", "SB", "OPS", "B_SO"}
 _PIT_CATS = {"K", "QS", "W",   "ERA", "WHIP", "SVHD"}
+
+# ── FA "Cats" column — which roto categories a free agent most helps ──────────────
+# Only cats surfaced on the FA rows (B_SO omitted — not shown on FA hitter rows; QS is
+# SP-only and FA RP has none). ERA/WHIP are lower-is-better (handled via _LOWER_BETTER).
+_FA_HIT_CATS = ["R", "HR", "RBI", "SB", "OPS"]
+_FA_RP_CATS  = ["SVHD", "K", "W", "ERA", "WHIP"]
+
+
+def _cat_value(row, cat):
+    """Raw per-player value for a roto category (RP counting stats prefer ESPN season)."""
+    if cat == "SVHD":
+        return _n(row.get("ESPN_SVHD")) or _n(row.get("SVHD"))
+    if cat == "K":
+        return _n(row.get("ESPN_K")) or _n(row.get("K"))
+    if cat == "W":
+        return _n(row.get("ESPN_W")) or _n(row.get("W"))
+    return _n(row.get(cat))
+
+
+def build_cat_percentiles(rows, cats):
+    """{cat: sorted pool values} for percentile lookup, from a qualified YEAR player pool
+    of one type. Cats with too small a pool are omitted (→ no chip)."""
+    out = {}
+    for c in cats:
+        vals = sorted(v for v in (_cat_value(r, c) for r in rows) if v > 0)
+        if len(vals) >= 8:
+            out[c] = vals
+    return out
+
+
+def _cat_pctile(pctile, cat, val):
+    """Percentile (0–1) of val within the pool for cat; lower-is-better cats inverted."""
+    import bisect
+    pool = pctile.get(cat)
+    if not pool or val <= 0:
+        return 0.0
+    p = bisect.bisect_left(pool, val) / len(pool)
+    return (1.0 - p) if cat in _LOWER_BETTER else p
+
+
+def player_cat_strengths(row, pctile, cats, need_cats, thresh=0.70):
+    """Up to 3 cats the player is strong in (percentile ≥ thresh), need-cats first."""
+    scored = []
+    for c in cats:
+        pv = _cat_pctile(pctile, c, _cat_value(row, c))
+        if pv >= thresh:
+            scored.append((c in need_cats, pv, c))
+    scored.sort(key=lambda t: (not t[0], -t[1]))
+    return [c for _, _, c in scored][:3]
+
+
+def _cats_cell(row, pctile, cats, need_cats):
+    """<td> of category chips a FA helps; need-cats highlighted (ACCENT), others MUTED."""
+    strong = player_cat_strengths(row, pctile, cats, need_cats)
+    if not strong:
+        return f'<td style="{TDC}color:{MUTED};">—</td>'
+    chips = []
+    for c in strong:
+        hot = c in need_cats
+        col = ACCENT if hot else MUTED
+        wt  = "700" if hot else "600"
+        chips.append(f'<span style="color:{col};font-weight:{wt};font-size:11px;">{_CAT_DISPLAY.get(c, c)}</span>')
+    inner = '<span style="color:#334155;"> · </span>'.join(chips)
+    return f'<td style="{TDC}white-space:nowrap;">{inner}</td>'
 
 
 def compute_weekly_avgs(roto, current_week):
@@ -2423,6 +2535,7 @@ def build_email(snap, override_team=None):
     # with the season instead of stale hard-coded minimums (hitter AB, pitcher IP/GS/GP).
     compute_ab_benchmarks(hitters)
     compute_pitcher_benchmarks(pitchers)
+    compute_league_averages(hitters, pitchers)   # league-avg reference points → _LG
 
     # Map Baseball Ref recent rows to add fields pitcher_score expects
     rec_p_fp = {}
@@ -2497,6 +2610,21 @@ def build_email(snap, override_team=None):
         "K":  {"my": _proj_k(_my_starters),   "opp": _proj_k(_opp_starters)},
         "W":  {"my": _proj_w(_my_starters),   "opp": _proj_w(_opp_starters)},
     }
+
+    # Category classification (used by the pickup steering AND the FA "Cats" column).
+    # Computed here (before the FA tables) so need_cats is available to them.
+    category_classification = classify_categories(
+        matchup, weekly_avgs=weekly_avgs, days_elapsed=days_elapsed, remaining_proj=pit_proj
+    )
+    # need_cats = the categories I'm losing OR that are a tossup — highlighted in FA "Cats".
+    _losing_now = {c["cat"] for c in (matchup.get("categories", []) if matchup else []) if c.get("result") == "L"}
+    need_cats = _losing_now | {c for c, (res, tier) in category_classification.items() if tier == "tossup"}
+    # League percentile pools for the FA "Cats" column (qualified YEAR pools per type).
+    _ab_pool_floor = (_AB_BENCH.get(YEAR) or _FULLTIME_AB[YEAR]) * 0.30
+    _hit_pool = [r for r in hitters  if int(_n(r.get("Dataset")) or 0) == YEAR and _n(r.get("AB")) >= _ab_pool_floor]
+    _rp_pool  = [r for r in pitchers if int(_n(r.get("Dataset")) or 0) == YEAR and not _is_sp(r)]
+    hit_pctile = build_cat_percentiles(_hit_pool, _FA_HIT_CATS)
+    rp_pctile  = build_cat_percentiles(_rp_pool,  _FA_RP_CATS)
     # Pseudo roto score from the ranks shown in the week table (n - rank + 1 per
     # category). Matches the Season section's method so the two subtitles are on
     # the same scale, and matches the ranks rendered directly below it. (Raw
@@ -2558,10 +2686,12 @@ def build_email(snap, override_team=None):
             f'&nbsp;<span style="color:{RED};font-size:10px;">&#9660;</span>'
         )
 
-    # Hot/cold counts from recent_hitting
+    # Hot/cold counts across my ENTIRE roster — hitters (7-day OPS) + pitchers (15-day ERA),
+    # matching the thresholds in build_hot_cold_section / build_pitcher_hot_cold_section.
     n_hot = n_cold = 0
+    _my_key = " ".join(my_team.split())
     for r in hitters:
-        if (" ".join((r.get("FantasyTeam") or "").split()) == " ".join(my_team.split())
+        if (" ".join((r.get("FantasyTeam") or "").split()) == _my_key
                 and int(r.get("Dataset", 0)) == YEAR
                 and float(r.get("OPS") or 0) > 0):
             s_ops = float(r.get("OPS") or 0)
@@ -2571,6 +2701,20 @@ def build_email(snap, override_team=None):
                 d = r_ops - s_ops
                 if d >= 0.015:   n_hot  += 1
                 elif d <= -0.015: n_cold += 1
+    # Pitchers: 15-day ERA vs season ERA (lower recent = hot), require >=3 recent IP
+    _p15 = {r["PlayerName"]: r for r in pitchers if int(r.get("Dataset", 0) or 0) == 15}
+    for r in pitchers:
+        if (" ".join((r.get("FantasyTeam") or "").split()) == _my_key
+                and int(r.get("Dataset", 0) or 0) == YEAR
+                and _n(r.get("ERA")) > 0):
+            s_era = _n(r.get("ERA"))
+            rp    = _p15.get(r.get("PlayerName", "")) or rec_p.get(r.get("PlayerName", ""), {})
+            r_era = _n(rp.get("ERA")) if rp else 0
+            r_ip  = _n(rp.get("IP"))  if rp else 0
+            if s_era > 0 and r_era > 0 and r_ip >= 3:
+                d = s_era - r_era
+                if d >= 0.40:    n_hot  += 1
+                elif d <= -0.40: n_cold += 1
     hc_str = (
         f'<span style="color:{GREEN};">&#128293;&nbsp;{n_hot}</span>'
         f'<span style="color:{MUTED};margin:0 4px;">·</span>'
@@ -3072,6 +3216,7 @@ def build_email(snap, override_team=None):
                 f'<td style="{TDC}">{v(w, 0)}</td>'
                 f'<td style="{TDC}">{f"{era:.2f}" if era > 0 else "—"}</td>'
                 f'<td style="{TDC}">{f"{whip:.2f}" if whip > 0 else "—"}</td>'
+                f'{_cats_cell(r, rp_pctile, _FA_RP_CATS, need_cats)}'
                 f'<td style="{TDC}">{badge(r["_rp_score"])}</td>'
                 f'</tr>'
             )
@@ -3086,6 +3231,7 @@ def build_email(snap, override_team=None):
             f'<th style="{TH_S}text-align:center;">W</th>'
             f'<th style="{TH_S}text-align:center;">ERA</th>'
             f'<th style="{TH_S}text-align:center;">WHIP</th>'
+            f'<th style="{TH_S}text-align:center;">Cats</th>'
             f'<th style="{TH_S}text-align:center;">Score</th>'
             f'</tr></thead><tbody>{"".join(_fa_rp_row(r,i) for i,r in enumerate(fa_rp))}</tbody></table>'
             f'</div>'
@@ -3093,7 +3239,7 @@ def build_email(snap, override_team=None):
     else:
         rp_table = f'<p style="color:{MUTED};font-style:italic;margin-bottom:24px;">No FA relievers found.</p>'
 
-    fa_rp_section = section_head("FA Pickup — Relief Pitchers", "Top 3 available RP · ranked by SV+H, K, W, ERA, WHIP") + rp_table
+    fa_rp_section = section_head("FA Pickup — Relief Pitchers", "Top 3 available RP · ranked by SV+H, K, W, ERA, WHIP · Cats = categories he'd boost (your contested ones highlighted)") + rp_table
 
     # Save-Role Watch: emerging FA closers to add + your RP whose save role is slipping
     _sr_emerging, _sr_fading = save_role_watch(pitchers, my_team, claimed)
@@ -3143,6 +3289,7 @@ def build_email(snap, override_team=None):
                 f'<td style="{TDC}">{v(r.get("OPS"), 3)}</td>'
                 + hot_cold_cell(r.get("OPS"), rh.get("OPS"), dec=3, no_data_title="No 7-day stats — player may not have played recently") +
                 f'<td style="{TDC}">{_hrp_cell(r)}</td>'
+                f'{_cats_cell(r, hit_pctile, _FA_HIT_CATS, need_cats)}'
                 f'<td style="{TDC}">{badge(r["_score"])}</td>'
                 f'</tr>'
             )
@@ -3158,6 +3305,7 @@ def build_email(snap, override_team=None):
             f'<th style="{TH_S}text-align:center;">OPS</th>'
             f'<th style="{TH_S}text-align:center;">L7 OPS</th>'
             f'<th style="{TH_S}text-align:center;">HR%</th>'
+            f'<th style="{TH_S}text-align:center;">Cats</th>'
             f'<th style="{TH_S}text-align:center;">Score</th>'
             f'</tr></thead><tbody>{rows}</tbody></table>'
         )
@@ -3165,7 +3313,7 @@ def build_email(snap, override_team=None):
     else:
         table = f'<p style="color:{MUTED};font-style:italic;margin-bottom:24px;">No FA hitters found.</p>'
 
-    fa_hit_section = section_head("FA Pickup — Hitters", "Top available hitters · R / HR / RBI / SB / OPS · HR% = modeled per-game HR probability · sorted by composite score") + table
+    fa_hit_section = section_head("FA Pickup — Hitters", "Top available hitters · HR% = modeled per-game HR probability · Cats = categories he'd boost (your contested ones highlighted) · sorted by composite score") + table
 
     # ── Category Rankings ──────────────────────────────────────────────────────
     CAT_LABELS = [
@@ -3355,9 +3503,8 @@ def build_email(snap, override_team=None):
     )
 
     # ── Final assembly ─────────────────────────────────────────────────────────
-    category_classification = classify_categories(
-        matchup, weekly_avgs=weekly_avgs, days_elapsed=days_elapsed, remaining_proj=pit_proj
-    )
+    # (category_classification computed earlier, before the FA tables, so the FA "Cats"
+    # column can reuse its need_cats.)
 
     # Opponent scouting block (placed right after the matchup panel)
     _opp_name  = matchup.get("opp_team", "") if matchup else ""

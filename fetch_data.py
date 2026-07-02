@@ -146,8 +146,10 @@ def merge_on_name(fp, right, cols, how="left"):
             continue
         cand = fkeys[missing]
         cand = cand[(cand != "") & (~cand.isin(ambig)) & (cand.isin(r2.index))]
-        if not cand.empty:
-            merged.loc[cand.index, vc] = cand.map(r2[vc])
+        # Scalar .at assignment (not a vectorized .loc=Series) so list-valued columns
+        # like PSP_Dates fill correctly; cand is only the handful of rescued rows.
+        for idx, k in cand.items():
+            merged.at[idx, vc] = r2.at[k, vc]
     return merged
 
 
@@ -940,7 +942,7 @@ def build_pitcher_data(league) -> list:
 
     log("Fetching probable startersâ€¦")
     sp = get_probable_starters()
-    merged = merged.merge(sp, on="PlayerName", how="left")
+    merged = merge_on_name(merged, sp, list(sp.columns))   # suffix/accent-safe (Jr./II)
     merged["PSP_Date"]      = merged["PSP_Date"].fillna("1999-01-01")
     merged["PSP_HomeVAway"] = merged["PSP_HomeVAway"].fillna("")
     merged["PSP_Projected"] = merged["PSP_Projected"].fillna(False)
@@ -968,15 +970,15 @@ def build_pitcher_data(league) -> list:
     log("Fetching Baseball Savant pitcher contact quality (Barrel% allowed, HardHit% allowed)â€¦")
     sc_p = get_savant_pitcher_contact(CURRENT_YEAR)
     if not sc_p.empty:
-        merged = merged.merge(sc_p, on="PlayerName", how="left")
+        merged = merge_on_name(merged, sc_p, list(sc_p.columns))   # suffix/accent-safe
 
     log("Fetching Baseball Savant pitcher expected stats (xERA, xwOBA-against) and whiff%â€¦")
     xp_p = get_savant_pitcher_expected(CURRENT_YEAR)
     if not xp_p.empty:
-        merged = merged.merge(xp_p, on="PlayerName", how="left")
+        merged = merge_on_name(merged, xp_p, list(xp_p.columns))   # suffix/accent-safe
     sk_p = get_savant_pitcher_skill(CURRENT_YEAR)
     if not sk_p.empty:
-        merged = merged.merge(sk_p, on="PlayerName", how="left")
+        merged = merge_on_name(merged, sk_p, list(sk_p.columns))   # suffix/accent-safe
 
     # Derive approximate K% from FantasyPros K and estimated TBF (K/IP * 9 / K9-to-TBF ratio)
     if "K" in merged.columns and "IP" in merged.columns:
@@ -1052,9 +1054,23 @@ def build_hitter_data(league) -> list:
     merged["FantasyTeam"] = merged["FantasyTeam"].fillna("")
     merged["RosterStatus"] = merged["FreeAgentInjuryStatus"].astype(str) + merged["FantasyTeam"].astype(str)
 
-    # â”€â”€ wRC+ approximation from OPS (lgOPS â‰ˆ 0.720 in 2026) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    LG_OPS = 0.720
+    # â”€â”€ wRC+ approximation from OPS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # lgOPS is derived from this snapshot's full-time regulars (season rows, AB >= 55% of the
+    # p95 leader) so it tracks the season, not a fixed 0.720. Falls back to 0.720 early season.
     ops_num = pd.to_numeric(merged["OPS"], errors="coerce").fillna(0)
+    LG_OPS = 0.720
+    try:
+        ds_num = pd.to_numeric(merged.get("Dataset"), errors="coerce")
+        ab_num = pd.to_numeric(merged.get("AB"), errors="coerce").fillna(0)
+        season = (ds_num == CURRENT_YEAR) & (ab_num > 0) & (ops_num > 0)
+        if season.sum() >= 20:
+            leader_ab = ab_num[season].quantile(0.95)
+            reg = season & (ab_num >= leader_ab * 0.55)
+            if reg.sum() >= 10:
+                LG_OPS = round(float(ops_num[reg].mean()), 4)
+    except Exception:
+        LG_OPS = 0.720
+    log(f"lgOPS (derived) = {LG_OPS:.4f}")
     merged["wRCplus"] = ((ops_num / LG_OPS) * 100).where(ops_num > 0, -1).round(0).astype(int)
 
     # â”€â”€ Statcast data (season rows only) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -1076,10 +1092,10 @@ def build_hitter_data(league) -> list:
         fp7 = pd.DataFrame(columns=["PlayerName", "HR_Last7"])
 
     season_df = merged[merged["Dataset"] == CURRENT_YEAR].copy()
-    season_df = season_df.merge(sc,     on="PlayerName", how="left")
-    season_df = season_df.merge(sc_exp, on="PlayerName", how="left")
-    season_df = season_df.merge(sprint, on="PlayerName", how="left")
-    season_df = season_df.merge(fp7,    on="PlayerName", how="left")
+    season_df = merge_on_name(season_df, sc,     list(sc.columns))      # suffix/accent-safe
+    season_df = merge_on_name(season_df, sc_exp, list(sc_exp.columns))  # suffix/accent-safe
+    season_df = merge_on_name(season_df, sprint, list(sprint.columns))  # suffix/accent-safe
+    season_df = season_df.merge(fp7,    on="PlayerName", how="left")    # FP↔FP names, exact
 
     roster_status = roster_df[["PlayerName", "ESPN_Status"]].copy() if "ESPN_Status" in roster_df.columns else roster_df.assign(ESPN_Status="ACTIVE")[["PlayerName", "ESPN_Status"]]
     espn_status = pd.concat([
@@ -1088,7 +1104,7 @@ def build_hitter_data(league) -> list:
     ], ignore_index=True).drop_duplicates("PlayerName")[["PlayerName", "ESPN_Status"]]
     apply_name_patches(espn_status, HITTER_NAME_PATCHES)
 
-    season_df = season_df.merge(espn_status, on="PlayerName", how="left")
+    season_df = merge_on_name(season_df, espn_status, ["PlayerName", "ESPN_Status"])  # suffix/accent-safe
     season_df["ESPN_Status"] = season_df["ESPN_Status"].fillna("Unknown")
     season_df["HR"]        = pd.to_numeric(season_df.get("HR",  0), errors="coerce").fillna(0)
     season_df["AB"]        = pd.to_numeric(season_df.get("AB",  1), errors="coerce").replace(0, 1)
