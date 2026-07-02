@@ -734,10 +734,11 @@ def get_all_roto(league) -> list:
 # â”€â”€ HR PROBABILITY â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def compute_hr_probability(row) -> float:
-    status = row.get("ESPN_Status", "")
-    if status not in ("Rostered", "ACTIVE", "FA", ""):
-        return 0.0
-    hr_r    = min(row.get("HR_per_AB",  0) / 0.10, 1.0)
+    """Modeled per-game HR probability from power skill (barrel/hard-hit/launch/
+    xwOBA/ISO + HR rate). This measures SKILL, not availability — do not gate on
+    injury status (that zeroed out injured stars like Judge/Trout/Buxton whose
+    power is intact). Availability is surfaced separately via injury tags."""
+    hr_r    = min(row.get("HR_per_AB",  0) / 0.10, 1.0) if row.get("HR_per_AB", -1) > 0 else 0
     barrel  = min(row.get("Barrel_Pct", 0) / 20.0, 1.0) if row.get("Barrel_Pct", -1) > 0 else 0
     hh      = min(row.get("HardHit_Pct",0) / 58.0, 1.0) if row.get("HardHit_Pct",-1) > 0 else 0
     la      = min(max((row.get("Avg_LA", 0) - 8) / 14.0, 0), 1.0) if row.get("Avg_LA", -1) > 0 else 0
@@ -745,6 +746,9 @@ def compute_hr_probability(row) -> float:
     # Boost from xwOBA and ISO
     xwoba   = min(max((row.get("xwOBA", 0) - 0.28) / 0.15, 0), 1.0) if row.get("xwOBA", 0) > 0 else 0
     iso_v   = min(row.get("ISO", 0) / 0.25, 1.0) if row.get("ISO", 0) > 0 else 0
+    # No usable signal at all → unknown (blank cell downstream), not a fake 5% floor
+    if hr_r <= 0 and barrel <= 0 and hh <= 0 and xwoba <= 0:
+        return 0.0
     raw     = hr_r * 0.30 + barrel * 0.28 + hh * 0.15 + la * 0.08 + streak * 0.05 + xwoba * 0.08 + iso_v * 0.06
     return round(0.05 + raw * 0.26, 4)
 
@@ -990,10 +994,17 @@ def build_hitter_data(league) -> list:
             season_df[c] = -1
         season_df[c] = pd.to_numeric(season_df[c], errors="coerce").fillna(-1)
 
+    # ISO (isolated power = SLG − AVG) drives the HR model but isn't in the FP feed;
+    # derive it when SLG/AVG are present so the term isn't dead weight.
+    _slg = pd.to_numeric(season_df.get("SLG", 0), errors="coerce").fillna(0)
+    _avg = pd.to_numeric(season_df.get("AVG", 0), errors="coerce").fillna(0)
+    _iso = (_slg - _avg).round(3)
+    season_df["ISO"] = _iso.where(_iso > 0, season_df["ISO"])
+
     season_df["HR_Probability"] = season_df.apply(compute_hr_probability, axis=1)
 
     # Merge season-only enrichment back into all-range rows
-    enrich_cols = ["PlayerName", "HR_Probability", "Barrel_Pct", "HardHit_Pct",
+    enrich_cols = ["PlayerName", "HR_Probability", "HR_per_AB", "ISO", "Barrel_Pct", "HardHit_Pct",
                    "MaxEV", "Avg_LA", "xBA", "xSLG", "xwOBA", "SprintSpeed"]
     enrich_cols = [c for c in enrich_cols if c in season_df.columns]
     enrich = season_df[enrich_cols].drop_duplicates("PlayerName")

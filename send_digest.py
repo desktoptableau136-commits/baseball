@@ -844,14 +844,26 @@ def vp(val):
         return f'<span style="color:{MUTED}">—</span>'
 
 
-def _hrp_cell(hr_probability):
+def _hrp_cell(row):
     """Colored HR% cell from the modeled per-game HR probability (HR_Probability,
-    a Statcast contact-quality model: barrel%, hard-hit%, launch angle, xwOBA, ISO)."""
-    hrp = _n(hr_probability)
+    a Statcast contact-quality model). Hover shows the underlying drivers.
+    `row` is a player dict carrying HR_Probability + the Statcast inputs."""
+    hrp = _n(row.get("HR_Probability"))
     if hrp <= 0:
-        return f'<span style="color:{MUTED};">—</span>'
+        return f'<span style="color:{MUTED};" title="No Statcast contact data — batter has too few batted balls for a model">—</span>'
     c = GREEN if hrp >= 0.20 else (YELLOW if hrp >= 0.14 else MUTED)
-    return f'<span style="color:{c};font-weight:700;">{hrp*100:.0f}%</span>'
+    # Underlying drivers as a hover tooltip (renders in the attachment; harmless inline)
+    b, hh, xw, ev, iso = (_n(row.get("Barrel_Pct")), _n(row.get("HardHit_Pct")),
+                          _n(row.get("xwOBA")), _n(row.get("MaxEV")), _n(row.get("ISO")))
+    parts = []
+    if b > 0:   parts.append(f"Barrel {b:.1f}%")
+    if hh > 0:  parts.append(f"HardHit {hh:.0f}%")
+    if ev > 0:  parts.append(f"EV {ev:.0f}")
+    if xw > 0:  parts.append(f"xwOBA {xw:.3f}")
+    if iso > 0: parts.append(f"ISO {iso:.3f}")
+    title = " · ".join(parts) or "modeled HR probability"
+    return (f'<span title="{title}" style="color:{c};font-weight:700;'
+            f'border-bottom:1px dotted {MUTED};cursor:help;">{hrp*100:.0f}%</span>')
 
 
 def pos_stat_line(r, pos):
@@ -1252,7 +1264,7 @@ def build_hot_cold_section(hitters, recent_hitting, my_team, best_recent_h=None)
             "recent_g":   recent_g,
             "delta":      delta,
             "inj":        inj_tag(r),
-            "hrp":        _n(r.get("HR_Probability")),
+            "srow":       r,   # full season row for the HR% tooltip drivers
             "score":      _blend(r, hitter_score, best_recent_h) if best_recent_h is not None else hitter_score(r),
         })
 
@@ -1297,7 +1309,7 @@ def build_hot_cold_section(hitters, recent_hitting, my_team, best_recent_h=None)
             f'<td style="{TDC}">{r["season_ops"]:.3f}</td>'
             f'<td style="{TDC}">{recent_str}</td>'
             f'<td style="{TDC}">{delta_html} {arrow}</td>'
-            f'<td style="{TDC}">{_hrp_cell(r["hrp"])}</td>'
+            f'<td style="{TDC}">{_hrp_cell(r["srow"])}</td>'
             f'<td style="{TDC}">{badge(r["score"])}</td>'
             f'</tr>'
         )
@@ -1475,36 +1487,23 @@ def _project(current, avg, elapsed_frac, cat):
 
 
 def classify_categories(matchup, weekly_avgs=None, days_elapsed=None, remaining_proj=None):
-    """Classify each category by how settled it is, using the same projection math
-    as Category Pulse. Returns {cat: (proj_res, tier)} where proj_res is W/L/T and
-    tier is 'locked' (clinched win or dead loss), 'tossup' (within striking distance),
-    or 'leaning'. Consumed by the lock badge in Category Pulse and by pickup steering
-    so we stop chasing dead categories."""
+    """Classify each category's closeness, using the same projection math as Category
+    Pulse. Returns {cat: (proj_res, tier)} where proj_res is W/L/T and tier is
+    'tossup' (within a close-threshold — a thin margin) or 'leaning' (clear).
+    Used to detect thin ERA/WHIP leads for the ratio-stat pickup warning."""
     out = {}
     if not matchup or not matchup.get("categories"):
         return out
     de = days_elapsed or 0
     elapsed_frac = min(1.0, max(0.0, de / 7))
-    remaining    = 1.0 - elapsed_frac
     my_key  = " ".join(matchup.get("my_team",  "").split())
     opp_key = " ".join(matchup.get("opp_team", "").split())
     my_avgs  = (weekly_avgs or {}).get(my_key,  {})
     opp_avgs = (weekly_avgs or {}).get(opp_key, {})
     has_proj = bool(my_avgs and opp_avgs)
 
-    # Time-aware lock buffer: a category only "locks" when the margin dwarfs what the
-    # trailing side could still make up. Early in the week that bar is very high
-    # (lots of games left); by Sunday a 2.5×-threshold gap is enough. Never lock
-    # before Day 2 — too little has happened to call anything.
-    lock_mult   = 2.5 + 5.0 * remaining     # Sun≈2.5×, Wed≈5.4×, Mon≈6.8×
-    can_lock    = de >= 2
-
     def _tier(margin, thresh):
-        if can_lock and margin >= lock_mult * thresh:
-            return "locked"
-        if margin <= thresh:
-            return "tossup"
-        return "leaning"
+        return "tossup" if margin <= thresh else "leaning"
 
     for c in matchup["categories"]:
         cat   = c["cat"]
@@ -1539,7 +1538,7 @@ def classify_categories(matchup, weekly_avgs=None, days_elapsed=None, remaining_
     return out
 
 
-def build_category_pulse(matchup, weekly_avgs=None, days_elapsed=None, remaining_proj=None, is_sunday=False, classification=None):
+def build_category_pulse(matchup, weekly_avgs=None, days_elapsed=None, remaining_proj=None, is_sunday=False):
     if not matchup or not matchup.get("categories"):
         return ""
 
@@ -1617,13 +1616,8 @@ def build_category_pulse(matchup, weekly_avgs=None, days_elapsed=None, remaining
                 f'</div>'
             )
 
-        # Top-right corner badge: 🔒 (locked) and/or ⚡ (close) and/or ▲▼ (flip)
+        # Top-right corner badge: ⚡ (close) and/or ▲▼ (flip)
         corner_parts = []
-        _tier = (classification or {}).get(cat, (None, None))[1]
-        if _tier == "locked":
-            # clinched win or dead loss — a lock the manager can stop working
-            lock_c = GREEN if (proj_res or res) == "W" else MUTED
-            corner_parts.append(f'<span style="color:{lock_c};font-size:9px;">🔒</span>')
         if is_close:
             close_c = GREEN if res == "W" else RED
             corner_parts.append(f'<span style="color:{close_c};">⚡</span>')
@@ -1865,10 +1859,6 @@ def _roster_suggestion(matchup, pitchers, hitters, fa_sp, fa_rp, fa_hit,
     my_norm     = " ".join(my_team.split())
     opp         = matchup.get("opp_team", "")
     losing      = [c for c in cats if c["result"] == "L"]
-    # Steer toward still-winnable losses: drop categories projected as a locked loss
-    # (dead — no point streaming for them). Keep all if that would leave nothing.
-    winnable = [c for c in losing if classification.get(c["cat"], (None, "leaning"))[1] != "locked"]
-    losing   = winnable or losing
     losing_cats = {c["cat"] for c in losing}
     if not losing_cats:
         return ""
@@ -1967,7 +1957,7 @@ def _roster_suggestion(matchup, pitchers, hitters, fa_sp, fa_rp, fa_hit,
         at_risk = [
             (lbl, val) for rc, (val, anchor, lbl) in anchors.items()
             if res_by_cat.get(rc) == "W"
-            and classification.get(rc, (None, "leaning"))[1] != "locked"
+            and classification.get(rc, (None, "leaning"))[1] == "tossup"   # only warn on a THIN lead
             and val > anchor
         ]
         if at_risk:
@@ -2989,7 +2979,7 @@ def build_email(snap, override_team=None):
                 f'<td style="{TDC}">{v(r.get("SB"), 0)}</td>'
                 f'<td style="{TDC}">{v(r.get("OPS"), 3)}</td>'
                 + hot_cold_cell(r.get("OPS"), rh.get("OPS"), dec=3, no_data_title="No 7-day stats — player may not have played recently") +
-                f'<td style="{TDC}">{_hrp_cell(r.get("HR_Probability"))}</td>'
+                f'<td style="{TDC}">{_hrp_cell(r)}</td>'
                 f'<td style="{TDC}">{badge(r["_score"])}</td>'
                 f'</tr>'
             )
@@ -3282,12 +3272,12 @@ def build_email(snap, override_team=None):
         nav_bar(),                                                                        # jump-to pill nav
         build_prev_matchup_recap(prev_matchup, team_logos=team_logos) if is_monday and prev_matchup.get("week") != (matchup or {}).get("week") else "",  # 2a MONDAY RECAP
         week_overview,                                                                    # 2  WEEK INTELLIGENCE
-        build_category_pulse(matchup, weekly_avgs=weekly_avgs, days_elapsed=days_elapsed, remaining_proj=pit_proj, is_sunday=is_sunday, classification=category_classification), # 3
+        build_category_pulse(matchup, weekly_avgs=weekly_avgs, days_elapsed=days_elapsed, remaining_proj=pit_proj, is_sunday=is_sunday), # 3
+        opp_preview_section,                                                              # 3b OPPONENT SCOUTING (below Category Pulse)
         week_cat_section,                                                                 # 4  (before matchup panel)
         build_matchup_section(matchup, logos=team_logos, my_team=my_team,
                               weekly_avgs=weekly_avgs, days_elapsed=days_elapsed,
                               remaining_proj=pit_proj),                                    # 5
-        opp_preview_section,                                                              # 5b OPPONENT SCOUTING
         band_divider("MY ROSTER", anchor="band-myroster"),                                # MY TEAM band header
         alert_section,                                                                    # 1  ALERTS (top of My Roster)
         pos_section,                                                                      # 10 Positional Breakdown (moved to top of My Roster)
