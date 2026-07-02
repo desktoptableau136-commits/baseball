@@ -1,6 +1,6 @@
 # Fantasy Baseball — Daily Digest
 
-Automated morning email digest for ESPN fantasy league 277836 (Guerrero Warfare). Runs daily at 7 AM EDT via GitHub Actions — no laptop required.
+Automated email digest for ESPN fantasy league 277836 (Guerrero Warfare). Runs twice daily via GitHub Actions (06:00 & 15:00 UTC; GitHub's scheduler is unreliable so delivery lands roughly 4–6 AM / 1–3 PM EDT) — no laptop required.
 
 ---
 
@@ -26,11 +26,11 @@ Automated morning email digest for ESPN fantasy league 277836 (Guerrero Warfare)
 fetch_data.py  →  data/snapshot.json  →  send_digest.py  →  email
 ```
 
-1. **`fetch_data.py`** pulls data from ESPN, FantasyPros, MLB Stats API, Baseball Savant, and FanGraphs. Takes ~90 seconds. Saves everything to `data/snapshot.json`.
+1. **`fetch_data.py`** pulls data from ESPN, FantasyPros, MLB Stats API, and Baseball Savant / Baseball Reference (via `pybaseball`). Takes ~60–90 seconds. Saves everything to `data/snapshot.json`. *(FanGraphs is never called directly — it returns 403; `pybaseball` handles the headers.)*
 
 2. **`send_digest.py`** reads the snapshot, builds a single HTML email, and sends it via Gmail SMTP. The email includes both an inline HTML body and an attached `digest_YYYY-MM-DD.html` file — the attachment bypasses Gmail's 102 KB inline clip limit so the full digest is always accessible by opening the attachment in a browser. Alternatively saves `digest_preview.html` for local browser preview (no email).
 
-3. **GitHub Actions** runs this every morning at 7 AM EDT using credentials stored as repository secrets — no laptop needed.
+3. **GitHub Actions** runs this twice daily using credentials stored as repository secrets — no laptop needed.
 
 ---
 
@@ -97,7 +97,7 @@ python send_digest.py --dry-run --no-refresh
 python fetch_data.py
 ```
 
-After `--dry-run`, open `digest_preview.html` in any browser to see the output.
+After `--dry-run`, open `previews/digest_preview_{TeamName}.html` (e.g. `previews/digest_preview_Guerrero_Warfare.html`) in any browser to see the output. Add `--team "Team Name"` to preview any team's digest (requires a fresh snapshot).
 
 **On Windows PowerShell**, if `git` isn't found, run this first to restore it:
 ```powershell
@@ -108,7 +108,7 @@ $env:PATH = [System.Environment]::GetEnvironmentVariable("PATH","Machine") + ";"
 
 ## Automation
 
-GitHub Actions runs `.github/workflows/daily-digest.yml` every day at **7:00 AM EDT** (11:00 UTC). It uses Python 3.12 on Ubuntu.
+GitHub Actions runs `.github/workflows/daily-digest.yml` twice daily at **06:00 and 15:00 UTC** (2 AM / 11 AM EDT). Cron is always UTC. GitHub's scheduler is unreliable — actual delays run 1–4 hours, so expect delivery roughly 4–6 AM / 1–3 PM EDT. It uses Python on Ubuntu.
 
 ### Trigger a manual run
 
@@ -139,21 +139,40 @@ Go to **Settings → Secrets and variables → Actions** to view or update:
 
 ## What's in the Digest
 
-Sections appear in this order every morning:
+The digest is organized into labeled **bands**, with a **Jump to** nav in the header (My Roster · Free Agents · Season · Glossary) that anchors to each band.
 
-1. KPI Row
-2. **Week at a Glance** *(new)*
-3. This Week's Category Rankings
-4. Current Week Matchup
-5. Category Pulse
-6. **FA Pickup — Starting Pitchers**
-7. Roster Hot/Cold
-8. My Upcoming Starts
-9. Positional Breakdown
-10. Roster Alerts
-11. FA Pickup — Hitters
-12. My Category Rankings
-13. League Luck Standings
+**Header** — date · team name + logo · KPI row · Jump-to nav pills
+KPI row: **Record** · **Current Matchup** (W-L-T + win%) · **Roster** (whole-team hot/cold count — hitters *and* pitchers) · **Starts This Week**
+
+**Weekly matchup overview** (top of the email)
+1. **Monday Recap** — *(Mondays only)* last week's final result
+2. **Week at a Glance**
+3. **Category Pulse**
+4. **Opponent This Week** — scouting block for this week's opponent
+5. **Current Matchup** — this week's category rankings grid
+6. **Week N Matchup** — score banner + category-by-category table
+
+**⚑ MY ROSTER**
+7. **Roster Alerts** — *(only if you have injured players)*
+8. **Positional Breakdown**
+9. **My Upcoming Starts**
+10. **My Relief Pitchers**
+11. **Pitcher Hot/Cold**
+12. **Roster Hot/Cold**
+
+**FREE AGENTS**
+13. **FA Pickup — Starting Pitchers**
+14. **FA Pickup — Relief Pitchers**
+15. **FA Pickup — Hitters**
+
+**SEASON**
+16. **My Season Category Rankings**
+17. **League Luck Standings**
+
+**REFERENCE**
+18. **Glossary & Methodology** — collapsible in-digest reference for every score, metric, and data source
+
+On **Sundays** the digest shifts to a next-week lookahead (subtitle, subject, KPI, and Week-at-a-Glance all preview the coming week).
 
 ### KPI Row
 Two-row panel at the top of every digest. Your team logo appears next to the team name in the header.
@@ -173,27 +192,36 @@ Three-bullet summary placed directly above the category rankings grid:
 2. **Rotation coverage** — confirmed start count and days covered; flags thin days (< 2 my starts) by day-of-week so you know where to add from FA.
 3. **Top FA pickup** — best available FA starter by QS%, with their next start day and QS%. If the highest-score and highest-QS pitchers differ, both are mentioned.
 
-### This Week's Category Rankings
+### Current Matchup (category rankings)
 Your roto rank (out of 12 teams) in each of the 12 scoring categories for the **current matchup week only**. Green = top 3, red = bottom half.
 
 Scoring categories: **R · HR · RBI · SB · OPS · B/SO** (batter strikeouts, hitting) + **K · QS · W · ERA · WHIP · SV+H** (pitching)
 
-### Current Week Matchup
-Head-to-head breakdown vs. this week's opponent. Shows each category with your value, their value, and a blue arrow (← you're winning) or orange arrow (→ they're winning). Score banner shows team logos and current overall record.
+### Opponent This Week
+Scouting block for the current opponent, directly below Category Pulse. Shows their start count (and any two-start pitchers), top-3 hottest bats by recent OPS, season roto strengths/weaknesses (top-3 / bottom-3 categories), and wire activity (how active they've been on the FA wire). Only renders when the opponent has starters or hot hitters.
 
 ### Category Pulse
 12 visual cards — 6 hitting, 6 pitching. Each card shows:
-- **Current value** (big, colored green/red/yellow) vs opponent value
+- **Current value** (big, colored green/red/white) vs opponent value
 - **Fill bar** showing relative share of the combined total
 - **⚡** = within striking distance (close enough to flip)
-- **proj X.X vs Y.Y** = projected end-of-week based on each team's season weekly averages
-- **▲FLIP / ▼FLIP** = the projection flips the current W/L result
+- **proj X.X vs Y.Y** = projected end-of-week (K/QS/W use your actual remaining starts × per-start rate; other cats use each team's weekly average)
+- **▲ / ▼ / ◆** flip badge = the projection flips the current result (▲ to a win, ▼ to a loss, ◆ to a tie)
+
+### Week N Matchup
+Score banner (team logos + overall W-L-T, with a projected final record) followed by a category-by-category table. Each row shows your value and the opponent's, colored by who's currently winning. Below each value is the **projected** end-of-week value, **colored by its projected outcome** (green = you're projected to win that category, red = lose) with a **▲/▼/◆ flip arrow** on your side when the projection differs from the current standing — so a category you're currently losing but projected to win shows a red current value and a green projection with a ▲.
+
+### My Relief Pitchers
+Your rostered relievers, showing season SV+H / K / W (from ESPN) plus ERA/WHIP from the best available dataset, with a role-aware **Score** badge. RP scoring is **skill-weighted (punt-saves)** — see [Composite Scores](#composite-scores).
+
+### Pitcher Hot/Cold
+Your rostered pitchers sorted hottest → coldest. Compares **last-15-day ERA** to season ERA (15 days, not 7 — starters pitch too infrequently for a 7-day window to be meaningful). Includes a role-aware **Score** badge.
 
 ### Roster Hot/Cold
-Your rostered hitters sorted hottest → coldest. Compares last-7-day OPS to season OPS.
+Your rostered **hitters** sorted hottest → coldest. Compares last-7-day OPS to season OPS. Includes an **HR%** column (modeled per-game home-run probability, hover for drivers) and a **Score** badge.
 - 🔥 = OPS up +0.050 or more
-- ↑ = OPS up +0.020 to +0.050
-- ↓ = OPS down -0.020 to -0.050
+- ↑ = OPS up +0.015 to +0.050
+- ↓ = OPS down -0.015 to -0.050
 - ❄ = OPS down -0.050 or more
 
 ### Positional Breakdown
@@ -203,9 +231,11 @@ For each position (C, 1B, 2B, 3B, SS, OF, SP, RP): your weakest rostered player 
 Any injured players on your roster. Only shown if there are active alerts. Color: yellow = DTD, red = IL/OUT.
 
 ### FA Pickup — Starting Pitchers
-Top 12 free agent starters with a confirmed upcoming start in the next 7 days. Grouped by date with day headers. Sorted by composite SP score within each day.
+Free agent starters with a confirmed upcoming start, grouped by date with day headers. Sorted by composite SP score within each day. Starts past Sunday get a `NEXT WK` badge; a pitcher with ≥ 2 starts in the matchup week gets a green `2-START` chip.
 
-**Columns:** Pitcher · Pos · Matchup · Opp OPS · QS% · ERA · L7 ERA (hot/cold colored) · K% · Score
+**Columns:** Pitcher · **Proj. Line** · Matchup · Opp OPS · QS% · ERA · **L15 ERA** (hot/cold colored) · K% · Score
+
+**Proj. Line** = projected `IP · ER · K` for one start. ER is adjusted for opponent lineup strength (their OPS) and a home/away park factor; K is adjusted for the opponent lineup's strikeout rate. IP is the pitcher's per-start average in baseball notation (e.g. 5.1 = 5⅓).
 
 **Day headers** show a ⚑ badge with your start count for that day: red = 0 my starts, yellow = 1, blue = 2+.
 
@@ -216,23 +246,29 @@ Top 12 free agent starters with a confirmed upcoming start in the next 7 days. G
 
 **K% highlight** — top 3 K% values across the table are highlighted yellow.
 
-**FA exclusion:** players who appear in today's ESPN transaction log as "FA ADDED" (net of any same-day drops) are excluded even if the ESPN roster API hasn't reflected the pickup yet.
+**FA exclusion:** players who appear in today's ESPN transaction log as "FA ADDED" (net of any same-day drops) are excluded even if the ESPN roster API hasn't reflected the pickup yet. DL-status players are also excluded.
+
+### FA Pickup — Relief Pitchers
+Top available relievers (must have ≥ 1 SV+H on the season), ranked by RP score (SV+H · K · W · ERA · WHIP — skill-weighted, see [Composite Scores](#composite-scores)). A **Cats** column lists up to 3 roto categories the reliever is strong in, with your currently-contested categories highlighted. Includes a **Save-Role Watch** callout flagging emerging FA closers and fading rostered closers.
 
 ### FA Pickup — Hitters
-Top 12 available hitters sorted by composite score. Columns: R · HR · RBI · SB · OPS · **L7 OPS** (last 7 days, colored hot/cold) · Score. These are the exact fantasy scoring categories.
+Top available hitters sorted by composite score. Columns: R · HR · RBI · SB · OPS · **Cats** (up to 3 strong roto categories, your contested ones highlighted) · **HR%** (modeled per-game HR probability) · Score. Includes a hot/cold recent-form indicator.
 
 ### My Upcoming Starts
-Your pitchers with confirmed or projected starts in the next 7 days, grouped by date.
+Your pitchers with confirmed or projected starts, grouped by date.
 
-**Columns:** Pitcher · Matchup · Opp OPS · QS% · ERA · L7 ERA (hot/cold colored) · K% · Score
+**Columns:** Pitcher · **Proj. Line** · Matchup · Opp OPS · QS% · ERA · **L15 ERA** (hot/cold colored) · K% · Score
 
-`(proj.)` = rotation estimate, not yet confirmed by MLB. **K% highlight** — top 3 K% values across the table are highlighted yellow.
+Badges next to the name: `2-START` (green), `QS` (green, QS% ≥ 51%), `5K+` (yellow). `(proj.)` = rotation estimate, not yet confirmed by MLB. **K% highlight** — top 3 K% values across the table are highlighted yellow.
 
-### My Category Rankings
+### My Season Category Rankings
 Season-to-date roto rank across all 12 categories. Same color coding as the weekly version at the top, but for the full season.
 
 ### League Luck Standings
 All 12 teams sorted by record. Shows W-L-T · Win% · Roto rank · Cumulative roto points · Luck delta. **Luck** = roto rank minus record rank. Positive luck means your W-L-T is better than your underlying stats deserve; negative means you're underperforming your true quality.
+
+### Glossary & Methodology
+A collapsible in-digest reference at the very bottom (also linked from the header nav). Five expandable groups — **Scores**, **Pitching metrics**, **Hitting metrics**, **Projections & matchup**, **Data sources** — explaining how every score and metric is computed and where the data comes from. Kept in sync with the code as part of the save sequence.
 
 ---
 
@@ -320,13 +356,13 @@ GitHub Actions automatically uses whatever is on `main`. The next scheduled run 
 | Data | Source | Auth needed? |
 |------|--------|-------------|
 | Pitcher / hitter stats (7d / 15d / 30d / season) | FantasyPros HTML scrape | No |
-| Last-7-day hitter stats | FanGraphs via `pybaseball.batting_stats_range` | No |
-| Last-7-day pitcher stats | FanGraphs via `pybaseball.pitching_stats_range` | No |
-| Roster, FA, transactions, roto scores, team logos | ESPN Fantasy API (`espn_api` library) | Yes — `swid` + `espn_s2` cookies |
-| Probable starters | MLB Stats API | No |
-| Opponent team OPS | MLB Stats API | No |
-| Barrel%, hard-hit% (pitchers) | Baseball Savant via `pybaseball` | No |
-| xwOBA, xBA, xSLG, sprint speed (hitters) | Baseball Savant via `pybaseball` | No |
+| Recent hitter stats (last 7d) | Baseball Reference via `pybaseball.batting_stats_range` | No |
+| Recent pitcher stats (last 15d) | Baseball Reference via `pybaseball.pitching_stats_range` | No |
+| Roster, FA, transactions, roto scores, team logos, **season counting stats** (SV/K/W/IP/GS/GP) | ESPN Fantasy API (`espn_api` library) | Yes — `swid` + `espn_s2` cookies |
+| Probable starters (+6-day rotation projection) | MLB Stats API | No |
+| Opponent team **OPS and K rate** | MLB Stats API | No |
+| Barrel%/hard-hit% allowed, **xERA, xwOBA-against, whiff percentile** (pitchers) | Baseball Savant via `pybaseball` | No |
+| xwOBA, xBA, xSLG, Barrel%, hard-hit%, sprint speed (hitters) | Baseball Savant via `pybaseball` | No |
 
 > **Note:** FanGraphs blocks direct HTTP requests with 403 errors. Always use `pybaseball` — it handles the necessary headers automatically.
 
@@ -342,7 +378,7 @@ Projected starts show `(proj.)` in the digest. If the batch call returns nothing
 
 ## Composite Scores
 
-Each player gets a 0–100 score used to rank FA pickups. Shown as a colored badge.
+Each player gets a **0–100 score**, calibrated so the median qualified player ≈ 50 and a top-10% player ≈ 80 (benchmarks are derived from the live data each run). A player shows the **same** score in every section. Shown as a colored badge:
 
 | Badge color | Score range |
 |-------------|------------|
@@ -351,13 +387,17 @@ Each player gets a 0–100 score used to rank FA pickups. Shown as a colored bad
 | Yellow | ≥ 32 — fringe |
 | Red | < 32 — avoid |
 
-**pitcherScore:** K rate (K% → K/IP fallback) + ERA + WHIP + role bonus (SP vs RP). IL/OUT = −22, DTD = −10.
+Scores are **not** dampened for injuries (injury status is shown separately as a tag; DL players are excluded from FA lists). Three canonical role scores:
 
-**hitterScore:** wRC+ or OPS + HR volume + ISO + RBI + speed (sprint speed preferred, falls back to SB) + xwOBA/AVG + HR probability model. IL/OUT = −22, DTD = −10.
+**Starting-pitcher score (`pitcher_score` / `_score_p`):** K% (blended 60/40 with Baseball Savant whiff percentile) + run prevention (ERA blended 55/45 with Savant xERA) + WHIP + contact-quality allowed (barrel%/xwOBA-against) + a start-volume role bonus. Small samples damped toward the mean. Displayed blended 60% season / 40% recent form.
 
-**spFAScore:** pitcherScore + start bonus (8–22 pts) scaled by QS probability. Requires GS ≥ 1 or SP position eligibility.
+**Relief-pitcher score (`rp_score`):** Skill-weighted **punt-saves** build — K, ERA (blended with xERA) and WHIP carry most of the weight; **SV+H is deliberately de-emphasized (~15%)** since it's the most volatile category and one we're willing to sacrifice. A dominant setup man can outrank a mediocre closer. Counting stats prefer ESPN season totals.
+
+**Hitter score (`hitter_score`):** wRC+ (or OPS) + HR volume + ISO + RBI + speed (sprint speed preferred, falls back to SB) + xwOBA/AVG + HR-probability model. Scaled by an **opportunity multiplier** (at-bats vs a full-time benchmark) so a part-time bat can't score like a regular. Displayed blended 60% season / 40% recent form.
 
 **QS Probability:** Formula-based estimate (no MLB API support). Inputs: IP/G, ERA, WHIP, Brl%, K%, opponent OPS. Baseline = 38% (league average). Key driver is IP/G — uses total games (not just starts) so relief appearances bleed down the innings-depth signal for mixed-role pitchers. Calibration: ace (~75%), league avg (~38%), short reliever making a spot start (~15%). Shown as a color-coded percentage in FA SP and My Upcoming Starts tables: green ≥ 60%, white ≥ 40%, muted < 40%.
+
+> When the raw component mix of a score changes, rerun `python recalibrate_scores.py` and paste the new p50→50 / p90→80 constants back into the score function.
 
 ---
 
@@ -366,7 +406,7 @@ Each player gets a 0–100 score used to rank FA pickups. Shown as a colored bad
 `data/snapshot.json` is rebuilt on every run. It's the only file shared between `fetch_data.py` and `send_digest.py`.
 
 **pitchers** (list of dicts, one per player per time range):
-`PlayerName, FantasyTeam, Position, Dataset` (7/15/30/2026), `IP, G, GS, K, ERA, WHIP, SV, HLD, SVHD, K/IP, Kpct_P, IP_per_G` (IP÷G, clipped 7.5 — honest for mixed starters/relievers), `IP_per_GS` (IP÷GS, clipped 7.5), `PSP_Date` (1999-01-01 = no start), `PSP_HomeVAway, PSP_Projected, Team_OPS_Value, BarrelPctAllowed, HardHitPctAllowed`
+`PlayerName, FantasyTeam, Position, Dataset` (7/15/30/2026), `IP, G, GS, K, ERA, WHIP, SV, HLD, SVHD, K/IP, Kpct_P, IP_per_G` (IP÷G — honest for mixed starters/relievers), `PSP_Date` (1999-01-01 = no start), `PSP_HomeVAway, PSP_Projected`, `PSP_Dates` + `PSP_HomeVAways` (lists of ALL upcoming starts, for two-start detection), `Team_OPS_Value, Team_K_Value` (opponent OPS & K-per-PA), advanced: `xERA, xwOBA_against, WhiffPctile, BarrelPctAllowed, HardHitPctAllowed, AvgEVAllowed`, ESPN season counts: `ESPN_SV, ESPN_K, ESPN_W, ESPN_IP, ESPN_GS, ESPN_GP, ESPN_SVHD`
 
 **hitters** (list of dicts, one per player per time range):
 `PlayerName, FantasyTeam, Position, Dataset, HR, RBI, R, SB, AVG, OPS, wRCplus, xwOBA, xBA, xSLG, SprintSpeed, ISO, Barrel_Pct, HardHit_Pct, HR_Probability`
@@ -384,7 +424,7 @@ Each category: `cat, my_val, opp_val, result` (W/L/T), `lower_better`
 **recent_hitting** (list of dicts — last 7 days, all MLB hitters):
 `PlayerName, G, PA, AB, R, HR, RBI, SB, OBP, SLG, OPS`
 
-**recent_pitching** (list of dicts — last 7 days, all MLB pitchers):
+**recent_pitching** (list of dicts — last 15 days, all MLB pitchers):
 `PlayerName, G, GS, IP, ERA, WHIP, BB`
 
 **weekly_results** (dict — `{"1": {"Team Name": "W"/"L"/"T", ...}, ...}`):
