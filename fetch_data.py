@@ -134,8 +134,10 @@ def merge_on_name(fp, right, cols, how="left"):
     r2 = r2.drop_duplicates("_k").set_index("_k")
 
     # fp side: keys that are ambiguous among distinct fp players (never rescue those).
-    fkeys = fp["PlayerName"].map(_name_key)
-    ambig = set(pd.Series(fp["PlayerName"].values, index=fkeys.values)
+    # Build fkeys from `merged` (not `fp`) so its index matches the `missing` mask below —
+    # fp.merge resets to a clean RangeIndex, so a non-default fp index would misalign.
+    fkeys = merged["PlayerName"].map(_name_key)
+    ambig = set(pd.Series(fp["PlayerName"].values, index=fp["PlayerName"].map(_name_key).values)
                 .groupby(level=0).nunique().loc[lambda s: s > 1].index)
 
     for vc in val_cols:
@@ -591,11 +593,22 @@ def get_opponent_ops() -> pd.DataFrame:
             data = requests.get(url, timeout=15).json()
             rows = []
             for split in data.get("stats", [{}])[0].get("splits", []):
-                ops = split["stat"].get("ops")
+                st  = split["stat"]
+                ops = st.get("ops")
                 if ops is not None:
+                    # Team strikeout rate (K per plate appearance) from the SAME call, so
+                    # the proj-line K can be opponent-adjusted (a whiff-prone lineup inflates
+                    # a starter's Ks; a contact lineup suppresses them).
+                    try:
+                        so = float(st.get("strikeOuts") or 0)
+                        pa = float(st.get("plateAppearances") or 0)
+                        k_val = round(so / pa, 4) if pa > 0 else -1.0
+                    except (TypeError, ValueError):
+                        k_val = -1.0
                     rows.append({
                         "OpponentTeam":  split["team"]["name"],
                         "Team_OPS_Value": float(ops),
+                        "Team_K_Value":   k_val,
                         "Dataset_OPS":   dataset_val,
                     })
             if rows:

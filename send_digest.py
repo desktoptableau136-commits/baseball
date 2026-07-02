@@ -324,10 +324,13 @@ def compute_league_averages(hitters, pitchers):
     if ops:
         _LG["ops"] = round(ops, 4)
 
-    # Opponent strength faced by pitchers (per-start opponent team OPS).
+    # Opponent strength faced by pitchers (per-start opponent team OPS + team K rate).
     team_ops = _mean([_n(r.get("Team_OPS_Value")) for r in pitchers])
     if team_ops:
         _LG["team_ops"] = round(team_ops, 4)
+    team_k = _mean([_n(r.get("Team_K_Value")) for r in pitchers])
+    if team_k:
+        _LG["team_k"] = round(team_k, 4)
 
     # Starter league averages for qs_probability anchors — qualified SPs only.
     ip_min = _pit_viable_min("SP", "IP")
@@ -970,9 +973,15 @@ def _proj_line_html(r):
     opp_factor  = min(1.20, max(0.80, opp_ops / (_LG.get("team_ops") or _LEAGUE_AVG_OPS))) if opp_ops > 0 else 1.0
     park_factor = 0.97 if hva.startswith("vs ") else (1.03 if hva.startswith("@ ") else 1.0)
 
+    # Adjust K for the opponent lineup's strikeout rate: a whiff-prone offense inflates a
+    # starter's Ks, a contact-heavy one suppresses them. Clamped tighter than ER (±15%)
+    # since team K% varies less than team OPS. Falls back to 1.0 when opp K% is missing.
+    opp_k     = _n(r.get("Team_K_Value"))
+    k_factor  = min(1.15, max(0.85, opp_k / (_LG.get("team_k") or 0.22))) if opp_k > 0 else 1.0
+
     raw_er = era * ip_g / 9 if era > 0 else 0
     er = round(raw_er * opp_factor * park_factor)
-    k  = round(kip * ip_g) if kip > 0 else 0
+    k  = round(kip * ip_g * k_factor) if kip > 0 else 0
     return f'<span style="color:{MUTED};font-size:10px;white-space:nowrap;">{_fmt_ip(ip_g)}&nbsp;IP&thinsp;·&thinsp;{er}&nbsp;ER&thinsp;·&thinsp;{k}K</span>'
 
 
