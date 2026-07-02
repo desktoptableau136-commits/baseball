@@ -4012,7 +4012,7 @@ def build_email(snap, override_team=None):
        reveals the full-width row below the player (!important beats the inline style).
        Renders in the browser-opened attachment; Gmail strips <style> so the rows stay
        hidden there (the score badge itself always shows). */
-    tr.scorebd-row:target {{ display:table-row !important; }}
+    tr.scorebd-row:target {{ display:table-row !important; scroll-margin-top:40vh; }}
     a.bdlink {{ outline:none; }}
     @media only screen and (max-width:600px) {{
       .ew {{ width:100% !important; padding:8px !important; }}

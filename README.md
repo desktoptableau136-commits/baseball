@@ -389,7 +389,7 @@ Each player gets a **0–100 score**, calibrated so the median qualified player 
 
 Scores are **not** dampened for injuries (injury status is shown separately as a tag; DL players are excluded from FA lists).
 
-> **Tap any Score badge for its breakdown.** Every Score badge (including the Positional Breakdown badges) expands on tap into a **full-width row below the player** that narrates, in plain English, the 2–3 drivers behind the number — e.g. *"Carried by swing-and-miss (24% K) and limits baserunners (1.23 WHIP); no glaring holes. Recent form 58 (cold) → shown blends 65% season / 35% recent."* — so you can see *why* two similar-looking players score differently. A ▾ caret marks a tappable badge; tap the ✕ (or another badge) to close. Works when you open the HTML attachment on phone/tablet. (Pure CSS `:target`, no JavaScript — email-safe.)
+> **Tap any Score badge for its breakdown.** Every Score badge (including the Positional Breakdown badges) expands on tap into a **full-width row below the player** that narrates, in plain English, the 2–3 drivers behind the number — e.g. *"Carried by swing-and-miss (24% K) and limits baserunners (1.23 WHIP); no glaring holes. Recent form 58 (cold) → shown blends 65% season / 35% recent."* — so you can see *why* two similar-looking players score differently. A ▾ caret marks a tappable badge; tap the ✕ (or another badge) to close. The tapped player row stays in view (the breakdown opens in the upper-middle of the screen rather than snapping to the top). Works when you open the HTML attachment on phone/tablet. (Pure CSS `:target`, no JavaScript — email-safe.)
 
 Three canonical role scores:
 
