@@ -1572,7 +1572,7 @@ def build_prev_matchup_recap(prev_matchup, team_logos=None):
     VAL_COLOR = "#94a3b8"
 
     # Header row: cat label colored + solid bottom border by result
-    header_cells = f'<th style="{th}text-align:left;min-width:72px;"></th>'
+    header_cells = f'<th style="{th}text-align:left;min-width:36px;"></th>'
     for i, cat in enumerate(cat_order):
         lbl = _CAT_DISPLAY.get(cat, cat)
         c   = cat_map.get(cat, {})
