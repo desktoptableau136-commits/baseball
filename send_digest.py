@@ -484,15 +484,18 @@ def rp_score(r, _raw=False):
     xera     = _n(r.get("xERA"))
     brl_ag   = _n(r.get("BarrelPctAllowed"))
     whiff_pt = _n(r.get("WhiffPctile"))     # league whiff PERCENTILE 0-100
-    # Counting stats (role/usage) stay dominant: SVHD 40 · K 22 · W 13 · IP/G 10
-    s  = min(40, svhd / 20 * 40)
-    s += min(22, k    / 80 * 22)
-    s += min(13, w    / 10 * 13)
-    s += min(10, ip_g / 1.2 * 10)   # opportunity: IP per appearance, max at 1.2 IP/G
-    # Run prevention (9): ERA blended 50/50 with xERA (deserved).
+    # SVHD is deliberately DE-EMPHASIZED (punt-saves weighting): saves are the most
+    # volatile RP category and one we're willing to sacrifice, so it's ~15% of the raw
+    # score, below an equal 5-cat share. Skill/ratio cats carry the weight instead:
+    # SVHD 15 · K 26 · W 15 · IP/G 8, then ERA 16 · WHIP 12 · contact 8.
+    s  = min(15, svhd / 20 * 15)
+    s += min(26, k    / 80 * 26)
+    s += min(15, w    / 10 * 15)
+    s += min(8,  ip_g / 1.2 * 8)    # opportunity: IP per appearance, max at 1.2 IP/G
+    # Run prevention (16): ERA blended 50/50 with xERA (deserved).
     era_base = 0.5 * era + 0.5 * xera if xera > 0 else era
-    s += max(0, min(9, (5.0 - era_base) / 3.0 * 9))
-    s += max(0, min(6, (2.0 - whip) / 1.0 * 6))
+    s += max(0, min(16, (5.0 - era_base) / 3.0 * 16))
+    s += max(0, min(12, (2.0 - whip) / 1.0 * 12))
     # Contact quality allowed (0-8): barrel%-allowed (lower better) + whiff% percentile.
     if brl_ag > 0:
         s += max(0, min(4, (10.0 - brl_ag) / 6.0 * 4))
@@ -501,7 +504,7 @@ def rp_score(r, _raw=False):
     if _raw:
         return s
     # Calibrate to shared 0-100 scale (p50→50, p90→80) — see recalibrate_scores.py
-    s = s * 0.9336 + 12.847
+    s = s * 1.9619 - 43.0286
     return max(0, min(100, round(s)))
 
 
@@ -1374,11 +1377,34 @@ def build_matchup_section(matchup, logos=None, my_team=MY_TEAM,
 
         p = proj_map.get(cat)
 
-        def _proj_span(val, ref_color):
+        # Projected outcome for this category (my perspective). This colors the proj
+        # values by the PROJECTED status — not the current one — so a category I'm
+        # currently losing but projected to win shows a red current value with a green
+        # projection. Also drives the flip arrow.
+        proj_res = None
+        if p is not None:
+            pm_r, po_r = round(p["pm"], dec), round(p["po"], dec)
+            lower = cat in _LOWER_BETTER
+            proj_res = "T" if pm_r == po_r else ("W" if (pm_r < po_r) == lower else "L")
+        my_proj_c  = GREEN if proj_res == "W" else (RED   if proj_res == "L" else MUTED)
+        opp_proj_c = RED   if proj_res == "W" else (GREEN if proj_res == "L" else MUTED)
+
+        # Flip arrow (▲ to a win, ▼ to a loss, ◆ to a tie) when the projected result
+        # differs from the current one. Shown on my side's projection.
+        flip_arrow = ""
+        if proj_res is not None and proj_res != res:
+            if proj_res == "W":
+                flip_arrow = f'&nbsp;<span style="color:{GREEN};">&#9650;</span>'
+            elif proj_res == "L":
+                flip_arrow = f'&nbsp;<span style="color:{RED};">&#9660;</span>'
+            else:
+                flip_arrow = f'&nbsp;<span style="color:{TEXT};">&#9670;</span>'
+
+        def _proj_span(val, color, arrow=""):
             if val is None:
                 return ""
             return (f'<div style="font-size:9px;font-weight:400;color:{MUTED};margin-top:2px;">'
-                    f'proj <span style="color:{ref_color}99;">{val:.{dec}f}</span></div>')
+                    f'proj <span style="color:{color};font-weight:600;">{val:.{dec}f}</span>{arrow}</div>')
 
         cat_label = f'<span style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:{MUTED};">{label}</span>'
         arrow_l = f'<span style="color:{ACCENT};">&#9664;</span>' if res == "W" else ''
@@ -1396,10 +1422,10 @@ def build_matchup_section(matchup, logos=None, my_team=MY_TEAM,
         rows += (
             f'<tr style="{bg}">'
             f'<td style="{TDC}font-weight:700;color:{my_color};font-size:14px;">'
-            f'{my_v:.{dec}f}{_proj_span(p["pm"] if p else None, my_color)}</td>'
+            f'{my_v:.{dec}f}{_proj_span(p["pm"] if p else None, my_proj_c, flip_arrow)}</td>'
             f'<td style="{TDC}color:{mid_color};">{mid}</td>'
             f'<td style="{TDC}font-weight:700;color:{opp_color};font-size:14px;">'
-            f'{opp_v:.{dec}f}{_proj_span(p["po"] if p else None, opp_color)}</td>'
+            f'{opp_v:.{dec}f}{_proj_span(p["po"] if p else None, opp_proj_c)}</td>'
             f'</tr>'
         )
 
@@ -3525,7 +3551,7 @@ def build_email(snap, override_team=None):
             _lines.append(
                 f'<div style="margin:3px 0;"><span style="color:{MUTED};">Pitching:</span> '
                 f'<span style="color:{TEXT};font-weight:600;">{_opp_intel["n_starts"]} starts</span> '
-                f'from {_opp_intel["n_starters"]} SP this week{_two_html}</div>'
+                f'<span style="color:{MUTED};">from {_opp_intel["n_starters"]} SP this week</span>{_two_html}</div>'
             )
         if _opp_intel["hot_hitters"]:
             _hh = " · ".join(
