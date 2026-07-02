@@ -127,8 +127,14 @@ def _is_sp(r):
     return False
 
 
-def _blend(r, score_fn, idx_recent, w=0.4):
-    """40/60 blend of best-available recent stats and season score."""
+_BLEND_W = 0.35   # recent-form weight in the displayed blended score (season weight = 1 - _BLEND_W)
+
+def _blend(r, score_fn, idx_recent, w=None):
+    """Blend of best-available recent stats and season score. Default weight _BLEND_W
+    (35% recent / 65% season): the composite leans on the stable season signal, since
+    hot/cold streaks are already surfaced explicitly in the Hot/Cold sections."""
+    if w is None:
+        w = _BLEND_W
     s_year = score_fn(r)
     r_rec = idx_recent.get(r.get("PlayerName", ""))
     if not r_rec:
@@ -195,7 +201,7 @@ def _pit_viable_min(role, stat):
     return (b.get("IP") or 0) * _IP_VIABLE_FRAC or _PIT_FALLBACK["IP_VIABLE"]
 
 
-def pitcher_score(r, _raw=False):
+def pitcher_score(r, _raw=False, _parts=False):
     kip   = _n(r.get("K/IP") or r.get("KIP"))
     era   = _n(r.get("ERA"))
     whip  = _n(r.get("WHIP"))
@@ -212,8 +218,9 @@ def pitcher_score(r, _raw=False):
     is_sp = _is_sp(r)
 
     if not kip and not era and not kpct:
-        return 0
+        return ({}, 1.0) if _parts else 0
 
+    c = {}
     # ── Strikeouts (28): results-based K% (or K/IP) blended 60/40 with the
     #    predictive whiff% percentile, which leads K% start-to-start.
     if kpct > 0:
@@ -222,36 +229,41 @@ def pitcher_score(r, _raw=False):
         k_comp = min(28, kip / 1.5 * 28)
     if whiff_pt > 0:
         k_comp = 0.6 * k_comp + 0.4 * min(28, whiff_pt / 100 * 28)
-    s = k_comp
+    c["K"] = k_comp
 
     # ── Run prevention (28): actual ERA (a league category) blended 55/45 with
     #    xERA (deserved, strips defense/sequencing luck).
     era_base = 0.55 * era + 0.45 * xera if (era > 0 and xera > 0) else era
-    s += max(0, min(28, (6.0 - era_base) / 4.0 * 28))
+    c["RunPrev"] = max(0, min(28, (6.0 - era_base) / 4.0 * 28))
 
     # ── WHIP (20): results only — no clean predictive twin in the feed.
-    s += max(0, min(20, (2.0 - whip) / 1.1 * 20))
+    c["WHIP"] = max(0, min(20, (2.0 - whip) / 1.1 * 20))
 
     # ── Contact quality allowed (0-12): barrel%-allowed + xwOBA-against, both
     #    lower-is-better. Rewards suppressing hard contact regardless of results.
+    contact = 0.0
     if brl_ag > 0:
-        s += max(0, min(5, (10.0 - brl_ag) / 6.0 * 5))
+        contact += max(0, min(5, (10.0 - brl_ag) / 6.0 * 5))
     if xwoba_ag > 0:
-        s += max(0, min(7, (0.360 - xwoba_ag) / 0.110 * 7))
+        contact += max(0, min(7, (0.360 - xwoba_ag) / 0.110 * 7))
+    c["Contact"] = contact
 
     if is_sp:
         # SP role: reward starts volume; SVHD is irrelevant
-        s += 12 if gs > 10 else 9
+        c["Role"] = 12 if gs > 10 else 9
     else:
         # RP role: SVHD first, then W and IP/G as opportunity signals
-        s += 5 + min(7, svhd / 15 * 7)
-        s += min(6, w / 10 * 6)       # wins
-        s += min(5, ip_g / 1.2 * 5)   # opportunity: IP per appearance
+        c["Role"] = (5 + min(7, svhd / 15 * 7)
+                     + min(6, w / 10 * 6)       # wins
+                     + min(5, ip_g / 1.2 * 5))  # opportunity: IP per appearance
 
     # Small-sample penalty: rate stats are unreliable below a role/window-relative innings
     # floor (derived from the leader, so it scales with the season — not a fixed 20 IP).
-    s *= _ip_reliability_mult(r)
+    mult = _ip_reliability_mult(r)
+    if _parts:
+        return c, mult
 
+    s = sum(c.values()) * mult
     if _raw:
         return s
     # Calibrate to shared 0-100 scale (p50→50, p90→80) — see recalibrate_scores.py
@@ -344,7 +356,10 @@ def compute_league_averages(hitters, pitchers):
     return _LG
 
 
-def hitter_score(r):
+def hitter_score(r, _parts=False):
+    """0-100 hitter score. `_parts=True` returns (components_dict, opportunity_mult)
+    instead — the raw pre-multiplier component contributions and the playing-time
+    multiplier — so the score-breakdown tooltip stays in sync with the real math."""
     ops    = _n(r.get("OPS"))
     hr     = _n(r.get("HR"))
     rbi    = _n(r.get("RBI"))
@@ -357,38 +372,35 @@ def hitter_score(r):
     iso    = _n(r.get("ISO"))
 
     if not ops and not hr and not wrc:
-        return 0
+        return ({}, 1.0) if _parts else 0
 
-    s = 0
+    c = {}
     if wrc > 0:
-        s += max(0, min(30, (wrc - 60) / 80 * 30))
+        c["Prod"] = max(0, min(30, (wrc - 60) / 80 * 30))
     else:
-        s += max(0, min(30, (ops - 0.55) / 0.50 * 30))
-
-    s += min(16, hr / 35 * 16)
-    if iso > 0:
-        s += min(6, iso / 0.25 * 6)
-
-    s += min(10, rbi / 110 * 10)
-
+        c["Prod"] = max(0, min(30, (ops - 0.55) / 0.50 * 30))
+    c["HR"]  = min(16, hr / 35 * 16)
+    c["ISO"] = min(6, iso / 0.25 * 6) if iso > 0 else 0.0
+    c["RBI"] = min(10, rbi / 110 * 10)
     if sprint > 0:
-        s += max(0, min(10, (sprint - 24) / 6 * 10))
+        c["Speed"] = max(0, min(10, (sprint - 24) / 6 * 10))
     else:
-        s += min(10, sb / 40 * 10)
-
+        c["Speed"] = min(10, sb / 40 * 10)
     if xwoba > 0:
-        s += max(0, min(10, (xwoba - 0.270) / 0.120 * 10))
+        c["xwOBA"] = max(0, min(10, (xwoba - 0.270) / 0.120 * 10))
     else:
-        s += max(0, min(10, (avg - 0.180) / 0.160 * 10))
-
-    s += min(8, hrp * 40)
+        c["xwOBA"] = max(0, min(10, (avg - 0.180) / 0.160 * 10))
+    c["HR%"] = min(8, hrp * 40)
 
     # Opportunity adjustment: the rate components above reward a part-time masher as
     # much as a regular, but over a week a bench bat who gets ~1 AB every few games
     # can't accumulate counting stats. Scale by at-bats vs a full-time benchmark that
     # is derived from the live data (compute_ab_benchmarks), so it tracks the season.
-    s *= _ab_opportunity_mult(r)
+    mult = _ab_opportunity_mult(r)
+    if _parts:
+        return c, mult
 
+    s = sum(c.values()) * mult
     # Calibrate to shared 0-100 scale (p50→50, p90→80) derived from observed distribution
     s = s * 1.587 - 5.2
     return max(0, min(100, round(s)))
@@ -477,7 +489,7 @@ def fa_starters(pitchers, claimed=None, week_end=None, idx_recent=None):
     return sorted(fa, key=lambda r: -r["_score"])[:12]
 
 
-def rp_score(r, _raw=False):
+def rp_score(r, _raw=False, _parts=False):
     svhd = _n(r.get("ESPN_SVHD")) or _n(r.get("SVHD"))   # prefer season total from ESPN
     k    = _n(r.get("ESPN_K"))    or _n(r.get("K"))       # prefer season count from ESPN
     w    = _n(r.get("ESPN_W"))    or _n(r.get("W"))
@@ -491,19 +503,26 @@ def rp_score(r, _raw=False):
     # volatile RP category and one we're willing to sacrifice, so it's ~15% of the raw
     # score, below an equal 5-cat share. Skill/ratio cats carry the weight instead:
     # SVHD 15 · K 26 · W 15 · IP/G 8, then ERA 16 · WHIP 12 · contact 8.
-    s  = min(15, svhd / 20 * 15)
-    s += min(26, k    / 80 * 26)
-    s += min(15, w    / 10 * 15)
-    s += min(8,  ip_g / 1.2 * 8)    # opportunity: IP per appearance, max at 1.2 IP/G
+    c = {}
+    c["SVHD"] = min(15, svhd / 20 * 15)
+    c["K"]    = min(26, k    / 80 * 26)
+    c["W"]    = min(15, w    / 10 * 15)
+    c["IP/G"] = min(8,  ip_g / 1.2 * 8)    # opportunity: IP per appearance, max at 1.2 IP/G
     # Run prevention (16): ERA blended 50/50 with xERA (deserved).
     era_base = 0.5 * era + 0.5 * xera if xera > 0 else era
-    s += max(0, min(16, (5.0 - era_base) / 3.0 * 16))
-    s += max(0, min(12, (2.0 - whip) / 1.0 * 12))
+    c["RunPrev"] = max(0, min(16, (5.0 - era_base) / 3.0 * 16))
+    c["WHIP"] = max(0, min(12, (2.0 - whip) / 1.0 * 12))
     # Contact quality allowed (0-8): barrel%-allowed (lower better) + whiff% percentile.
+    contact = 0.0
     if brl_ag > 0:
-        s += max(0, min(4, (10.0 - brl_ag) / 6.0 * 4))
+        contact += max(0, min(4, (10.0 - brl_ag) / 6.0 * 4))
     if whiff_pt > 0:
-        s += min(4, whiff_pt / 100 * 4)
+        contact += min(4, whiff_pt / 100 * 4)
+    c["Contact"] = contact
+    if _parts:
+        return c, 1.0
+
+    s = sum(c.values())
     if _raw:
         return s
     # Calibrate to shared 0-100 scale (p50→50, p90→80) — see recalibrate_scores.py
@@ -935,6 +954,82 @@ def badge(score):
     elif s >= 32: bg, fg = "#d97706", "#fff"
     else:          bg, fg = "#dc2626", "#fff"
     return f'<span style="background:{bg};color:{fg};padding:2px 9px;border-radius:12px;font-size:11px;font-weight:800;">{s}</span>'
+
+
+def _breakdown_rows(comps, maxes):
+    """Render a component dict as 'Label N/max · Label N/max …' with the value emphasized."""
+    parts = []
+    for k, val in comps.items():
+        mx = maxes.get(k, "")
+        parts.append(f'{k}&nbsp;<b style="color:{TEXT};">{round(val)}</b>/{mx}')
+    return " · ".join(parts)
+
+
+def _hitter_score_breakdown(r, idx_recent=None):
+    """Plain-language breakdown of a hitter's Score, as HTML, for the tap-to-expand panel."""
+    comps, mult = hitter_score(r, _parts=True)
+    if not comps:
+        return ""
+    maxes = {"Prod": 30, "HR": 16, "ISO": 6, "RBI": 10, "Speed": 10, "xwOBA": 10, "HR%": 8}
+    season = hitter_score(r)
+    html = (f'<b style="color:{TEXT};">Season {season}</b> '
+            f'<span style="color:{MUTED};">(raw components, /max)</span><br>'
+            f'{_breakdown_rows(comps, maxes)}')
+    if mult < 0.995:
+        html += f'<br>× {round(mult * 100)}% playing-time (at-bats vs a full-time regular)'
+    if idx_recent:
+        rec = idx_recent.get(r.get("PlayerName", ""))
+        if rec:
+            rs = hitter_score(rec)
+            if rs > 0:
+                html += (f'<br>Recent form {rs} → shown = '
+                         f'{round((1 - _BLEND_W) * 100)}% season + {round(_BLEND_W * 100)}% recent')
+    return html
+
+
+def _pitcher_score_breakdown(r, idx_recent=None):
+    """Plain-language breakdown of a pitcher's Score, as HTML, for the tap-to-expand panel.
+    Role-aware: SP → pitcher_score components (blended with recent form); RP → rp_score."""
+    if _is_sp(r):
+        comps, mult = pitcher_score(r, _parts=True)
+        maxes = {"K": 28, "RunPrev": 28, "WHIP": 20, "Contact": 12, "Role": 12}
+        season, role = pitcher_score(r), "SP"
+    else:
+        comps, mult = rp_score(r, _parts=True)
+        maxes = {"SVHD": 15, "K": 26, "W": 15, "IP/G": 8, "RunPrev": 16, "WHIP": 12, "Contact": 8}
+        season, role = rp_score(r), "RP"
+    if not comps:
+        return ""
+    html = (f'<b style="color:{TEXT};">{role} {season}</b> '
+            f'<span style="color:{MUTED};">(raw components, /max)</span><br>'
+            f'{_breakdown_rows(comps, maxes)}')
+    if mult < 0.995:
+        html += f'<br>× {round(mult * 100)}% sample (innings-reliability floor)'
+    if role == "SP" and idx_recent:
+        rec = idx_recent.get(r.get("PlayerName", ""))
+        if rec:
+            rs = pitcher_score(rec)
+            if rs > 0:
+                html += (f'<br>Recent form {rs} → shown = '
+                         f'{round((1 - _BLEND_W) * 100)}% season + {round(_BLEND_W * 100)}% recent')
+    return html
+
+
+def score_reveal(score, breakdown_html):
+    """Tap-to-expand Score badge. The <summary> shows the badge; tapping reveals the
+    component breakdown. Native <details> works on mobile in the browser-rendered
+    attachment; where a client strips it, the badge (and text) simply show inline.
+    Falls back to a plain badge when there is no breakdown."""
+    if not breakdown_html:
+        return badge(score)
+    return (
+        f'<details class="scorebd" style="display:inline-block;text-align:left;">'
+        f'<summary style="list-style:none;cursor:pointer;text-align:center;">{badge(score)}</summary>'
+        f'<div style="margin-top:6px;font-size:10px;line-height:1.6;color:{MUTED};'
+        f'background:{SURFACE2};border:1px solid {BORDER};border-radius:6px;'
+        f'padding:7px 9px;max-width:230px;white-space:normal;font-weight:400;">{breakdown_html}</div>'
+        f'</details>'
+    )
 
 
 def v(val, dec=2):
@@ -1539,7 +1634,7 @@ def build_hot_cold_section(hitters, recent_hitting, my_team, best_recent_h=None)
             f'<td style="{TDC}">{recent_str}</td>'
             f'<td style="{TDC}">{delta_html} {arrow}</td>'
             f'<td style="{TDC}">{_hrp_cell(r["srow"])}</td>'
-            f'<td style="{TDC}">{badge(r["score"])}</td>'
+            f'<td style="{TDC}">{score_reveal(r["score"], _hitter_score_breakdown(r["srow"], best_recent_h))}</td>'
             f'</tr>'
         )
 
@@ -1603,6 +1698,7 @@ def build_pitcher_hot_cold_section(pitchers, my_team, rec_p=None, best_recent_p=
             "recent_ip":  recent_ip,
             "delta":      delta,
             "inj":        inj_tag(r),
+            "srow":       r,   # season row for the score-breakdown panel
             "score":      _score_p(r, best_recent_p),
         })
 
@@ -1647,7 +1743,7 @@ def build_pitcher_hot_cold_section(pitchers, my_team, rec_p=None, best_recent_p=
             f'<td style="{TDC}">{r["season_era"]:.2f}</td>'
             f'<td style="{TDC}">{recent_str}</td>'
             f'<td style="{TDC}">{delta_html} {arrow}</td>'
-            f'<td style="{TDC}">{badge(r["score"])}</td>'
+            f'<td style="{TDC}">{score_reveal(r["score"], _pitcher_score_breakdown(r["srow"], best_recent_p))}</td>'
             f'</tr>'
         )
 
@@ -2573,10 +2669,15 @@ def build_glossary_section():
                "Every player shows the <b>same</b> 0–100 score in every section, calibrated so the "
                "median qualified player ≈ 50 and a top-10% player ≈ 80. Benchmarks are derived from "
                "the live data each run, so “full-time” scales as the season grows."),
+        _entry("Tap a Score badge for the breakdown",
+               "Every Score badge expands on tap to show exactly which components produced it "
+               "(each shown as points earned / max) plus the season-vs-recent blend — so you can see "
+               "<i>why</i> two similar-looking players score differently. Works in the browser-opened "
+               "attachment; the ▸ caret marks a tappable badge."),
         _entry("Starting-pitcher score",
                "K% (blended with Baseball Savant whiff percentile) + run prevention (ERA blended with "
                "Savant xERA) + WHIP + contact-quality allowed (barrel%/xwOBA-against) + a start-volume "
-               "role bonus. Small samples are damped toward the mean. Blended 60% season / 40% recent form."),
+               "role bonus. Small samples are damped toward the mean. Blended 65% season / 35% recent form."),
         _entry("Relief-pitcher score",
                "Skill-weighted, punt-saves build: K, ERA (blended with xERA) and WHIP carry most of the "
                "weight; <b>SVHD (saves+holds) is deliberately de-emphasized (~15%)</b> since it's the most "
@@ -2585,7 +2686,7 @@ def build_glossary_section():
         _entry("Hitter score",
                "Prefers wRC+ over OPS, plus xwOBA, sprint speed, Barrel%, ISO and modeled HR probability. "
                "Scaled by an <b>opportunity multiplier</b> (at-bats vs a full-time benchmark) so a part-time "
-               "bat can't score like a regular over a week. Blended 60% season / 40% recent form."),
+               "bat can't score like a regular over a week. Blended 65% season / 35% recent form."),
         _entry("QS% (quality-start probability)",
                "Modeled chance a starter throws a quality start (6+ IP, ≤3 ER). League-average ≈ 38%, "
                "an ace ≈ 75%. Driven by innings-per-start, K%, ERA/WHIP and contact allowed."),
@@ -3081,7 +3182,7 @@ def build_email(snap, override_team=None):
                     f'<td style="{TDC}">{v(r.get("ERA"), 2)}</td>'
                     + hot_cold_cell(r.get("ERA"), p15r.get("ERA"), lower_better=True, dec=2, no_data_title="No 15-day stats — player may not have pitched recently") +
                     f'<td style="{TDC}">{kpct_s_cell}</td>'
-                    f'<td style="{TDC}">{badge(_score_p(r, best_recent_p))}</td>'
+                    f'<td style="{TDC}">{score_reveal(_score_p(r, best_recent_p), _pitcher_score_breakdown(r, best_recent_p))}</td>'
                     f'</tr>'
                 )
 
@@ -3160,7 +3261,7 @@ def build_email(snap, override_team=None):
                 f'<td style="{TDC}">{v(w, 0)}</td>'
                 f'<td style="{TDC}">{f"{era:.2f}" if era > 0 else "—"}</td>'
                 f'<td style="{TDC}">{f"{whip:.2f}" if whip > 0 else "—"}</td>'
-                f'<td style="{TDC}">{badge(r[score_key])}</td>'
+                f'<td style="{TDC}">{score_reveal(r[score_key], _pitcher_score_breakdown(r))}</td>'
                 f'</tr>'
             )
 
@@ -3300,7 +3401,7 @@ def build_email(snap, override_team=None):
                     f'<td style="{TDC}">{v(r.get("ERA"), 2)}</td>'
                     + hot_cold_cell(r.get("ERA"), p15r.get("ERA"), lower_better=True, dec=2, no_data_title="No 15-day stats — player may not have pitched recently") +
                     f'<td style="{TDC}">{kpct_cell}</td>'
-                    f'<td style="{TDC}">{badge(r["_score"])}</td>'
+                    f'<td style="{TDC}">{score_reveal(r["_score"], _pitcher_score_breakdown(r, best_recent_p))}</td>'
                     f'</tr>'
                 )
         table = (
@@ -3352,7 +3453,7 @@ def build_email(snap, override_team=None):
                 f'<td style="{TDC}">{f"{era:.2f}" if era > 0 else "—"}</td>'
                 f'<td style="{TDC}">{f"{whip:.2f}" if whip > 0 else "—"}</td>'
                 f'{_cats_cell(r, rp_pctile, _FA_RP_CATS, need_cats)}'
-                f'<td style="{TDC}">{badge(r["_rp_score"])}</td>'
+                f'<td style="{TDC}">{score_reveal(r["_rp_score"], _pitcher_score_breakdown(r))}</td>'
                 f'</tr>'
             )
         rp_table = (
@@ -3425,7 +3526,7 @@ def build_email(snap, override_team=None):
                 + hot_cold_cell(r.get("OPS"), rh.get("OPS"), dec=3, no_data_title="No 7-day stats — player may not have played recently") +
                 f'<td style="{TDC}">{_hrp_cell(r)}</td>'
                 f'{_cats_cell(r, hit_pctile, _FA_HIT_CATS, need_cats)}'
-                f'<td style="{TDC}">{badge(r["_score"])}</td>'
+                f'<td style="{TDC}">{score_reveal(r["_score"], _hitter_score_breakdown(r, best_recent_h))}</td>'
                 f'</tr>'
             )
         table = (
@@ -3748,6 +3849,13 @@ def build_email(snap, override_team=None):
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>{my_team} Daily Digest</title>
   <style>
+    /* Tap-to-expand Score badges: hide the native disclosure triangle and show our own
+       caret so the badge stays clean until tapped. Renders in the browser-opened
+       attachment (mobile Safari/Chrome support <details> natively). */
+    details.scorebd summary {{ list-style:none; outline:none; }}
+    details.scorebd summary::-webkit-details-marker {{ display:none; }}
+    details.scorebd summary::after {{ content:" \\25B8"; color:{MUTED}; font-size:9px; }}
+    details.scorebd[open] summary::after {{ content:" \\25BE"; color:{MUTED}; font-size:9px; }}
     @media only screen and (max-width:600px) {{
       .ew {{ width:100% !important; padding:8px !important; }}
       table th, table td {{ padding:5px 4px !important; }}

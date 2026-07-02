@@ -387,13 +387,17 @@ Each player gets a **0–100 score**, calibrated so the median qualified player 
 | Yellow | ≥ 32 — fringe |
 | Red | < 32 — avoid |
 
-Scores are **not** dampened for injuries (injury status is shown separately as a tag; DL players are excluded from FA lists). Three canonical role scores:
+Scores are **not** dampened for injuries (injury status is shown separately as a tag; DL players are excluded from FA lists).
 
-**Starting-pitcher score (`pitcher_score` / `_score_p`):** K% (blended 60/40 with Baseball Savant whiff percentile) + run prevention (ERA blended 55/45 with Savant xERA) + WHIP + contact-quality allowed (barrel%/xwOBA-against) + a start-volume role bonus. Small samples damped toward the mean. Displayed blended 60% season / 40% recent form.
+> **Tap any Score badge for its breakdown.** Every Score badge expands on tap to show exactly which components produced it (each as points earned / max) plus the season-vs-recent blend — so you can see *why* two similar-looking players score differently. Works when you open the HTML attachment on phone/tablet; a ▸ caret marks a tappable badge. (Uses native `<details>`, no JavaScript — email-safe.)
+
+Three canonical role scores:
+
+**Starting-pitcher score (`pitcher_score` / `_score_p`):** K% (blended 60/40 with Baseball Savant whiff percentile) + run prevention (ERA blended 55/45 with Savant xERA) + WHIP + contact-quality allowed (barrel%/xwOBA-against) + a start-volume role bonus. Small samples damped toward the mean. Displayed blended 65% season / 35% recent form.
 
 **Relief-pitcher score (`rp_score`):** Skill-weighted **punt-saves** build — K, ERA (blended with xERA) and WHIP carry most of the weight; **SV+H is deliberately de-emphasized (~15%)** since it's the most volatile category and one we're willing to sacrifice. A dominant setup man can outrank a mediocre closer. Counting stats prefer ESPN season totals.
 
-**Hitter score (`hitter_score`):** wRC+ (or OPS) + HR volume + ISO + RBI + speed (sprint speed preferred, falls back to SB) + xwOBA/AVG + HR-probability model. Scaled by an **opportunity multiplier** (at-bats vs a full-time benchmark) so a part-time bat can't score like a regular. Displayed blended 60% season / 40% recent form.
+**Hitter score (`hitter_score`):** wRC+ (or OPS) + HR volume + ISO + RBI + speed (sprint speed preferred, falls back to SB) + xwOBA/AVG + HR-probability model. Scaled by an **opportunity multiplier** (at-bats vs a full-time benchmark) so a part-time bat can't score like a regular. Displayed blended 65% season / 35% recent form.
 
 **QS Probability:** Formula-based estimate (no MLB API support). Inputs: IP/G, ERA, WHIP, Brl%, K%, opponent OPS. Baseline = 38% (league average). Key driver is IP/G — uses total games (not just starts) so relief appearances bleed down the innings-depth signal for mixed-role pitchers. Calibration: ace (~75%), league avg (~38%), short reliever making a spot start (~15%). Shown as a color-coded percentage in FA SP and My Upcoming Starts tables: green ≥ 60%, white ≥ 40%, muted < 40%.
 
