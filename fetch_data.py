@@ -601,6 +601,49 @@ def get_savant_pitcher_contact(year: int) -> pd.DataFrame:
         return pd.DataFrame(columns=["PlayerName"])
 
 
+def get_savant_pitcher_expected(year: int) -> pd.DataFrame:
+    """xERA and xwOBA-against from Baseball Savant expected stats (via pybaseball).
+    Both are ABSOLUTE values (xERA ~ ERA scale; xwOBA_against ~ .315 league avg),
+    so send_digest.py can blend them directly with real ERA/contact numbers."""
+    try:
+        from pybaseball import statcast_pitcher_expected_stats, cache
+        cache.enable()
+        df = statcast_pitcher_expected_stats(year, minPA=50)
+        name_col = next((c for c in df.columns if "last_name" in c.lower()), None)
+        if name_col:
+            df["PlayerName"] = df[name_col].apply(lf_to_name)
+        col_map = {"xera": "xERA", "est_woba": "xwOBA_against"}
+        df = df.rename(columns={k: v for k, v in col_map.items() if k in df.columns})
+        keep = ["PlayerName"] + [v for v in col_map.values() if v in df.columns]
+        log(f"  Savant pitcher expected stats: {len(df)} pitchers")
+        return df[keep].drop_duplicates("PlayerName")
+    except Exception as e:
+        log(f"  Savant pitcher expected stats FAILED: {e}")
+        return pd.DataFrame(columns=["PlayerName"])
+
+
+def get_savant_pitcher_skill(year: int) -> pd.DataFrame:
+    """Whiff% as a Baseball Savant league PERCENTILE RANK (0-100), not a raw rate.
+    A pitch-skill signal for the strikeout component that leads results-based K%."""
+    try:
+        from pybaseball import statcast_pitcher_percentile_ranks, cache
+        cache.enable()
+        df = statcast_pitcher_percentile_ranks(year)
+        name_col = next((c for c in df.columns if "player_name" in c.lower() or "last_name" in c.lower()), None)
+        if name_col:
+            df["PlayerName"] = df[name_col].apply(lf_to_name)
+        col_map = {"whiff_percent": "WhiffPctile"}
+        df = df.rename(columns={k: v for k, v in col_map.items() if k in df.columns})
+        keep = ["PlayerName"] + [v for v in col_map.values() if v in df.columns]
+        if "WhiffPctile" in df.columns:
+            df = df.dropna(subset=["WhiffPctile"])
+        log(f"  Savant pitcher skill percentiles: {len(df)} pitchers")
+        return df[keep].drop_duplicates("PlayerName")
+    except Exception as e:
+        log(f"  Savant pitcher skill FAILED: {e}")
+        return pd.DataFrame(columns=["PlayerName"])
+
+
 def get_statcast_expected_stats(year: int) -> pd.DataFrame:
     """xBA, xSLG, xwOBA from Baseball Savant expected stats."""
     try:
@@ -873,6 +916,14 @@ def build_pitcher_data(league) -> list:
     sc_p = get_savant_pitcher_contact(CURRENT_YEAR)
     if not sc_p.empty:
         merged = merged.merge(sc_p, on="PlayerName", how="left")
+
+    log("Fetching Baseball Savant pitcher expected stats (xERA, xwOBA-against) and whiff%â€¦")
+    xp_p = get_savant_pitcher_expected(CURRENT_YEAR)
+    if not xp_p.empty:
+        merged = merged.merge(xp_p, on="PlayerName", how="left")
+    sk_p = get_savant_pitcher_skill(CURRENT_YEAR)
+    if not sk_p.empty:
+        merged = merged.merge(sk_p, on="PlayerName", how="left")
 
     # Derive approximate K% from FantasyPros K and estimated TBF (K/IP * 9 / K9-to-TBF ratio)
     if "K" in merged.columns and "IP" in merged.columns:

@@ -137,7 +137,7 @@ def _blend(r, score_fn, idx_recent, w=0.4):
     return round(w * s_rec + (1 - w) * s_year) if s_rec > 0 else s_year
 
 
-def pitcher_score(r):
+def pitcher_score(r, _raw=False):
     kip   = _n(r.get("K/IP") or r.get("KIP"))
     era   = _n(r.get("ERA"))
     whip  = _n(r.get("WHIP"))
@@ -147,21 +147,39 @@ def pitcher_score(r):
     w     = _n(r.get("ESPN_W")) or _n(r.get("W"))
     ip_g  = _n(r.get("IP_per_G"))
     ip    = _n(r.get("IP"))
+    xera     = _n(r.get("xERA"))            # Baseball Savant deserved-ERA (absolute)
+    xwoba_ag = _n(r.get("xwOBA_against"))   # xwOBA allowed (absolute, ~.315 avg)
+    brl_ag   = _n(r.get("BarrelPctAllowed"))
+    whiff_pt = _n(r.get("WhiffPctile"))     # league whiff PERCENTILE 0-100 (not a rate)
     is_sp = _is_sp(r)
 
     if not kip and not era and not kpct:
         return 0
 
-    # K component: FantasyPros gives no WhiffPct, so use derived K% (Kpct_P),
-    # falling back to K/IP. ERA component uses ERA (no xFIP from FantasyPros).
-    s = 0
+    # ── Strikeouts (28): results-based K% (or K/IP) blended 60/40 with the
+    #    predictive whiff% percentile, which leads K% start-to-start.
     if kpct > 0:
-        s += min(28, kpct / 0.28 * 28)
+        k_comp = min(28, kpct / 0.28 * 28)
     else:
-        s += min(28, kip / 1.5 * 28)
+        k_comp = min(28, kip / 1.5 * 28)
+    if whiff_pt > 0:
+        k_comp = 0.6 * k_comp + 0.4 * min(28, whiff_pt / 100 * 28)
+    s = k_comp
 
-    s += max(0, min(28, (6.0 - era) / 4.0 * 28))
+    # ── Run prevention (28): actual ERA (a league category) blended 55/45 with
+    #    xERA (deserved, strips defense/sequencing luck).
+    era_base = 0.55 * era + 0.45 * xera if (era > 0 and xera > 0) else era
+    s += max(0, min(28, (6.0 - era_base) / 4.0 * 28))
+
+    # ── WHIP (20): results only — no clean predictive twin in the feed.
     s += max(0, min(20, (2.0 - whip) / 1.1 * 20))
+
+    # ── Contact quality allowed (0-12): barrel%-allowed + xwOBA-against, both
+    #    lower-is-better. Rewards suppressing hard contact regardless of results.
+    if brl_ag > 0:
+        s += max(0, min(5, (10.0 - brl_ag) / 6.0 * 5))
+    if xwoba_ag > 0:
+        s += max(0, min(7, (0.360 - xwoba_ag) / 0.110 * 7))
 
     if is_sp:
         # SP role: reward starts volume; SVHD is irrelevant
@@ -176,8 +194,10 @@ def pitcher_score(r):
     if ip > 0:
         s *= min(1.0, ip / 20)
 
-    # Calibrate to shared 0-100 scale (p50→50, p90→80) derived from observed distribution
-    s = s * 1.875 - 67.6
+    if _raw:
+        return s
+    # Calibrate to shared 0-100 scale (p50→50, p90→80) — see recalibrate_scores.py
+    s = s * 1.4341 - 39.957
     return max(0, min(100, round(s)))
 
 
@@ -304,22 +324,34 @@ def fa_starters(pitchers, claimed=None, week_end=None, idx_recent=None):
     return sorted(fa, key=lambda r: -r["_score"])[:12]
 
 
-def rp_score(r):
+def rp_score(r, _raw=False):
     svhd = _n(r.get("ESPN_SVHD")) or _n(r.get("SVHD"))   # prefer season total from ESPN
     k    = _n(r.get("ESPN_K"))    or _n(r.get("K"))       # prefer season count from ESPN
     w    = _n(r.get("ESPN_W"))    or _n(r.get("W"))
     ip_g = _n(r.get("IP_per_G"))
     era  = _n(r.get("ERA")) or 5.0
     whip = _n(r.get("WHIP")) or 1.5
-    # Weights (max 100): SVHD 40 · K 22 · W 13 · IP/G 10 · ERA 9 · WHIP 6
+    xera     = _n(r.get("xERA"))
+    brl_ag   = _n(r.get("BarrelPctAllowed"))
+    whiff_pt = _n(r.get("WhiffPctile"))     # league whiff PERCENTILE 0-100
+    # Counting stats (role/usage) stay dominant: SVHD 40 · K 22 · W 13 · IP/G 10
     s  = min(40, svhd / 20 * 40)
     s += min(22, k    / 80 * 22)
     s += min(13, w    / 10 * 13)
     s += min(10, ip_g / 1.2 * 10)   # opportunity: IP per appearance, max at 1.2 IP/G
-    s += max(0, min(9, (5.0 - era)  / 3.0 * 9))
+    # Run prevention (9): ERA blended 50/50 with xERA (deserved).
+    era_base = 0.5 * era + 0.5 * xera if xera > 0 else era
+    s += max(0, min(9, (5.0 - era_base) / 3.0 * 9))
     s += max(0, min(6, (2.0 - whip) / 1.0 * 6))
-    # Calibrate to shared 0-100 scale (p50→50, p90→80) derived from observed distribution
-    s = s * 0.9464 + 16.5
+    # Contact quality allowed (0-8): barrel%-allowed (lower better) + whiff% percentile.
+    if brl_ag > 0:
+        s += max(0, min(4, (10.0 - brl_ag) / 6.0 * 4))
+    if whiff_pt > 0:
+        s += min(4, whiff_pt / 100 * 4)
+    if _raw:
+        return s
+    # Calibrate to shared 0-100 scale (p50→50, p90→80) — see recalibrate_scores.py
+    s = s * 0.9336 + 12.847
     return max(0, min(100, round(s)))
 
 
