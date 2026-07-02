@@ -263,16 +263,6 @@ def qs_probability(r):
     return max(1, min(99, round(score)))
 
 
-def sp_fa_score(r):
-    if not _is_sp(r):
-        return 0
-    s = pitcher_score(r)
-    if r.get("PSP_Date") and r.get("PSP_Date") != "1999-01-01":
-        qsp = qs_probability(r) or 50
-        s += max(8, min(22, round(8 + qsp * 0.14)))
-    return min(100, round(s))
-
-
 # ── DATA HELPERS ───────────────────────────────────────────────────────────────
 
 def fetch_injury_notes():
@@ -301,7 +291,7 @@ def fetch_injury_notes():
         return {}
 
 
-def fa_starters(pitchers, claimed=None, week_end=None):
+def fa_starters(pitchers, claimed=None, week_end=None, idx_recent=None):
     claimed = claimed or set()
     today_str = datetime.now().strftime("%Y-%m-%d")
     fa = [
@@ -313,9 +303,10 @@ def fa_starters(pitchers, claimed=None, week_end=None):
         and r.get("PSP_Date", "") >= today_str
         and str(r.get("FreeAgentInjuryStatus", "")) not in _DL_STATUSES
         and (week_end is None or r.get("PSP_Date", "") <= week_end)
+        and _is_sp(r)
     ]
     for r in fa:
-        r["_score"] = sp_fa_score(r)
+        r["_score"] = _score_p(r, idx_recent)
     return sorted(fa, key=lambda r: -r["_score"])[:12]
 
 
@@ -333,7 +324,20 @@ def rp_score(r):
     s += min(10, ip_g / 1.2 * 10)   # opportunity: IP per appearance, max at 1.2 IP/G
     s += max(0, min(9, (5.0 - era)  / 3.0 * 9))
     s += max(0, min(6, (2.0 - whip) / 1.0 * 6))
-    return round(s, 1)
+    # Calibrate to shared 0-100 scale (p50→50, p90→80) derived from observed distribution
+    s = s * 0.9464 + 16.5
+    return max(0, min(100, round(s)))
+
+
+def _score_p(r, idx_recent=None):
+    """Canonical pitcher score — role-aware, so a player shows the SAME number in
+    every section. SP → pitcher_score blended with recent form (start-to-start
+    volatility matters). RP → rp_score, unblended: it is built on ESPN season
+    counting stats (role/opportunity driven), and skipping the blend guarantees
+    the number matches the RP tables exactly."""
+    if _is_sp(r):
+        return _blend(r, pitcher_score, idx_recent) if idx_recent is not None else pitcher_score(r)
+    return rp_score(r)
 
 
 def fa_relievers(pitchers, claimed=None):
@@ -353,7 +357,7 @@ def fa_relievers(pitchers, claimed=None):
     return sorted(fa, key=lambda r: -r["_rp_score"])[:3]
 
 
-def fa_hitters(hitters, claimed=None):
+def fa_hitters(hitters, claimed=None, idx_recent=None):
     claimed = claimed or set()
     fa = [
         r for r in hitters
@@ -364,7 +368,7 @@ def fa_hitters(hitters, claimed=None):
         and str(r.get("FreeAgentInjuryStatus", "")) not in _DL_STATUSES
     ]
     for r in fa:
-        r["_score"] = hitter_score(r)
+        r["_score"] = _blend(r, hitter_score, idx_recent) if idx_recent is not None else hitter_score(r)
     return sorted(fa, key=lambda r: -r["_score"])[:12]
 
 
@@ -450,7 +454,9 @@ def positional_breakdown(pitchers, hitters, my_team, best_recent_p=None, best_re
             parts = str(r.get("Position", "")).split(", ")
             return any(s in parts for s in slots)
 
-        def score(r, score_fn=score_fn, idx30=idx30):
+        def score(r, ptype=ptype, score_fn=score_fn, idx30=idx30):
+            if ptype == "pit":
+                return _score_p(r, idx30)   # role-aware: SP blend / RP rp_score
             return _blend(r, score_fn, idx30)
 
         my_p = sorted(
@@ -1667,10 +1673,10 @@ def _roster_suggestion(matchup, pitchers, hitters, fa_sp, fa_rp, fa_hit,
     if focus_pit:
         only_svhd = losing_pit == {"SVHD"}
         if only_svhd:
-            fa_pool    = sorted(fa_rp, key=lambda r: _blend(r, pitcher_score, best_recent_p), reverse=True)
+            fa_pool    = sorted(fa_rp, key=lambda r: _score_p(r, best_recent_p), reverse=True)
             add_reason = "SV+H gap"
         else:
-            fa_pool    = sorted(fa_sp, key=lambda r: sp_fa_score(r), reverse=True)
+            fa_pool    = sorted(fa_sp, key=lambda r: _score_p(r, best_recent_p), reverse=True)
             sp_losing  = losing_pit - {"SVHD"}
             add_reason = "/".join(_CAT_DISPLAY.get(c, c) for c in sorted(sp_losing)) + " gap"
     else:
@@ -1692,14 +1698,25 @@ def _roster_suggestion(matchup, pitchers, hitters, fa_sp, fa_rp, fa_hit,
                 if r.get("PSP_Date", "1999-01-01") in ("1999-01-01", "")
                 or r.get("PSP_Date", "9999-99-99") > week_end_str]
     scored_drop = sorted(
-        [(r, _blend(r, pitcher_score, best_recent_p)) for r in drop_pit] +
-        [(r, _blend(r, hitter_score,  best_recent_h)) for r in full_hit],
+        [(r, _score_p(r, best_recent_p),              "pit") for r in drop_pit] +
+        [(r, _blend(r, hitter_score, best_recent_h),  "hit") for r in full_hit],
         key=lambda x: x[1]
     )
 
     def _pos_tags(r):
         pos_str = (r.get("Position") or "").upper()
         return {p.strip() for p in pos_str.replace("/", ",").split(",") if p.strip()}
+
+    def _pos_groups_of(r):
+        """POS_GROUPS labels this player fills (OF covers LF/CF/RF etc.)."""
+        tags = _pos_tags(r)
+        return {label for label, slots, _ in POS_GROUPS if tags & slots}
+
+    def _pos_disp(r):
+        """Display positions, dropping the generic P tag when a real role exists."""
+        parts = [p.strip() for p in str(r.get("Position") or "").split(",")
+                 if p.strip() and p.strip().upper() != "P"]
+        return ", ".join(parts) or str(r.get("Position") or "")
 
     def _can_drop(cand):
         """True if dropping cand leaves at least one healthy player at every position it fills."""
@@ -1718,7 +1735,16 @@ def _roster_suggestion(matchup, pitchers, hitters, fa_sp, fa_rp, fa_hit,
                 return False
         return True
 
-    drop_candidate = next((r for r, _ in scored_drop if _can_drop(r)), None)
+    # Prefer a like-for-like drop: same position group as the add first (so adding
+    # an OF drops the worst OF, not an infielder), then same player type, then any.
+    droppable = [(r, t) for r, _, t in scored_drop if _can_drop(r)]
+    add_groups = _pos_groups_of(add_candidate) if add_candidate else set()
+    add_type   = "pit" if focus_pit else "hit"
+    drop_candidate = (
+        next((r for r, _ in droppable if _pos_groups_of(r) & add_groups), None)
+        or next((r for r, t in droppable if t == add_type), None)
+        or (droppable[0][0] if droppable else None)
+    )
 
     if add_candidate and drop_candidate:
         an = add_candidate.get("PlayerName", "")
@@ -1726,8 +1752,9 @@ def _roster_suggestion(matchup, pitchers, hitters, fa_sp, fa_rp, fa_hit,
         if an and dn and an != dn:
             return (
                 f'Pickup: Add <span style="color:{TEXT};font-weight:700;">{an}</span>'
+                f'<span style="color:{MUTED};"> ({_pos_disp(add_candidate)})</span>'
                 f'<span style="color:{MUTED};"> ({add_reason})</span>'
-                f' &middot; Drop <span style="color:{MUTED};">{dn}</span>'
+                f' &middot; Drop <span style="color:{MUTED};">{dn} ({_pos_disp(drop_candidate)})</span>'
             )
 
     # ── TRADE ─────────────────────────────────────────────────────────────────
@@ -2033,9 +2060,9 @@ def build_email(snap, override_team=None):
         latest_txn[t["PlayerName"]] = t["TransactionType"]
     claimed = {name for name, txn_type in latest_txn.items() if txn_type == "FA ADDED"}
 
-    fa_sp     = fa_starters(pitchers, claimed)
+    fa_sp     = fa_starters(pitchers, claimed, idx_recent=best_recent_p)
     fa_rp     = fa_relievers(pitchers, claimed)
-    fa_hit    = fa_hitters(hitters, claimed)
+    fa_hit    = fa_hitters(hitters, claimed, idx_recent=best_recent_h)
     luck      = luck_standings(roto, standings)
     team_logos = {" ".join(s["team_name"].split()): s.get("logo_url", "") for s in standings}
     cats, n   = category_ranks(roto, my_team)
@@ -2376,7 +2403,7 @@ def build_email(snap, override_team=None):
                     f'<td style="{TDC}">{v(r.get("ERA"), 2)}</td>'
                     + hot_cold_cell(r.get("ERA"), p15r.get("ERA"), lower_better=True, dec=2, no_data_title="No 15-day stats — player may not have pitched recently") +
                     f'<td style="{TDC}">{kpct_s_cell}</td>'
-                    f'<td style="{TDC}">{badge(_blend(r, pitcher_score, best_recent_p))}</td>'
+                    f'<td style="{TDC}">{badge(_score_p(r, best_recent_p))}</td>'
                     f'</tr>'
                 )
 
