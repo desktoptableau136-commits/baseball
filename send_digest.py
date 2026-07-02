@@ -955,25 +955,26 @@ def band_divider(label, color=None, anchor=None):
 
 
 def nav_bar():
-    """Sticky-feel 'jump to' pill bar at the top of the body. Anchor links behave
-    like tabs without JS/CSS tricks that Gmail strips; they jump in the attachment
-    and degrade to harmless styled links inline."""
+    """'Jump to' pill nav, rendered in the top-right of the header (not the body, so it
+    doesn't push Week at a Glance down). Anchor links behave like tabs without JS/CSS
+    tricks that Gmail strips; they jump in the attachment and degrade to harmless styled
+    links inline. Also drops the `top` anchor so the band `↑ TOP` links have a target."""
     items = [
         ("#band-myroster", "My Roster"),
         ("#band-fa",       "Free Agents"),
         ("#band-season",   "Season"),
     ]
     pills = "".join(
-        f'<a href="{href}" style="display:inline-block;padding:6px 13px;margin:0 3px 6px;'
-        f'background:{SURFACE};border:1px solid {BORDER};border-radius:14px;color:{ACCENT};'
-        f'font-size:11px;font-weight:700;text-decoration:none;letter-spacing:.3px;">{label}</a>'
+        f'<a href="{href}" style="display:inline-block;padding:5px 11px;margin:0 0 5px 5px;'
+        f'background:rgba(255,255,255,0.04);border:1px solid {BORDER};border-radius:13px;color:#8fb4e8;'
+        f'font-size:11px;font-weight:700;text-decoration:none;letter-spacing:.3px;white-space:nowrap;">{label}</a>'
         for href, label in items
     )
     return (
         f'<a name="top" id="top" style="text-decoration:none;"></a>'
-        f'<div style="text-align:center;margin:0 0 20px;">'
-        f'<span style="color:{MUTED};font-size:10px;font-weight:700;text-transform:uppercase;'
-        f'letter-spacing:1px;margin-right:6px;">Jump to</span>{pills}</div>'
+        f'<div style="text-align:right;line-height:1.6;">'
+        f'<span style="color:{MUTED};font-size:9px;font-weight:700;text-transform:uppercase;'
+        f'letter-spacing:1px;display:block;margin-bottom:3px;">Jump to</span>{pills}</div>'
     )
 
 
@@ -2606,11 +2607,19 @@ def build_email(snap, override_team=None):
             f'&#9888;&thinsp;data from {_ref_label} &mdash; run a refresh for today\'s matchup</span>'
         )
 
+    # Jump-to nav lives in the header's top-right (a two-column table keeps it email-safe;
+    # on mobile the cells stack via the .hdr-main / .hdr-nav responsive rules).
+    nav_html = nav_bar()
     header = f"""
 <div style="background:linear-gradient(135deg,#0b1a38 0%,#0f172a 100%);padding:22px 28px;border-bottom:2px solid {BORDER};">
-  <div style="color:{MUTED};font-size:10px;text-transform:uppercase;letter-spacing:1px;">{today}{_data_badge}</div>
-  <div style="margin-top:6px;vertical-align:middle;">{my_logo_html}<span style="color:{TEXT};font-size:24px;font-weight:900;letter-spacing:-1px;vertical-align:middle;">{my_team}</span></div>
-  <div style="color:#4b7bc4;font-size:11px;letter-spacing:.8px;margin-top:4px;text-transform:uppercase;">{_digest_label}</div>
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="width:100%;"><tr>
+    <td class="hdr-main" valign="top" style="vertical-align:top;">
+      <div style="color:{MUTED};font-size:10px;text-transform:uppercase;letter-spacing:1px;">{today}{_data_badge}</div>
+      <div style="margin-top:6px;vertical-align:middle;">{my_logo_html}<span style="color:{TEXT};font-size:24px;font-weight:900;letter-spacing:-1px;vertical-align:middle;">{my_team}</span></div>
+      <div style="color:#4b7bc4;font-size:11px;letter-spacing:.8px;margin-top:4px;text-transform:uppercase;">{_digest_label}</div>
+    </td>
+    <td class="hdr-nav" valign="top" align="right" style="vertical-align:top;text-align:right;padding-left:12px;">{nav_html}</td>
+  </tr></table>
 </div>"""
 
     # ── KPI row (two lines) ────────────────────────────────────────────────────
@@ -3423,7 +3432,6 @@ def build_email(snap, override_team=None):
         week_end=week_end_str, is_sunday=is_sunday, roster_suggestion=roster_suggestion
     )
     body_parts += [
-        nav_bar(),                                                                        # jump-to pill nav
         build_prev_matchup_recap(prev_matchup, team_logos=team_logos) if is_monday and prev_matchup.get("week") != (matchup or {}).get("week") else "",  # 2a MONDAY RECAP
         week_overview,                                                                    # 2  WEEK INTELLIGENCE
         build_category_pulse(matchup, weekly_avgs=weekly_avgs, days_elapsed=days_elapsed, remaining_proj=pit_proj, is_sunday=is_sunday), # 3
@@ -3466,6 +3474,10 @@ def build_email(snap, override_team=None):
       .cat-cell .cat-val {{ font-size:14px !important; }}
       .hide-mob {{ display:none !important; }}
       .mob-sm {{ font-size:11px !important; }}
+      .hdr-main, .hdr-nav {{ display:block !important; width:100% !important; padding-left:0 !important; }}
+      .hdr-nav {{ text-align:left !important; margin-top:12px; }}
+      .hdr-nav div {{ text-align:left !important; }}
+      .hdr-nav a {{ margin:0 5px 5px 0 !important; }}
     }}
   </style>
 </head>
