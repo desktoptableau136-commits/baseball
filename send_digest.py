@@ -1196,6 +1196,19 @@ def _proj_line_html(r):
     return f'<span style="color:{MUTED};font-size:10px;white-space:nowrap;">{_fmt_ip(ip_g)}&nbsp;IP&thinsp;·&thinsp;{er}&nbsp;ER&thinsp;·&thinsp;{k}K</span>'
 
 
+def _opp_ops_sub(r):
+    """Small muted second line for the Matchup cell showing the opponent team's
+    OPS — folded in from the former standalone 'Opp OPS' column (dropped to fit
+    the 9→8-column pitcher tables on an iPad). Empty when OPS is missing."""
+    val = _n(r.get("Team_OPS_Value"))
+    if val <= 0:
+        return ""
+    return (
+        f'<div style="color:{MUTED};font-size:10px;margin-top:1px;white-space:nowrap;">'
+        f'Opp OPS {val:.3f}</div>'
+    )
+
+
 def band_divider(label, color=None, anchor=None):
     c = color or MUTED
     # Anchor target for the "jump to" nav. name+id maximizes email-client support;
@@ -3263,7 +3276,7 @@ def build_email(snap, override_team=None):
             )
             rows += (
                 f'<tr style="background:{SURFACE};">'
-                f'<td colspan="9" style="padding:5px 10px;'
+                f'<td colspan="8" style="padding:5px 10px;'
                 f'border-top:1px solid {BORDER};border-bottom:1px solid {BORDER};">'
                 f'<span style="color:{ACCENT};font-size:11px;font-weight:700;'
                 f'text-transform:uppercase;letter-spacing:.5px;">{day_label}</span>'
@@ -3309,14 +3322,14 @@ def build_email(snap, override_team=None):
                 proj_line_s = _proj_line_html(r)
                 _cell, _bdrow = score_reveal(
                     _score_p(r, best_recent_p), _pitcher_score_breakdown(r, best_recent_p),
-                    _bd_uid("mus", name), 9)
+                    _bd_uid("mus", name), 8)
                 rows += (
                     f'<tr style="{bg}">'
                     f'<td style="{_tds}font-weight:600;">{team_logo(r.get("Team"))}{name}{inj_tag(r)}{start_badge}</td>'
                     f'<td style="{_tdc}">{proj_line_s}</td>'
                     f'<td style="{_tdc}">{opp_logo(ha)}{ha}'
-                    f'{"&nbsp;<span style=\"color:#888;font-size:11px\">(proj.)</span>" if r.get("PSP_Projected") else ""}</td>'
-                    f'<td style="{_tdc}">{v(r.get("Team_OPS_Value"), 3)}</td>'
+                    f'{"&nbsp;<span style=\"color:#888;font-size:11px\">(proj.)</span>" if r.get("PSP_Projected") else ""}'
+                    f'{_opp_ops_sub(r)}</td>'
                     f'<td style="{_tdc}">{qsp_str}</td>'
                     f'<td style="{_tdc}">{v(r.get("ERA"), 2)}</td>'
                     + hot_cold_cell(r.get("ERA"), p15r.get("ERA"), lower_better=True, dec=2, no_data_title="No 15-day stats — player may not have pitched recently", td_style=_tdc) +
@@ -3343,7 +3356,6 @@ def build_email(snap, override_team=None):
             f'<th style="{_th}">Pitcher</th>'
             f'<th style="{_th}text-align:center;">Proj. Line</th>'
             f'<th style="{_th}text-align:center;">Matchup</th>'
-            f'<th style="{_th}text-align:center;">Opp OPS</th>'
             f'<th style="{_th}text-align:center;">QS%</th>'
             f'<th style="{_th}text-align:center;">ERA</th>'
             f'<th style="{_th}text-align:center;">L15 ERA</th>'
@@ -3480,7 +3492,7 @@ def build_email(snap, override_team=None):
             )
             rows += (
                 f'<tr style="background:{SURFACE};">'
-                f'<td colspan="9" style="padding:5px 10px;'
+                f'<td colspan="8" style="padding:5px 10px;'
                 f'border-top:1px solid {BORDER};border-bottom:1px solid {BORDER};">'
                 f'<span style="color:{ACCENT};font-size:11px;font-weight:700;'
                 f'text-transform:uppercase;letter-spacing:.5px;">{day_label}</span>'
@@ -3542,14 +3554,14 @@ def build_email(snap, override_team=None):
                 proj_line_str = _proj_line_html(r)
                 _cell, _bdrow = score_reveal(
                     r["_score"], _pitcher_score_breakdown(r, best_recent_p),
-                    _bd_uid("fasp", r.get("PlayerName", "")), 9)
+                    _bd_uid("fasp", r.get("PlayerName", "")), 8)
                 rows += (
                     f'<tr style="{bg}">'
                     f'<td style="{name_border}{_tds}font-weight:600;">{team_logo(r.get("Team"))}{r.get("PlayerName","")}{inj_tag(r)}{two_start_html}{pickup_badge}</td>'
                     f'<td style="{_tdc}">{proj_line_str}</td>'
                     f'<td style="{_tdc}">{opp_logo(ha)}{ha}'
-                    f'{"&nbsp;<span style=\"color:#888;font-size:11px\">(proj.)</span>" if r.get("PSP_Projected") else ""}</td>'
-                    f'<td style="{_tdc}">{v(r.get("Team_OPS_Value"), 3)}</td>'
+                    f'{"&nbsp;<span style=\"color:#888;font-size:11px\">(proj.)</span>" if r.get("PSP_Projected") else ""}'
+                    f'{_opp_ops_sub(r)}</td>'
                     f'<td style="{_tdc}">{qsp_str}</td>'
                     f'<td style="{_tdc}">{v(r.get("ERA"), 2)}</td>'
                     + hot_cold_cell(r.get("ERA"), p15r.get("ERA"), lower_better=True, dec=2, no_data_title="No 15-day stats — player may not have pitched recently", td_style=_tdc) +
@@ -3565,7 +3577,6 @@ def build_email(snap, override_team=None):
             f'<th style="{_th}">Pitcher</th>'
             f'<th style="{_th}text-align:center;">Proj. Line</th>'
             f'<th style="{_th}text-align:center;">Matchup</th>'
-            f'<th style="{_th}text-align:center;">Opp OPS</th>'
             f'<th style="{_th}text-align:center;">QS%</th>'
             f'<th style="{_th}text-align:center;">ERA</th>'
             f'<th style="{_th}text-align:center;">L15 ERA</th>'
