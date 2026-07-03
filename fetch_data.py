@@ -1251,18 +1251,24 @@ def get_all_matchups(league) -> dict:
             h_val  = float(h_info.get("value") or 0)
             a_val  = float(a_info.get("value") or 0)
 
-            if h_val == a_val:
-                result = "T"; ties += 1
+            # Prefer ESPN's own per-category result — it already applies the league's
+            # ratio-stat innings-pitched minimum (ERA/WHIP don't count for a team until
+            # it clears the IP floor, e.g. 25 IP), which a raw value comparison misses:
+            # a team with the better WHIP but under the IP min still LOSES that category.
+            # Fall back to comparing values only when ESPN supplies no result.
+            espn_res = str(h_info.get("result") or "").upper()
+            if espn_res in ("WIN", "LOSS", "TIE"):
+                result = {"WIN": "W", "LOSS": "L", "TIE": "T"}[espn_res]
+            elif h_val == a_val:
+                result = "T"
             elif cat in LOWER_BETTER:
-                if h_val < a_val:
-                    result = "W"; wins += 1
-                else:
-                    result = "L"; losses += 1
+                result = "W" if h_val < a_val else "L"
             else:
-                if h_val > a_val:
-                    result = "W"; wins += 1
-                else:
-                    result = "L"; losses += 1
+                result = "W" if h_val > a_val else "L"
+
+            if result == "W":   wins += 1
+            elif result == "L": losses += 1
+            else:               ties += 1
 
             cats.append({
                 "cat": cat, "my_val": h_val, "opp_val": a_val,
@@ -1319,18 +1325,20 @@ def get_prev_matchup(league, my_team: str) -> dict:
             m_val  = float(m_info.get("value") or 0)
             o_val  = float(o_info.get("value") or 0)
 
-            if m_val == o_val:
-                result = "T"; ties += 1
+            # Trust ESPN's own result (applies the ratio-stat IP minimum); see get_all_matchups.
+            espn_res = str(m_info.get("result") or "").upper()
+            if espn_res in ("WIN", "LOSS", "TIE"):
+                result = {"WIN": "W", "LOSS": "L", "TIE": "T"}[espn_res]
+            elif m_val == o_val:
+                result = "T"
             elif cat in LOWER_BETTER:
-                if m_val < o_val:
-                    result = "W"; wins += 1
-                else:
-                    result = "L"; losses += 1
+                result = "W" if m_val < o_val else "L"
             else:
-                if m_val > o_val:
-                    result = "W"; wins += 1
-                else:
-                    result = "L"; losses += 1
+                result = "W" if m_val > o_val else "L"
+
+            if result == "W":   wins += 1
+            elif result == "L": losses += 1
+            else:               ties += 1
 
             cats.append({
                 "cat": cat, "my_val": m_val, "opp_val": o_val,

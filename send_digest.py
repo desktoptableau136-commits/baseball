@@ -2880,11 +2880,11 @@ def build_glossary_section():
                "Modeled chance a starter throws a quality start (6+ IP, ≤3 ER). League-average ≈ 38%, "
                "an ace ≈ 75%. Driven by innings-per-start, K%, ERA/WHIP and contact allowed."),
         _entry("QS / 5K+ badges",
-               "Next to a starter's name in My Upcoming Starts and FA Starting Pitchers. Green QS = "
-               "likely quality start; yellow 5K+ = likely 5+ strikeouts. Each fires on the pitcher's "
-               "season rate OR his projected line for that day — so if the Proj. Line reads 6+ IP / ≤3 ER "
-               "the QS badge shows, and if it projects 5+ K the 5K+ badge shows, regardless of your "
-               "rotation that day."),
+               "Next to a starter's name in My Upcoming Starts and FA Starting Pitchers. They annotate "
+               "his projected line for that day: green QS shows when the Proj. Line is a quality start "
+               "(6+ IP & ≤3 ER); yellow 5K+ shows when it projects 5+ strikeouts. They match the Proj. Line "
+               "exactly (no 5K+ badge next to a 4 K line) and appear regardless of your rotation that day. "
+               "The QS% column shows the season quality-start probability separately."),
     ])
     pitching = _group("Pitching metrics", [
         _entry("xERA / xwOBA-against", "Baseball Savant “deserved” run prevention from contact quality — "
@@ -3360,15 +3360,13 @@ def build_email(snap, override_team=None):
                     if _kpct_s_top and _kpct_s > 0
                     else (f"{_kpct_s*100:.1f}%" if _kpct_s > 0 else f'<span style="color:{MUTED}">—</span>')
                 )
-                # Fire on season rate OR the projected game line (see FA-SP note), so the
-                # same pitcher shows identical QS/5K+ badges here and in FA Starting Pitchers.
+                # Annotate the projected line (see FA-SP note) so the same pitcher shows
+                # identical QS/5K+ badges here and in FA Starting Pitchers, never contradicting
+                # the Proj. Line. QS = projected quality start (6+ IP & ≤3 ER); 5K+ = 5+ proj K.
                 _pv_s = _proj_line_vals(r)
                 _pjs_ip, _pjs_er, _pjs_k = _pv_s if _pv_s else (0, 0, 0)
-                qs_fires_s = bool(qsp and qsp >= 51) or _proj_is_qs(_pjs_ip, _pjs_er)
-                k_fires_s  = (
-                    ((_n(r.get("K/IP")) >= 0.90 or _n(r.get("Kpct_P")) >= 0.24) and _n(r.get("IP_per_G")) >= 4.5)
-                    or _pjs_k >= 5
-                )
+                qs_fires_s = _proj_is_qs(_pjs_ip, _pjs_er)
+                k_fires_s  = _pjs_k >= 5
                 start_badges = []
                 if _starts_this_week(r, today_str, week_end_str) >= 2:
                     start_badges.append(two_start_badge())
@@ -3577,17 +3575,15 @@ def build_email(snap, override_team=None):
                 qsp_color = GREEN if qsp and qsp >= 60 else (TEXT if qsp and qsp >= 40 else MUTED)
                 qsp_str = f'<span style="color:{qsp_color};font-weight:700;">{qsp}%</span>' if qsp else "—"
 
-                # QS / 5K+ badges fire on the pitcher's merit (unconditionally, not
-                # only on thin rotation days) so a strong streamer is flagged wherever
-                # he appears. Each fires on the SEASON rate OR the projected game line,
-                # so a nice proj (6 IP/≤3 ER, or 5+ projected K) always shows a badge.
+                # QS / 5K+ badges annotate the projected game line the reader sees, and
+                # fire unconditionally (not only on thin rotation days). QS = a projected
+                # quality start (6+ IP & ≤3 ER); 5K+ = 5+ projected K. Driving both purely
+                # off the Proj. Line means a badge can never contradict it (no "5K+" next
+                # to a 4 K line). The QS% column still shows the probability separately.
                 _pv = _proj_line_vals(r)
                 _pj_ip, _pj_er, _pj_k = _pv if _pv else (0, 0, 0)
-                qs_fires = bool(qsp and qsp >= 51) or _proj_is_qs(_pj_ip, _pj_er)
-                k_fires  = (
-                    ((_n(r.get("K/IP")) >= 0.90 or _n(r.get("Kpct_P")) >= 0.24) and _n(r.get("IP_per_G")) >= 4.5)
-                    or _pj_k >= 5
-                )
+                qs_fires = _proj_is_qs(_pj_ip, _pj_er)
+                k_fires  = _pj_k >= 5
                 pickup_badges = []
                 name_border = ""
                 if qs_fires:
