@@ -24,6 +24,30 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 try:
+    from zoneinfo import ZoneInfo
+    _ET = ZoneInfo("America/New_York")
+except Exception:                       # zoneinfo missing (very old Python / no tzdata)
+    _ET = None
+
+
+def _fmt_refresh_time(iso_str):
+    """Format a snapshot's refreshed_at ISO timestamp as a display clock in ET, e.g.
+    '6:32 AM ET'. tz-aware timestamps (UTC from CI) are converted to Eastern; naive ones
+    (older manual local runs on the user's ET box) are shown as-is. Returns '' on any
+    parse failure so the caller degrades to the plain date-only badge."""
+    if not iso_str:
+        return ""
+    try:
+        dt = datetime.fromisoformat(iso_str)
+    except Exception:
+        return ""
+    if dt.tzinfo is not None and _ET is not None:
+        dt = dt.astimezone(_ET)
+    h = dt.hour % 12 or 12
+    ampm = "AM" if dt.hour < 12 else "PM"
+    return f"{h}:{dt.minute:02d} {ampm} ET"
+
+try:
     from dotenv import load_dotenv
     load_dotenv(Path(__file__).parent / ".env")
 except ImportError:
@@ -1172,10 +1196,14 @@ def _fmt_ip(ip_decimal):
 
 _LEAGUE_AVG_OPS = 0.717  # fallback only — league team-OPS is derived per snapshot into _LG
 
-def _proj_line_html(r):
+def _proj_line_vals(r):
+    """Numeric projected single-game line → (ip_per_start, ER, K), or None when
+    there's no usable IP/G. Shared by _proj_line_html (display) and the FA-SP /
+    My-Upcoming-Starts badge logic, so a QS/5K+ badge tracks the SAME projected
+    numbers the reader sees on the proj line."""
     ip_g = _n(r.get("IP_per_G"))
     if ip_g <= 0:
-        return f'<span style="color:{MUTED}">—</span>'
+        return None
     era = _n(r.get("ERA"))
     kip = _n(r.get("K/IP"))
 
@@ -1194,6 +1222,24 @@ def _proj_line_html(r):
     raw_er = era * ip_g / 9 if era > 0 else 0
     er = round(raw_er * opp_factor * park_factor)
     k  = round(kip * ip_g * k_factor) if kip > 0 else 0
+    return ip_g, er, k
+
+
+def _proj_is_qs(ip_g, er):
+    """True when the projected line reads as a quality start (6+ displayed IP, ≤3 ER).
+    Uses the same third-of-an-inning rounding as _fmt_ip so it matches what the reader
+    sees: e.g. 5.84 IP/G displays as '6.0' and counts, 5.5 displays as '5.2' and does not."""
+    whole = int(ip_g); outs = round((ip_g - whole) * 3)
+    if outs >= 3:
+        whole += 1
+    return whole >= 6 and er <= 3
+
+
+def _proj_line_html(r):
+    vals = _proj_line_vals(r)
+    if vals is None:
+        return f'<span style="color:{MUTED}">—</span>'
+    ip_g, er, k = vals
     return f'<span style="color:{MUTED};font-size:10px;white-space:nowrap;">{_fmt_ip(ip_g)}&nbsp;IP&thinsp;·&thinsp;{er}&nbsp;ER&thinsp;·&thinsp;{k}K</span>'
 
 
@@ -2833,6 +2879,12 @@ def build_glossary_section():
         _entry("QS% (quality-start probability)",
                "Modeled chance a starter throws a quality start (6+ IP, ≤3 ER). League-average ≈ 38%, "
                "an ace ≈ 75%. Driven by innings-per-start, K%, ERA/WHIP and contact allowed."),
+        _entry("QS / 5K+ badges",
+               "Next to a starter's name in My Upcoming Starts and FA Starting Pitchers. Green QS = "
+               "likely quality start; yellow 5K+ = likely 5+ strikeouts. Each fires on the pitcher's "
+               "season rate OR his projected line for that day — so if the Proj. Line reads 6+ IP / ≤3 ER "
+               "the QS badge shows, and if it projects 5+ K the 5K+ badge shows, regardless of your "
+               "rotation that day."),
     ])
     pitching = _group("Pitching metrics", [
         _entry("xERA / xwOBA-against", "Baseball Savant “deserved” run prevention from contact quality — "
@@ -2894,7 +2946,9 @@ def build_email(snap, override_team=None):
     hitters       = snap.get("hitters", [])
     roto          = snap.get("roto", [])
     standings     = snap.get("standings", [])
-    refreshed     = snap.get("refreshed_at", "")[:10]
+    refreshed_iso = snap.get("refreshed_at", "")
+    refreshed     = refreshed_iso[:10]
+    refreshed_clock = _fmt_refresh_time(refreshed_iso)  # "6:32 AM ET" or "" — surfaced next to the freshness badge
     all_matchups  = snap.get("all_matchups", {})
     matchup       = all_matchups.get(" ".join(my_team.split())) or (snap.get("current_matchup", {}) if not override_team else {})
     recent_hitting  = snap.get("recent_hitting",  [])
@@ -3114,10 +3168,14 @@ def build_email(snap, override_team=None):
 
     # ── Header ─────────────────────────────────────────────────────────────────
     _data_fresh = (refreshed == today_str)
+    # The clock shows the actual fetch TIME (ET), not just the date — ESPN's live category
+    # standings keep settling for hours after a fetch, so "data current" (date matches today)
+    # can still be several hours behind ESPN. The time makes that lag legible.
+    _clock_suffix = f" at {refreshed_clock}" if refreshed_clock else ""
     if _data_fresh:
         _data_badge = (
             f'<span style="color:{MUTED};font-size:10px;margin-left:10px;vertical-align:middle;">'
-            f'&#10003;&thinsp;data current</span>'
+            f'&#10003;&thinsp;data as of today{_clock_suffix}</span>'
         )
     else:
         try:
@@ -3127,7 +3185,7 @@ def build_email(snap, override_team=None):
             _ref_label = refreshed
         _data_badge = (
             f'<span style="color:{YELLOW};font-size:10px;font-weight:600;margin-left:10px;vertical-align:middle;">'
-            f'&#9888;&thinsp;data from {_ref_label} &mdash; run a refresh for today\'s matchup</span>'
+            f'&#9888;&thinsp;data from {_ref_label}{_clock_suffix} &mdash; run a refresh for today\'s matchup</span>'
         )
 
     # Jump-to nav lives in the header's top-right (a two-column table keeps it email-safe;
@@ -3302,8 +3360,15 @@ def build_email(snap, override_team=None):
                     if _kpct_s_top and _kpct_s > 0
                     else (f"{_kpct_s*100:.1f}%" if _kpct_s > 0 else f'<span style="color:{MUTED}">—</span>')
                 )
-                qs_fires_s = bool(qsp and qsp >= 51)
-                k_fires_s  = (_n(r.get("K/IP")) >= 0.90 or _n(r.get("Kpct_P")) >= 0.24) and _n(r.get("IP_per_G")) >= 4.5
+                # Fire on season rate OR the projected game line (see FA-SP note), so the
+                # same pitcher shows identical QS/5K+ badges here and in FA Starting Pitchers.
+                _pv_s = _proj_line_vals(r)
+                _pjs_ip, _pjs_er, _pjs_k = _pv_s if _pv_s else (0, 0, 0)
+                qs_fires_s = bool(qsp and qsp >= 51) or _proj_is_qs(_pjs_ip, _pjs_er)
+                k_fires_s  = (
+                    ((_n(r.get("K/IP")) >= 0.90 or _n(r.get("Kpct_P")) >= 0.24) and _n(r.get("IP_per_G")) >= 4.5)
+                    or _pjs_k >= 5
+                )
                 start_badges = []
                 if _starts_this_week(r, today_str, week_end_str) >= 2:
                     start_badges.append(two_start_badge())
@@ -3474,7 +3539,6 @@ def build_email(snap, override_team=None):
                 day_label = date_str[5:]
             count = len(day_pitchers)
             my_count = my_starts_by_day.get(date_str, 0)
-            thin_day = my_count < 2 and date_str <= week_end_str
             if my_count == 0:
                 my_starts_label, badge_color = "0 my starts", RED
             elif my_count == 1:
@@ -3513,34 +3577,41 @@ def build_email(snap, override_team=None):
                 qsp_color = GREEN if qsp and qsp >= 60 else (TEXT if qsp and qsp >= 40 else MUTED)
                 qsp_str = f'<span style="color:{qsp_color};font-weight:700;">{qsp}%</span>' if qsp else "—"
 
-                # Pickup highlight on thin days — both badges can fire simultaneously
-                qs_fires = bool(qsp and qsp >= 51)
-                k_fires  = (_n(r.get("K/IP")) >= 0.90 or _n(r.get("Kpct_P")) >= 0.24) and _n(r.get("IP_per_G")) >= 4.5
+                # QS / 5K+ badges fire on the pitcher's merit (unconditionally, not
+                # only on thin rotation days) so a strong streamer is flagged wherever
+                # he appears. Each fires on the SEASON rate OR the projected game line,
+                # so a nice proj (6 IP/≤3 ER, or 5+ projected K) always shows a badge.
+                _pv = _proj_line_vals(r)
+                _pj_ip, _pj_er, _pj_k = _pv if _pv else (0, 0, 0)
+                qs_fires = bool(qsp and qsp >= 51) or _proj_is_qs(_pj_ip, _pj_er)
+                k_fires  = (
+                    ((_n(r.get("K/IP")) >= 0.90 or _n(r.get("Kpct_P")) >= 0.24) and _n(r.get("IP_per_G")) >= 4.5)
+                    or _pj_k >= 5
+                )
                 pickup_badges = []
                 name_border = ""
-                if thin_day or date_str > week_end_str:
-                    if qs_fires:
-                        pickup_badges.append(
-                            f'<span style="font-size:9px;font-weight:700;color:{GREEN};'
-                            f'background:rgba(34,197,94,0.12);border:1px solid rgba(34,197,94,0.35);'
-                            f'border-radius:3px;padding:1px 5px;margin-left:5px;vertical-align:middle;">QS</span>'
-                        )
-                    if k_fires:
-                        pickup_badges.append(
-                            f'<span style="font-size:9px;font-weight:700;color:{YELLOW};'
-                            f'background:rgba(245,158,11,0.12);border:1px solid rgba(245,158,11,0.35);'
-                            f'border-radius:3px;padding:1px 5px;margin-left:5px;vertical-align:middle;">5K+</span>'
-                        )
-                    if qs_fires and k_fires:
-                        # Half green (top) / half yellow (bottom)
-                        name_border = (
-                            f"background-image:linear-gradient(to bottom,{GREEN} 50%,{YELLOW} 50%);"
-                            f"background-size:3px 100%;background-repeat:no-repeat;background-position:0 0;"
-                        )
-                    elif qs_fires:
-                        name_border = f"border-left:3px solid {GREEN};"
-                    elif k_fires:
-                        name_border = f"border-left:3px solid {YELLOW};"
+                if qs_fires:
+                    pickup_badges.append(
+                        f'<span style="font-size:9px;font-weight:700;color:{GREEN};'
+                        f'background:rgba(34,197,94,0.12);border:1px solid rgba(34,197,94,0.35);'
+                        f'border-radius:3px;padding:1px 5px;margin-left:5px;vertical-align:middle;">QS</span>'
+                    )
+                if k_fires:
+                    pickup_badges.append(
+                        f'<span style="font-size:9px;font-weight:700;color:{YELLOW};'
+                        f'background:rgba(245,158,11,0.12);border:1px solid rgba(245,158,11,0.35);'
+                        f'border-radius:3px;padding:1px 5px;margin-left:5px;vertical-align:middle;">5K+</span>'
+                    )
+                if qs_fires and k_fires:
+                    # Half green (top) / half yellow (bottom)
+                    name_border = (
+                        f"background-image:linear-gradient(to bottom,{GREEN} 50%,{YELLOW} 50%);"
+                        f"background-size:3px 100%;background-repeat:no-repeat;background-position:0 0;"
+                    )
+                elif qs_fires:
+                    name_border = f"border-left:3px solid {GREEN};"
+                elif k_fires:
+                    name_border = f"border-left:3px solid {YELLOW};"
                 pickup_badge = "".join(pickup_badges)
                 # Two-start flag always shows — a 2-start FA is a top streaming target
                 two_start_html = two_start_badge() if _starts_this_week(r, today_str, week_end_str) >= 2 else ""

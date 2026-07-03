@@ -16,7 +16,7 @@ import re
 import sys
 import unicodedata
 import warnings
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pandas as pd
@@ -1408,7 +1408,7 @@ def main():
 
     print("\n[10/10] Writing snapshot...")
     snapshot = {
-        "refreshed_at":    datetime.now().isoformat(),
+        "refreshed_at":    datetime.now(timezone.utc).isoformat(),  # tz-aware (UTC) so the digest can show the fetch time in ET regardless of where it ran (CI is UTC, manual runs local)
         "my_team":         my_team,
         "league_year":     CURRENT_YEAR,
         "standings":       standings,

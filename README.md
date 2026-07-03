@@ -239,9 +239,9 @@ Free agent starters with a confirmed upcoming start, grouped by date with day he
 
 **Day headers** show a ⚑ badge with your start count for that day: red = 0 my starts, yellow = 1, blue = 2+.
 
-**Pickup badges** appear on thin days (< 2 my starts) only. Both can fire simultaneously:
-- 🟢 **QS** badge (green left border) — QS% ≥ 51%; likely quality start
-- 🟡 **5K+** badge (yellow left border) — K/IP ≥ 0.90 or K% ≥ 24%, **and** IP/G ≥ 4.5 (deep enough to rack up strikeouts)
+**Pickup badges** fire on the pitcher's merit for **every** FA start (not only on thin rotation days). Each fires on the season rate **or** his projected line that day, so the badge matches the **Proj. Line** you see. Both can fire simultaneously:
+- 🟢 **QS** badge (green left border) — QS% ≥ 51% **or** a projected quality start (6+ IP & ≤3 ER)
+- 🟡 **5K+** badge (yellow left border) — (K/IP ≥ 0.90 or K% ≥ 24%, **and** IP/G ≥ 4.5) **or** projected K ≥ 5
 - When both fire: left border is green (top half) / yellow (bottom half)
 
 **K% highlight** — top 3 K% values across the table are highlighted yellow.
@@ -259,7 +259,7 @@ Your pitchers with confirmed or projected starts, grouped by date.
 
 **Columns:** Pitcher · **Proj. Line** · Matchup (with opponent OPS on a second line) · QS% · ERA · **L15 ERA** (hot/cold colored) · K% · Score
 
-Badges next to the name: `2-START` (purple), `QS` (green, QS% ≥ 51%), `5K+` (yellow). `(proj.)` = rotation estimate, not yet confirmed by MLB. **K% highlight** — top 3 K% values across the table are highlighted yellow.
+Badges next to the name: `2-START` (purple), `QS` (green — QS% ≥ 51% **or** a projected quality start), `5K+` (yellow — the K-rate threshold **or** projected K ≥ 5). Both QS and 5K+ track the same **Proj. Line** shown for that start, identical to FA Starting Pitchers. `(proj.)` = rotation estimate, not yet confirmed by MLB. **K% highlight** — top 3 K% values across the table are highlighted yellow.
 
 ### My Season Category Rankings
 Season-to-date roto rank across all 12 categories. Same color coding as the weekly version at the top, but for the full season.
