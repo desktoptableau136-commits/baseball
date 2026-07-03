@@ -231,7 +231,7 @@ For each position (C, 1B, 2B, 3B, SS, OF, SP, RP): your weakest rostered player 
 Any injured players on your roster. Only shown if there are active alerts. Color: yellow = DTD, red = IL/OUT.
 
 ### FA Pickup — Starting Pitchers
-Free agent starters with a confirmed upcoming start, grouped by date with day headers. Sorted by composite SP score within each day. Starts past Sunday get a `NEXT WK` badge; a pitcher with ≥ 2 starts in the matchup week gets a green `2-START` chip.
+Free agent starters with a confirmed upcoming start, grouped by date with day headers. Sorted by composite SP score within each day. Starts past Sunday get a `NEXT WK` badge; a pitcher with ≥ 2 starts in the matchup week gets a purple `2-START` chip.
 
 **Columns:** Pitcher · **Proj. Line** · Matchup (with opponent OPS on a second line) · QS% · ERA · **L15 ERA** (hot/cold colored) · K% · Score
 
@@ -259,7 +259,7 @@ Your pitchers with confirmed or projected starts, grouped by date.
 
 **Columns:** Pitcher · **Proj. Line** · Matchup (with opponent OPS on a second line) · QS% · ERA · **L15 ERA** (hot/cold colored) · K% · Score
 
-Badges next to the name: `2-START` (green), `QS` (green, QS% ≥ 51%), `5K+` (yellow). `(proj.)` = rotation estimate, not yet confirmed by MLB. **K% highlight** — top 3 K% values across the table are highlighted yellow.
+Badges next to the name: `2-START` (purple), `QS` (green, QS% ≥ 51%), `5K+` (yellow). `(proj.)` = rotation estimate, not yet confirmed by MLB. **K% highlight** — top 3 K% values across the table are highlighted yellow.
 
 ### My Season Category Rankings
 Season-to-date roto rank across all 12 categories. Same color coding as the weekly version at the top, but for the full season.

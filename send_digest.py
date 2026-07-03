@@ -557,7 +557,7 @@ def two_start_badge():
     """Bold chip flagging a pitcher with two starts inside the matchup week."""
     return (
         f'<span style="font-size:9px;font-weight:800;color:#fff;'
-        f'background:{GREEN};border-radius:3px;padding:1px 5px;margin-left:5px;'
+        f'background:{PURPLE};border-radius:3px;padding:1px 5px;margin-left:5px;'
         f'vertical-align:middle;letter-spacing:.3px;">2-START</span>'
     )
 
@@ -942,6 +942,7 @@ ACCENT   = "#3b82f6"
 GREEN    = "#22c55e"
 RED      = "#ef4444"
 YELLOW   = "#f59e0b"
+PURPLE   = "#a855f7"   # 2-START badge — distinct from green (quality/QS) & yellow (K/5K+)
 
 TH_S = f"padding:8px 10px;background:{SURFACE};color:{MUTED};font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.7px;border-bottom:2px solid {BORDER};white-space:nowrap;"
 TD_S = f"padding:7px 10px;border-bottom:1px solid {BORDER};color:{TEXT};font-size:13px;vertical-align:middle;"

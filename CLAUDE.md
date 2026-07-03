@@ -89,7 +89,7 @@ Two files; one intermediate artifact:
 
 **Weekly matchup is Monday–Sunday:** `week_end_str` is computed as the Sunday of the current week (`today + timedelta(days=6 - today.weekday())`). FA SP sections and My Upcoming Starts show all starts including next week, but dates past Sunday get a `NEXT WK` badge. The KPI "Starts This Week" and Week at a Glance bullets 2 and 3 count/recommend only within the current matchup week — except on Sundays (see below). **Bullet 2 (rotation coverage) scopes both `confirmed` and `thin_days` to `PSP_Date <= week_end`** so its start count matches the "Starts This Week" KPI exactly — `my_starts_by_day` spans this week AND next (two-start rotations push starts into next week), and without the filter bullet 2 showed e.g. 10 while the KPI showed 8.
 
-**Two-start pitchers (`PSP_Dates`):** `fetch_data.py` now preserves a list of ALL upcoming start dates per pitcher (`PSP_Dates`, plus parallel `PSP_HomeVAways`) via `_attach_start_lists` before the one-row-per-pitcher dedup. The scalar `PSP_Date`/`PSP_HomeVAway`/`PSP_Projected` remain the earliest start (unchanged for existing consumers). `_starts_this_week(r, today, week_end)` in send_digest counts entries within the matchup week (falls back to the scalar `PSP_Date` for old snapshots). A pitcher with ≥ 2 starts Mon–Sun gets a bold green `2-START` chip (`two_start_badge()`) in FA SP + My Upcoming Starts, and is preferred (secondary sort key, NOT a score change) in the Week-at-a-Glance best-FA-SP bullet, which appends "×2 starts this week". Note: two-start weeks are only visible when both starts fall in the window — mid-week runs usually show 0 because the +6 rotation pushes the 2nd start into next week; the signal lights up on Mon/Tue runs. Never fold two-start into the 0–100 score (keeps scores normalized).
+**Two-start pitchers (`PSP_Dates`):** `fetch_data.py` now preserves a list of ALL upcoming start dates per pitcher (`PSP_Dates`, plus parallel `PSP_HomeVAways`) via `_attach_start_lists` before the one-row-per-pitcher dedup. The scalar `PSP_Date`/`PSP_HomeVAway`/`PSP_Projected` remain the earliest start (unchanged for existing consumers). `_starts_this_week(r, today, week_end)` in send_digest counts entries within the matchup week (falls back to the scalar `PSP_Date` for old snapshots). A pitcher with ≥ 2 starts Mon–Sun gets a bold **purple** `2-START` chip (`two_start_badge()`, filled `PURPLE` bg / white text — purple so it's distinct from the green QS and yellow 5K+ chips, since 2-START + QS often render side by side) in FA SP + My Upcoming Starts, and is preferred (secondary sort key, NOT a score change) in the Week-at-a-Glance best-FA-SP bullet, which appends "×2 starts this week". Note: two-start weeks are only visible when both starts fall in the window — mid-week runs usually show 0 because the +6 rotation pushes the 2nd start into next week; the signal lights up on Mon/Tue runs. Never fold two-start into the 0–100 score (keeps scores normalized).
 
 **Save-Role Watch (`save_role_watch`):** SVHD is the most volatile category. **Recent holds are NOT available anywhere in the pipeline** — per-window (`Dataset` 7/15/30) `SVHD` captures recent SAVES only (FantasyPros windows have no HLD), and ESPN exposes only season totals (no rolling 15-day split — verified: `pl.stats` has keys 0/98/99, none a usable window). So recency is save-only. The function flags (a) **emerging FA closers** — FA RP with ≥ 3 saves in the last 15 days — and (b) **fading rostered closers** — my RP gated on **season saves `ESPN_SV` ≥ 5** (a real closer) with 0 recent saves despite pitching (≥ 3 recent appearances). The fading side is gated on season *saves*, not SV+H, specifically so a holds-based reliever (e.g. JoJo Romero: 0 SV / 20 HLD — whose recent hold production we can't see) is never falsely flagged as fading. Rendered as a callout appended to the FA Relief Pitchers section.
 
@@ -210,15 +210,17 @@ Five bands separated by full-width `band_divider()` rules (centered label betwee
 
 **`--team` flag:** `python send_digest.py --team "Team Name"` shows a full digest from another team's perspective. All sections render correctly including Category Pulse and Matchup score banner. Requires a fresh snapshot (run `fetch_data.py` first) since `all_matchups` must be present. Falls back to `current_matchup` (Guerrero Warfare only) for old snapshots. `build_matchup_section` accepts `my_team` param (default `MY_TEAM` constant) so it renders the correct team name and logo.
 
-**My Upcoming Starts badges:** `2-START` (green, when `_starts_this_week ≥ 2`), QS (green) and 5K+ (yellow) badges shown next to pitcher name. QS fires at qs_probability ≥ 51%; 5K+ fires at K/IP ≥ 0.90 or K% ≥ 24% with IP/G ≥ 4.5.
+**My Upcoming Starts badges:** `2-START` (purple, when `_starts_this_week ≥ 2`), QS (green) and 5K+ (yellow) badges shown next to pitcher name. QS fires at qs_probability ≥ 51%; 5K+ fires at K/IP ≥ 0.90 or K% ≥ 24% with IP/G ≥ 4.5.
 
 ## Color palette
 
 ```python
 BG="#080e1c"  SURFACE="#101827"  SURFACE2="#0d1424"  BORDER="#1e2d45"
 TEXT="#e2e8f0"  MUTED="#64748b"  ACCENT="#3b82f6"
-GREEN="#22c55e"  RED="#ef4444"  YELLOW="#f59e0b"
+GREEN="#22c55e"  RED="#ef4444"  YELLOW="#f59e0b"  PURPLE="#a855f7"
 ```
+
+`PURPLE` is used only for the `2-START` badge (distinct from green quality/yellow K badges).
 
 My team name is always styled `font-weight:800;color:{ACCENT}` with a ← arrow.
 
