@@ -3174,7 +3174,7 @@ def build_email(snap, override_team=None):
     _clock_suffix = f" at {refreshed_clock}" if refreshed_clock else ""
     if _data_fresh:
         _data_badge = (
-            f'<span style="color:{MUTED};font-size:8px;margin-left:10px;vertical-align:middle;">'
+            f'<span style="color:{MUTED};font-size:7px;margin-left:10px;vertical-align:middle;">'
             f'&#10003;&thinsp;data as of today{_clock_suffix}</span>'
         )
     else:
@@ -3184,7 +3184,7 @@ def build_email(snap, override_team=None):
         except Exception:
             _ref_label = refreshed
         _data_badge = (
-            f'<span style="color:{YELLOW};font-size:8px;font-weight:600;margin-left:10px;vertical-align:middle;">'
+            f'<span style="color:{YELLOW};font-size:7px;font-weight:600;margin-left:10px;vertical-align:middle;">'
             f'&#9888;&thinsp;data from {_ref_label}{_clock_suffix} &mdash; run a refresh for today\'s matchup</span>'
         )
 
