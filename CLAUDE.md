@@ -74,7 +74,7 @@ Two files; one intermediate artifact:
 - ⚡ (close) and flip indicators (▲▼◆) live in an `position:absolute` top-right corner badge, not inline with the status or projection text. The card div is `position:relative`.
 - Flip uses `round(pm, dec)` / `round(po, dec)` (display precision) for outcome comparison — raw floats cause false flips when both round to the same displayed value.
 - Flip arrow: ▲ green = projecting to flip to a win; ▼ red = projecting to flip to a loss; ◆ white = projecting to flip to a tie.
-- Summary line shows W · L · T (T only appended when at least one category is tied).
+- Summary line shows the current record then the projected record, each as full **W · L · T** (the T is always shown, even at `0T`, on both sides — the user wants to see the zero, not have it omitted): `10W · 2L · 0T · ⚡N close → proj 11W · 1L · 0T`. The `⚡N close` segment still only appears when at least one category is close.
 - Card value (`my score` / `vs opp`) is stacked on two lines (score block + "vs X" below) so decimal-heavy stats (OPS/ERA/WHIP) don't cause width or height inconsistency across the row.
 
 **My Season Category Rankings** (section 14) subtitle shows a pseudo-single-week roto score: `sum(n - rank + 1 for rank in cats.values())` — same scale as a weekly roto score, max = n × 12. Directly comparable to the "This Week's Category Rankings" subtitle score.

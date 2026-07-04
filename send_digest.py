@@ -2297,12 +2297,9 @@ def build_category_pulse(matchup, weekly_avgs=None, days_elapsed=None, remaining
         f'<span style="color:{GREEN};font-weight:700;">{wins_count}W</span>'
         f'<span style="color:{MUTED};margin:0 4px;">·</span>'
         f'<span style="color:{RED};font-weight:700;">{losses_count}L</span>'
+        f'<span style="color:{MUTED};margin:0 4px;">·</span>'
+        f'<span style="color:{TEXT};font-weight:700;">{ties_count}T</span>'
     )
-    if ties_count:
-        summary += (
-            f'<span style="color:{MUTED};margin:0 4px;">·</span>'
-            f'<span style="color:{TEXT};font-weight:700;">{ties_count}T</span>'
-        )
     if close_count:
         summary += (
             f'<span style="color:{MUTED};margin:0 4px;">·</span>'
@@ -2320,12 +2317,9 @@ def build_category_pulse(matchup, weekly_avgs=None, days_elapsed=None, remaining
             f'<span style="color:{pw_col};font-weight:600;">{proj_w}W</span>'
             f'<span style="color:{MUTED};margin:0 4px;">·</span>'
             f'<span style="color:{pl_col};font-weight:600;">{proj_l}L</span>'
+            f'<span style="color:{MUTED};margin:0 4px;">·</span>'
+            f'<span style="color:{TEXT}88;font-weight:600;">{proj_t}T</span>'
         )
-        if proj_t:
-            summary += (
-                f'<span style="color:{MUTED};margin:0 4px;">·</span>'
-                f'<span style="color:{TEXT}88;font-weight:600;">{proj_t}T</span>'
-            )
 
     return (
         section_head(f"Category Pulse — Week {week}", f"vs. {opp} · {'Final stretch — week ends today' if is_sunday else '⚡ = within striking distance'}") +
