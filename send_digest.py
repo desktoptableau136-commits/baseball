@@ -1132,9 +1132,17 @@ def _hitter_score_breakdown(r, idx_recent=None):
         if rec:
             rs = hitter_score(rec)
             if rs > 0:
+                ds  = int(_n(rec.get("Dataset")) or 0)
+                win = f"{ds}-day" if ds in (7, 15, 30) else "7-day"
                 tag = "hot" if rs > season else ("cold" if rs < season else "steady")
-                html += (f' Recent form {rs} ({tag}) → shown blends '
+                html += (f' {win} form {rs} ({tag}) → shown blends '
                          f'{round((1 - _BLEND_W) * 100)}% season / {round(_BLEND_W * 100)}% recent.')
+    hrp = _n(r.get("HR_Probability"))
+    if hrp > 0:
+        drivers = _hrp_driver_str(r)
+        line = f'HR% {hrp * 100:.0f}% modeled per-game HR probability'
+        line += f' ({drivers})' if drivers else ''
+        html += f'<div style="margin-top:6px;color:{MUTED};">{line}</div>'
     return html
 
 
@@ -1157,8 +1165,10 @@ def _pitcher_score_breakdown(r, idx_recent=None):
         if rec:
             rs = pitcher_score(rec)
             if rs > 0:
+                ds  = int(_n(rec.get("Dataset")) or 0)
+                win = f"{ds}-day" if ds in (7, 15, 30) else "15-day"
                 tag = "hot" if rs > season else ("cold" if rs < season else "steady")
-                html += (f' Recent form {rs} ({tag}) → shown blends '
+                html += (f' {win} form {rs} ({tag}) → shown blends '
                          f'{round((1 - _BLEND_W) * 100)}% season / {round(_BLEND_W * 100)}% recent.')
     return html
 
@@ -1336,6 +1346,21 @@ def vp(val):
         return f'<span style="color:{MUTED}">—</span>'
 
 
+def _hrp_driver_str(row):
+    """The HR-probability drivers (Barrel% · HardHit% · EV · xwOBA · ISO) as a joined
+    string, or "" when none are present. Single source for the HR% hover tooltip and
+    the expanded score-breakdown panel (so touch users see the same drivers)."""
+    b, hh, xw, ev, iso = (_n(row.get("Barrel_Pct")), _n(row.get("HardHit_Pct")),
+                          _n(row.get("xwOBA")), _n(row.get("MaxEV")), _n(row.get("ISO")))
+    parts = []
+    if b > 0:   parts.append(f"Barrel {b:.1f}%")
+    if hh > 0:  parts.append(f"HardHit {hh:.0f}%")
+    if ev > 0:  parts.append(f"EV {ev:.0f}")
+    if xw > 0:  parts.append(f"xwOBA {xw:.3f}")
+    if iso > 0: parts.append(f"ISO {iso:.3f}")
+    return " · ".join(parts)
+
+
 def _hrp_cell(row):
     """Colored HR% cell from the modeled per-game HR probability (HR_Probability,
     a Statcast contact-quality model). Hover shows the underlying drivers.
@@ -1345,15 +1370,7 @@ def _hrp_cell(row):
         return f'<span style="color:{MUTED};" title="No Statcast contact data — batter has too few batted balls for a model">—</span>'
     c = GREEN if hrp >= 0.20 else (YELLOW if hrp >= 0.14 else MUTED)
     # Underlying drivers as a hover tooltip (renders in the attachment; harmless inline)
-    b, hh, xw, ev, iso = (_n(row.get("Barrel_Pct")), _n(row.get("HardHit_Pct")),
-                          _n(row.get("xwOBA")), _n(row.get("MaxEV")), _n(row.get("ISO")))
-    parts = []
-    if b > 0:   parts.append(f"Barrel {b:.1f}%")
-    if hh > 0:  parts.append(f"HardHit {hh:.0f}%")
-    if ev > 0:  parts.append(f"EV {ev:.0f}")
-    if xw > 0:  parts.append(f"xwOBA {xw:.3f}")
-    if iso > 0: parts.append(f"ISO {iso:.3f}")
-    title = " · ".join(parts) or "modeled HR probability"
+    title = _hrp_driver_str(row) or "modeled HR probability"
     return (f'<span title="{title}" style="color:{c};font-weight:700;'
             f'border-bottom:1px dotted {MUTED};cursor:help;">{hrp*100:.0f}%</span>')
 
@@ -2874,7 +2891,11 @@ def build_glossary_section():
                "explains, in plain English, the 2-3 drivers behind the number (e.g. &ldquo;carried "
                "by swing-and-miss and a low WHIP; held back by hard contact&rdquo;) plus the "
                "season-vs-recent blend — so you can see <i>why</i> two similar-looking players score "
-               "differently. Works in the browser-opened attachment; the ▾ caret marks a tappable "
+               "differently. The recent-form line names its actual window (e.g. “30-day form (cold)”), "
+               "which is a broader window than the L7/L15 Hot/Cold column beside it — so a bat can be "
+               "🔥 this week yet read “cold” on the longer composite. Hitter panels also list the HR% "
+               "drivers on their own line (so touch users get them without hovering). Works in the "
+               "browser-opened attachment; the ▾ caret marks a tappable "
                "badge, and the ✕ (or tapping another badge) closes it."),
         _entry("Starting-pitcher score",
                "K% (blended with Baseball Savant whiff percentile) + run prevention (ERA blended with "
@@ -2920,7 +2941,8 @@ def build_glossary_section():
         _entry("Barrel% / HardHit% / EV", "Quality-of-contact: barrels (ideal EV+angle), balls hit "
                "≥95 mph, and average exit velocity. Higher is better for a hitter."),
         _entry("HR%", "Modeled per-game home-run probability from barrel%, hard-hit%, launch angle, "
-               "HR/AB, xwOBA, ISO and recent HR streak. Green ≥20%, yellow ≥14%. Hover shows the drivers."),
+               "HR/AB, xwOBA, ISO and recent HR streak. Green ≥20%, yellow ≥14%. Hover shows the drivers "
+               "(also listed in the hitter's expanded Score panel for touch devices)."),
         _entry("Sprint speed / ISO", "Statcast sprint speed (ft/sec, a steals/​range signal) and Isolated "
                "Power (SLG − AVG, extra-base power)."),
     ])

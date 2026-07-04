@@ -219,7 +219,7 @@ Your rostered relievers, showing season SV+H / K / W (from ESPN) plus ERA/WHIP f
 Your rostered pitchers sorted hottest → coldest. Compares **last-15-day ERA** to season ERA (15 days, not 7 — starters pitch too infrequently for a 7-day window to be meaningful). Includes a role-aware **Score** badge.
 
 ### Roster Hot/Cold
-Your rostered **hitters** sorted hottest → coldest. Compares last-7-day OPS to season OPS. Includes an **HR%** column (modeled per-game home-run probability, hover for drivers) and a **Score** badge.
+Your rostered **hitters** sorted hottest → coldest. Compares last-7-day OPS to season OPS. Includes an **HR%** column (modeled per-game home-run probability, hover for drivers — also listed inside the expanded Score panel for touch devices) and a **Score** badge. Tapping the Score badge shows a breakdown whose recent-form line names its window (e.g. "30-day form") — a broader window than this L7 column, so a bat can be 🔥 here yet read "cold" on the composite.
 - 🔥 = OPS up +0.050 or more
 - ↑ = OPS up +0.015 to +0.050
 - ↓ = OPS down -0.015 to -0.050
