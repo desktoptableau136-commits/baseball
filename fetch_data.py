@@ -225,6 +225,7 @@ def get_pitcher_roster(league) -> pd.DataFrame:
                     "FantasyTeam": tm.team_name,
                     "Position":    ", ".join(slots),
                     "ESPN_Status": pl.injuryStatus or "ACTIVE",
+                    "ESPN_OnIL":   getattr(pl, "lineupSlot", "") == "IL",
                 })
     df = pd.DataFrame(rows).drop_duplicates(subset="PlayerName")
     return apply_name_patches(df, PITCHER_NAME_PATCHES)
@@ -280,6 +281,7 @@ def get_hitter_roster(league) -> pd.DataFrame:
                     "FantasyTeam": tm.team_name,
                     "Position":    ", ".join(slots),
                     "ESPN_Status": pl.injuryStatus or "ACTIVE",
+                    "ESPN_OnIL":   getattr(pl, "lineupSlot", "") == "IL",
                 })
     df = pd.DataFrame(rows).drop_duplicates(subset="PlayerName")
     return apply_name_patches(df, HITTER_NAME_PATCHES)
@@ -936,8 +938,13 @@ def build_pitcher_data(league) -> list:
     # Merge roster (brings FantasyTeam + Position + ESPN_Status), then FA status separately
     # FA_Position avoids Position_x / Position_y collision. merge_on_name adds an
     # accent/suffix-insensitive fallback so ESPN 'Luis García Jr.' matches FP 'Luis Garcia'.
-    merged = merge_on_name(fp, roster_df, ["PlayerName", "FantasyTeam", "Position", "ESPN_Status"])
+    merged = merge_on_name(fp, roster_df, ["PlayerName", "FantasyTeam", "Position", "ESPN_Status", "ESPN_OnIL"])
     merged["ESPN_Status"] = merged["ESPN_Status"].fillna("")
+    # ESPN_OnIL: True only for a rostered player sitting in an IL lineup slot (dropping
+    # them frees no active/bench room). Unmatched (FP-only / FA) rows default to False.
+    # Keep native python bools (not .astype(bool) → numpy bool_, which json's default=str
+    # would stringify to the *truthy* "False").
+    merged["ESPN_OnIL"] = merged.get("ESPN_OnIL", False).fillna(False)
     merged = merge_on_name(merged, fa_df, ["PlayerName", "FreeAgentInjuryStatus", "FA_Position"])
 
     # Coalesce position: ESPN roster â†’ ESPN FA â†’ FantasyPros player string
@@ -1052,7 +1059,11 @@ def build_hitter_data(league) -> list:
 
     # Same pattern: avoid Position_x / Position_y collision. merge_on_name adds the
     # accent/suffix-insensitive fallback (FP 'Luis Garcia' ↔ ESPN 'Luis García Jr.').
-    merged = merge_on_name(fp, roster_df, ["PlayerName", "FantasyTeam", "Position"])
+    merged = merge_on_name(fp, roster_df, ["PlayerName", "FantasyTeam", "Position", "ESPN_OnIL"])
+    # ESPN_OnIL: True only for a rostered player sitting in an IL lineup slot (dropping
+    # them frees no active/bench room). Unmatched (FP-only / FA) rows default to False.
+    # Keep native python bools (see build_pitcher_data note on json default=str).
+    merged["ESPN_OnIL"] = merged.get("ESPN_OnIL", False).fillna(False)
     merged = merge_on_name(merged, fa_df, ["PlayerName", "FreeAgentInjuryStatus", "FA_Position"])
 
     merged["Position"] = merged["Position"].fillna("").str.strip()

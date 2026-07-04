@@ -186,11 +186,12 @@ Two-row panel at the top of every digest. Your team logo appears next to the tea
 - **Luck** — Roto rank minus record rank. Positive = your W-L is better than your underlying stats deserve; negative = underperforming your true quality.
 
 ### Week at a Glance
-Three-bullet summary placed directly above the category rankings grid:
+Four-bullet summary placed directly above the category rankings grid:
 
 1. **Week record** — current W-L-T vs. this week's opponent through the current day, with the categories you're winning (green) and trailing (red) called out.
 2. **Rotation coverage** — confirmed start count and days covered; flags thin days (< 2 my starts) by day-of-week so you know where to add from FA.
 3. **Top FA pickup** — best available FA starter by QS%, with their next start day and QS%. If the highest-score and highest-QS pitchers differ, both are mentioned.
+4. **Pickup: Add / Drop** — a concrete **hitter** add (pitcher streaming is already covered by bullets 2–3 and the FA Starting Pitchers table) paired with a position-aware drop. The drop never targets an injured player sitting in one of your **2 IL roster slots** — those slots don't take up active/bench room, so cutting them frees nothing (a DL player on your *bench* can still be the drop, since that *does* free a spot).
 
 ### Current Matchup (category rankings)
 Your roto rank (out of 12 teams) in each of the 12 scoring categories for the **current matchup week only**. Green = top 3, red = bottom half.
@@ -225,7 +226,7 @@ Your rostered **hitters** sorted hottest → coldest. Compares last-7-day OPS to
 - ❄ = OPS down -0.050 or more
 
 ### Positional Breakdown
-For each position (C, 1B, 2B, 3B, SS, OF, SP, RP): your weakest rostered player vs. the best available FA at that position. **↑** = the FA is a meaningful upgrade.
+For each position (C, 1B, 2B, 3B, SS, OF, SP, RP): your weakest rostered player vs. the best available FA at that position. **↑** = the FA is a meaningful upgrade. A player parked in one of your 2 IL roster slots is never surfaced as the weakest/drop candidate (cutting them frees no active or bench room).
 
 ### Roster Alerts
 Any injured players on your roster. Only shown if there are active alerts. Color: yellow = DTD, red = IL/OUT.

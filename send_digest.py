@@ -100,6 +100,17 @@ def _is_healthy(r):
     return not bool(_get_injury_status(r))
 
 
+def _on_il(r):
+    """True if the player occupies one of the league's dedicated IL roster slots.
+    League has 2 IL slots that don't consume active/bench room, so dropping such a
+    player frees nothing usable — never suggest it. ESPN_OnIL is a native bool from
+    fetch_data (lineupSlot == 'IL'); guard against a stringified value just in case."""
+    v = r.get("ESPN_OnIL")
+    if isinstance(v, str):
+        return v.strip().lower() == "true"
+    return bool(v)
+
+
 def _n(val):
     """Coerce to float, return 0 for falsy/negative sentinel values."""
     try:
@@ -788,10 +799,14 @@ def positional_breakdown(pitchers, hitters, my_team, best_recent_p=None, best_re
 
         top3 = [r["_pscore"] for r in fa[:3]]
         fa_quality = sum(top3) / len(top3) if top3 else 0
+        # Weakest player is an implicit drop/replace target, so skip anyone parked in an
+        # IL slot — cutting them frees no active/bench room. Fall back to the full list
+        # only if every player at the position is on IL.
+        drop_pool = [r for r in my_p if not _on_il(r)] or my_p
         results.append({
             "pos":          pos_label,
             "ptype":        ptype,
-            "worst_player": my_p[-1] if my_p else None,
+            "worst_player": drop_pool[-1] if drop_pool else None,
             "my_avg":       round(my_avg, 1),
             "rank":         rank,
             "n_teams":      n,
@@ -2441,25 +2456,19 @@ def _roster_suggestion(matchup, pitchers, hitters, fa_sp, fa_rp, fa_hit,
 
     losing_pit = losing_cats & _PIT_CATS
     losing_hit = losing_cats & _HIT_CATS
-    focus_pit  = len(losing_pit) >= len(losing_hit)
+    # Week-at-a-Glance bullet 4 is dedicated to a NON-PITCHER (hitter) pickup — pitcher
+    # streaming is already covered by My Upcoming Starts / FA Starting Pitchers, so this
+    # bullet always steers to the bats. (Was: focus_pit = len(losing_pit) >= len(losing_hit).)
+    focus_pit  = False
 
     # ── ADD / DROP ────────────────────────────────────────────────────────────
     add_candidate = drop_candidate = None
     add_reason    = ""
 
-    # Determine what to ADD based on losing categories
-    if focus_pit:
-        only_svhd = losing_pit == {"SVHD"}
-        if only_svhd:
-            fa_pool    = sorted(fa_rp, key=lambda r: _score_p(r, best_recent_p), reverse=True)
-            add_reason = "SV+H gap"
-        else:
-            fa_pool    = sorted(fa_sp, key=lambda r: _score_p(r, best_recent_p), reverse=True)
-            sp_losing  = losing_pit - {"SVHD"}
-            add_reason = "/".join(_CAT_DISPLAY.get(c, c) for c in sorted(sp_losing)) + " gap"
-    else:
-        fa_pool    = sorted(fa_hit, key=lambda r: _blend(r, hitter_score, best_recent_h), reverse=True)
-        add_reason = "/".join(_CAT_DISPLAY.get(c, c) for c in sorted(losing_hit)) + " gap"
+    # Always recommend the best available hitter — target our losing bat categories when
+    # any, else frame it as general bat depth (we may be losing only pitching cats).
+    fa_pool    = sorted(fa_hit, key=lambda r: _blend(r, hitter_score, best_recent_h), reverse=True)
+    add_reason = ("/".join(_CAT_DISPLAY.get(c, c) for c in sorted(losing_hit)) + " gap") if losing_hit else "bat depth"
     add_candidate = fa_pool[0] if fa_pool else None
 
     # Determine what to DROP: weakest rostered player who won't strand a position.
@@ -2498,6 +2507,10 @@ def _roster_suggestion(matchup, pitchers, hitters, fa_sp, fa_rp, fa_hit,
 
     def _can_drop(cand):
         """True if dropping cand leaves at least one healthy player at every position it fills."""
+        # Never drop a player parked in a dedicated IL slot — those 2 slots don't take up
+        # active/bench room, so cutting them frees nothing usable.
+        if _on_il(cand):
+            return False
         cand_name = cand.get("PlayerName", "")
         for _, slots, ptype in POS_GROUPS:
             if not (_pos_tags(cand) & slots):
