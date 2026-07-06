@@ -83,7 +83,8 @@ Returns `{cat: (proj_res, tier)}` reusing Category Pulse's projection math (`_pr
 
 ### Category Pulse
 - Tied cats use `TEXT` (#e2e8f0, white) for border/value/status — not `YELLOW`. Win=green, loss=red, tie=white.
-- ⚡ (close) and flip indicators (▲▼◆) live in a `position:absolute` top-right corner badge, not inline. Card div is `position:relative`.
+- ⚡ (toss-up) and flip indicators (▲▼◆) live in a `position:absolute` top-right corner badge, not inline. Card div is `position:relative`.
+- **⚡ = win-% toss-up, NOT a current-margin close.** A card gets a ⚡ (yellow) when its `win_pct` is in the `_TOSSUP_LO.._TOSSUP_HI` band (45–55) — i.e. exactly when the % chip is a coin-flip — collected per-card into `close_flags` which drives the summary `⚡N close` count. This replaced the old `res in ("W","L") and margin <= _CLOSE_THRESH` test, which stayed blank on Mon (all cats tied 0-0) and duplicated the closeness signal the % already carries. `_CLOSE_THRESH` is still used elsewhere (sigma fallback in `_cat_win_prob`, `classify_categories` tossup tier) — just not for the card ⚡.
 - Flip uses `round(pm, dec)` / `round(po, dec)` (display precision) — raw floats cause false flips when both round to the same displayed value. ▲ green = flip to win; ▼ red = flip to loss; ◆ white = flip to tie.
 - Summary line: current record then projected, each as full **W · L · T** (the T is always shown, even at `0T`, on both sides): `10W · 2L · 0T · ⚡N close → proj 11W · 1L · 0T`. The `⚡N close` segment appears only when ≥ 1 cat is close.
 - Card value (`my score` / `vs opp`) stacked on two lines so decimal-heavy stats (OPS/ERA/WHIP) don't cause width/height inconsistency.

@@ -1995,6 +1995,10 @@ _CLOSE_THRESH = {
     "K": 8, "QS": 2, "W": 2, "ERA": 0.30, "WHIP": 0.08, "SVHD": 3,
 }
 
+# Win-% band that reads as a toss-up — drives the ⚡ on Category Pulse cards, kept in
+# sync with the % chip so a bolt appears exactly when the odds are near even.
+_TOSSUP_LO, _TOSSUP_HI = 45, 55
+
 _HIT_CATS = {"R", "HR", "RBI", "SB", "OPS", "B_SO"}
 _PIT_CATS = {"K", "QS", "W",   "ERA", "WHIP", "SVHD"}
 
@@ -2216,6 +2220,7 @@ def build_category_pulse(matchup, weekly_avgs=None, days_elapsed=None, remaining
     opp_std  = (weekly_std or {}).get(opp_team_key, {})
     has_proj = bool(my_avgs and opp_avgs)
     proj_results = []
+    close_flags  = []   # per-card toss-up flag (win% in the _TOSSUP band) → summary count
 
     def _card(c):
         cat   = c["cat"]
@@ -2231,9 +2236,6 @@ def build_category_pulse(matchup, weekly_avgs=None, days_elapsed=None, remaining
             border_c, val_c, status, status_c = RED,    RED,    "LOSING",  RED
         else:
             border_c, val_c, status, status_c = TEXT,   TEXT,   "TIED",    TEXT
-
-        margin = abs(my_v - opp_v)
-        is_close = res in ("W", "L") and margin <= _CLOSE_THRESH.get(cat, 999)
 
         # Bar: % filled = my share of the total; invert for lower-is-better
         total = my_v + opp_v
@@ -2289,18 +2291,23 @@ def build_category_pulse(matchup, weekly_avgs=None, days_elapsed=None, remaining
                 f'</div>'
             )
 
-        # Top-right corner badge: WIN % · ⚡ (close) · ▲▼ (flip)
+        # ⚡ = toss-up: win odds near even, so it appears exactly when the % chip is a
+        # coin-flip (replaces the old current-margin closeness, which stayed blank until
+        # games were played). Summary "N close" counts these.
+        is_close = win_pct is not None and _TOSSUP_LO <= win_pct <= _TOSSUP_HI
+        close_flags.append(is_close)
+
+        # Top-right corner badge: WIN % · ⚡ (toss-up) · ▲▼ (flip)
         corner_parts = []
         if win_pct is not None:
             # Color the confidence % to match the projected outcome (green = proj win,
             # red = proj loss, white = proj tie) — it always agrees in direction.
             wp_c = GREEN if proj_res == "W" else (RED if proj_res == "L" else TEXT)
             corner_parts.append(
-                f'<span style="color:{wp_c};font-weight:800;font-size:9px;">{win_pct}%</span>'
+                f'<span style="color:{wp_c};font-weight:400;font-size:8px;">{win_pct}%</span>'
             )
         if is_close:
-            close_c = GREEN if res == "W" else RED
-            corner_parts.append(f'<span style="color:{close_c};">⚡</span>')
+            corner_parts.append(f'<span style="color:{YELLOW};">⚡</span>')
         if flip:
             if proj_res == "W":
                 flip_c, flip_arrow = GREEN, "▲"
@@ -2361,10 +2368,7 @@ def build_category_pulse(matchup, weekly_avgs=None, days_elapsed=None, remaining
     wins_count   = sum(1 for c in matchup["categories"] if c["result"] == "W")
     losses_count = sum(1 for c in matchup["categories"] if c["result"] == "L")
     ties_count   = sum(1 for c in matchup["categories"] if c["result"] == "T")
-    close_count  = sum(
-        1 for c in matchup["categories"]
-        if c["result"] in ("W", "L") and abs(c["my_val"] - c["opp_val"]) <= _CLOSE_THRESH.get(c["cat"], 999)
-    )
+    close_count  = sum(close_flags)
     summary = (
         f'<span style="color:{GREEN};font-weight:700;">{wins_count}W</span>'
         f'<span style="color:{MUTED};margin:0 4px;">·</span>'
@@ -2394,7 +2398,7 @@ def build_category_pulse(matchup, weekly_avgs=None, days_elapsed=None, remaining
         )
 
     return (
-        section_head(f"Category Pulse — Week {week}", f"vs. {opp} · {'Final stretch — week ends today' if is_sunday else '⚡ = within striking distance · % = win odds'}") +
+        section_head(f"Category Pulse — Week {week}", f"vs. {opp} · {'Final stretch — week ends today' if is_sunday else '% = win odds · ⚡ = toss-up'}") +
         f'<div style="margin-bottom:8px;font-size:12px;">{summary}</div>' +
         table
     )
@@ -3014,7 +3018,7 @@ def build_glossary_section():
     ])
     proj = _group("Projections & matchup", [
         _entry("Category Pulse cards", "Per-category snapshot of the current week: your value vs the "
-               "opponent, who's winning, and whether it's within striking distance (⚡)."),
+               "opponent, who's winning, and whether the odds are a toss-up (⚡ = win % near even)."),
         _entry("Projected values & flip arrows", "“proj” is the end-of-week estimate — for K/QS/W it uses "
                "your actual remaining starts × per-start rate; other cats use each team's weekly average. "
                "The projection is colored by its <b>projected</b> outcome (green = projected win, red = loss). "
