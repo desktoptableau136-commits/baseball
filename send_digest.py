@@ -2291,23 +2291,29 @@ def build_category_pulse(matchup, weekly_avgs=None, days_elapsed=None, remaining
                 f'</div>'
             )
 
-        # ⚡ = toss-up: win odds near even, so it appears exactly when the % chip is a
-        # coin-flip (replaces the old current-margin closeness, which stayed blank until
+        # ⚡ = toss-up: win odds near even, OR a projected tie (a tie is the closest
+        # possible outcome, so it's always striking distance even when the win% sits
+        # just outside the band — e.g. a low-volume cat projected to tie at 57%). Appears
+        # in sync with the % chip; replaces the old current-margin closeness (blank until
         # games were played). Summary "N close" counts these.
-        is_close = win_pct is not None and _TOSSUP_LO <= win_pct <= _TOSSUP_HI
+        is_close = win_pct is not None and (
+            proj_res == "T" or _TOSSUP_LO <= win_pct <= _TOSSUP_HI
+        )
         close_flags.append(is_close)
 
-        # Top-right corner badge: WIN % · ⚡ (toss-up) · ▲▼ (flip)
+        # Top-right corner badge: ⚡ (toss-up) OR the WIN % · then ▲▼ (flip).
+        # On a toss-up the ⚡ replaces the number — the exact odds don't matter at a
+        # coin-flip, but a decisive % (79% / 9%) is worth showing.
         corner_parts = []
-        if win_pct is not None:
+        if is_close:
+            corner_parts.append(f'<span style="color:{YELLOW};font-size:10px;">⚡</span>')
+        elif win_pct is not None:
             # Color the confidence % to match the projected outcome (green = proj win,
             # red = proj loss, white = proj tie) — it always agrees in direction.
             wp_c = GREEN if proj_res == "W" else (RED if proj_res == "L" else TEXT)
             corner_parts.append(
                 f'<span style="color:{wp_c};font-weight:400;font-size:8px;">{win_pct}%</span>'
             )
-        if is_close:
-            corner_parts.append(f'<span style="color:{YELLOW};">⚡</span>')
         if flip:
             if proj_res == "W":
                 flip_c, flip_arrow = GREEN, "▲"
@@ -3023,11 +3029,12 @@ def build_glossary_section():
                "your actual remaining starts × per-start rate; other cats use each team's weekly average. "
                "The projection is colored by its <b>projected</b> outcome (green = projected win, red = loss). "
                "An arrow marks a flip vs the current standing: ▲ flipping to a win, ▼ to a loss, ◆ to a tie."),
-        _entry("Win %", "The <b>%</b> in each card corner is the odds you win that category, from a "
-               "normal model of the final margin, colored to match the projected outcome (green = "
-               "projected win, red = loss, white = tie). Uncertainty comes from each team's week-to-week "
+        _entry("Win % &amp; ⚡", "The <b>%</b> in each card corner is the odds you win that category, from "
+               "a normal model of the final margin, colored to match the projected outcome (green = "
+               "projected win, red = loss, white = tie). On a toss-up (odds near even, or a projected tie) "
+               "a <b>⚡</b> replaces the number instead. Uncertainty comes from each team's week-to-week "
                "spread in that stat and shrinks for counting cats as the week ends; a category with no "
-               "history yet falls back to its close-threshold. It always agrees in direction with the "
+               "history yet falls back to its close-threshold. The % always agrees in direction with the "
                "“proj” value on the same card."),
         _entry("Luck (standings)", "Roto rank minus record rank. Positive = your W-L is better than your "
                "category performance suggests (running lucky); negative = unlucky."),
