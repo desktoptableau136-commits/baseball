@@ -145,7 +145,7 @@ The digest is organized into labeled **bands**, with a **Jump to** nav in the he
 KPI row: **Record** · **Current Matchup** (W-L-T + win%) · **Roster** (whole-team hot/cold count — hitters *and* pitchers) · **Starts This Week**
 
 **Weekly matchup overview** (top of the email)
-1. **Monday Recap** — *(Mondays only)* last week's final result
+1. **Monday Recap** — *(Mondays only)* last week's final result (per-team via `all_prev_matchups`, so `--team` shows that team's prior week)
 2. **Week at a Glance**
 3. **Category Pulse**
 4. **Opponent This Week** — scouting block for this week's opponent

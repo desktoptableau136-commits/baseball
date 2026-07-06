@@ -1303,8 +1303,11 @@ def get_all_matchups(league) -> dict:
 
 
 
-def get_prev_matchup(league, my_team: str) -> dict:
-    """Return the most recently completed matchup for my_team, same structure as current_matchup."""
+def get_all_prev_matchups(league) -> dict:
+    """Return the most recently completed matchup for ALL teams as
+    {normalized_team_name: matchup_dict} — same structure/keys as get_all_matchups,
+    so send_digest can resolve the prev-week recap per team (--team flag) instead of
+    only for MY_TEAM. Mirrors get_all_matchups but on the previous week."""
     current_week = getattr(league, "currentMatchupPeriod", None)
     prev_week = current_week - 1 if current_week and current_week > 1 else None
     if not prev_week:
@@ -1314,55 +1317,62 @@ def get_prev_matchup(league, my_team: str) -> dict:
     except Exception:
         return {}
 
-    my_team_norm = " ".join(my_team.split())
+    all_prev = {}
     _flip = {"W": "L", "L": "W", "T": "T"}
 
     for b in boxes:
-        home_name = " ".join(b.home_team.team_name.split())
-        away_name = " ".join(b.away_team.team_name.split())
-        if my_team_norm not in (home_name, away_name):
-            continue
-
-        is_home = my_team_norm == home_name
-        my_raw  = (getattr(b, "home_stats", {}) or {}) if is_home else (getattr(b, "away_stats", {}) or {})
-        opp_raw = (getattr(b, "away_stats", {}) or {}) if is_home else (getattr(b, "home_stats", {}) or {})
-        opp_name = away_name if is_home else home_name
+        home_name  = b.home_team.team_name
+        away_name  = b.away_team.team_name
+        home_stats = getattr(b, "home_stats", {}) or {}
+        away_stats = getattr(b, "away_stats", {}) or {}
 
         wins = losses = ties = 0
         cats = []
         for cat in ROTO_CATS:
-            m_info = my_raw.get(cat, {}) or {}
-            o_info = opp_raw.get(cat, {}) or {}
-            m_val  = float(m_info.get("value") or 0)
-            o_val  = float(o_info.get("value") or 0)
+            h_info = home_stats.get(cat, {}) or {}
+            a_info = away_stats.get(cat, {}) or {}
+            h_val  = float(h_info.get("value") or 0)
+            a_val  = float(a_info.get("value") or 0)
 
             # Trust ESPN's own result (applies the ratio-stat IP minimum); see get_all_matchups.
-            espn_res = str(m_info.get("result") or "").upper()
+            espn_res = str(h_info.get("result") or "").upper()
             if espn_res in ("WIN", "LOSS", "TIE"):
                 result = {"WIN": "W", "LOSS": "L", "TIE": "T"}[espn_res]
-            elif m_val == o_val:
+            elif h_val == a_val:
                 result = "T"
             elif cat in LOWER_BETTER:
-                result = "W" if m_val < o_val else "L"
+                result = "W" if h_val < a_val else "L"
             else:
-                result = "W" if m_val > o_val else "L"
+                result = "W" if h_val > a_val else "L"
 
             if result == "W":   wins += 1
             elif result == "L": losses += 1
             else:               ties += 1
 
             cats.append({
-                "cat": cat, "my_val": m_val, "opp_val": o_val,
+                "cat": cat, "my_val": h_val, "opp_val": a_val,
                 "result": result, "lower_better": cat in LOWER_BETTER,
             })
 
-        return {
-            "week": prev_week, "my_team": my_team,
-            "opp_team": opp_name, "wins": wins, "losses": losses, "ties": ties,
-            "categories": cats,
+        all_prev[" ".join(home_name.split())] = {
+            "week": prev_week, "my_team": home_name, "opp_team": away_name,
+            "wins": wins, "losses": losses, "ties": ties, "categories": cats,
+        }
+        away_cats = [
+            {**c, "my_val": c["opp_val"], "opp_val": c["my_val"], "result": _flip[c["result"]]}
+            for c in cats
+        ]
+        all_prev[" ".join(away_name.split())] = {
+            "week": prev_week, "my_team": away_name, "opp_team": home_name,
+            "wins": losses, "losses": wins, "ties": ties, "categories": away_cats,
         }
 
-    return {}
+    return all_prev
+
+
+def get_prev_matchup(league, my_team: str) -> dict:
+    """Return the most recently completed matchup for my_team, same structure as current_matchup."""
+    return get_all_prev_matchups(league).get(" ".join(my_team.split()), {})
 
 
 # â”€â”€ MAIN â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -1406,9 +1416,10 @@ def main():
     my_team = normalized.get(" ".join(MY_TEAM_NAME.split())) or MY_TEAM_NAME or (espn_names[0] if espn_names else "")
 
     print("\n[7/10] Pulling current week matchups...")
-    all_matchups    = get_all_matchups(league)
-    current_matchup = all_matchups.get(" ".join(my_team.split()), {})
-    prev_matchup    = get_prev_matchup(league, my_team)
+    all_matchups      = get_all_matchups(league)
+    current_matchup   = all_matchups.get(" ".join(my_team.split()), {})
+    all_prev_matchups = get_all_prev_matchups(league)
+    prev_matchup      = all_prev_matchups.get(" ".join(my_team.split()), {})
     if current_matchup:
         print(f"       Week {current_matchup['week']}: {my_team} vs {current_matchup['opp_team']} ({current_matchup['wins']}-{current_matchup['losses']}) | {len(all_matchups)} teams indexed")
     else:
@@ -1439,6 +1450,7 @@ def main():
         "current_matchup": current_matchup,
         "prev_matchup":    prev_matchup,
         "all_matchups":    all_matchups,
+        "all_prev_matchups": all_prev_matchups,
         "recent_hitting":  recent_hitting,
         "recent_pitching": recent_pitching,
     }

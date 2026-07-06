@@ -2983,7 +2983,7 @@ def build_email(snap, override_team=None):
     recent_hitting  = snap.get("recent_hitting",  [])
     recent_pitching = snap.get("recent_pitching", [])
     weekly_results  = snap.get("weekly_results",  {})
-    prev_matchup    = snap.get("prev_matchup",    {})
+    prev_matchup    = snap.get("all_prev_matchups", {}).get(" ".join(my_team.split())) or (snap.get("prev_matchup", {}) if not override_team else {})
     rec_h = {r["PlayerName"]: r for r in recent_hitting  if r.get("PlayerName")}
     rec_p = {r["PlayerName"]: r for r in recent_pitching if r.get("PlayerName")}
     p7    = {r["PlayerName"]: r for r in pitchers if int(r.get("Dataset", 0) or 0) == 7  and r.get("PlayerName")}
