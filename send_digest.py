@@ -304,7 +304,8 @@ def pitcher_score(r, _raw=False, _parts=False):
     if _raw:
         return s
     # Calibrate to shared 0-100 scale (p50→50, p90→80) — see recalibrate_scores.py
-    s = s * 1.4341 - 39.957
+    # (recalibrated 2026-07-06)
+    s = s * 1.5070 - 44.3346
     return max(0, min(100, round(s)))
 
 
@@ -563,7 +564,8 @@ def rp_score(r, _raw=False, _parts=False):
     if _raw:
         return s
     # Calibrate to shared 0-100 scale (p50→50, p90→80) — see recalibrate_scores.py
-    s = s * 1.9619 - 43.0286
+    # (recalibrated 2026-07-06)
+    s = s * 1.6543 - 28.0645
     return max(0, min(100, round(s)))
 
 
