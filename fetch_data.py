@@ -713,6 +713,33 @@ def get_savant_pitcher_skill(year: int) -> pd.DataFrame:
         return pd.DataFrame(columns=["PlayerName"])
 
 
+def get_savant_pitcher_whiff(year: int) -> pd.DataFrame:
+    """Raw overall Whiff% from Baseball Savant pitch-arsenal stats (via pybaseball).
+    The arsenal feed is per-pitcher-per-pitch-type; aggregate to one overall rate by
+    pitches-weighting each pitch type's whiff%. DISPLAY-ONLY (a raw swing-and-miss rate,
+    0-100) — must NOT feed pitcher_score, which already uses WhiffPctile for the K
+    component (raw whiff% would double-count). Distinct column WhiffPct vs WhiffPctile."""
+    try:
+        from pybaseball import statcast_pitcher_arsenal_stats, cache
+        cache.enable()
+        raw = statcast_pitcher_arsenal_stats(year)
+        raw = raw[["player_id", "last_name, first_name", "pitches", "whiff_percent"]].copy()
+        raw["pitches"] = pd.to_numeric(raw["pitches"], errors="coerce").fillna(0)
+        raw["whiff_percent"] = pd.to_numeric(raw["whiff_percent"], errors="coerce")
+        raw = raw.dropna(subset=["whiff_percent"])
+        raw["_wp"] = raw["whiff_percent"] * raw["pitches"]
+        agg = raw.groupby(["player_id", "last_name, first_name"], as_index=False).agg(
+            _wp=("_wp", "sum"), pitches=("pitches", "sum"))
+        agg = agg[agg["pitches"] > 0]
+        agg["WhiffPct"] = (agg["_wp"] / agg["pitches"]).round(1)
+        agg["PlayerName"] = agg["last_name, first_name"].apply(lf_to_name)
+        log(f"  Savant pitcher raw whiff%: {len(agg)} pitchers")
+        return agg[["PlayerName", "WhiffPct"]].drop_duplicates("PlayerName")
+    except Exception as e:
+        log(f"  Savant pitcher raw whiff% FAILED: {e}")
+        return pd.DataFrame(columns=["PlayerName"])
+
+
 def get_statcast_expected_stats(year: int) -> pd.DataFrame:
     """xBA, xSLG, xwOBA from Baseball Savant expected stats."""
     try:
@@ -999,6 +1026,9 @@ def build_pitcher_data(league) -> list:
     sk_p = get_savant_pitcher_skill(CURRENT_YEAR)
     if not sk_p.empty:
         merged = merge_on_name(merged, sk_p, list(sk_p.columns))   # suffix/accent-safe
+    wh_p = get_savant_pitcher_whiff(CURRENT_YEAR)   # raw Whiff% — DISPLAY ONLY, not scored
+    if not wh_p.empty:
+        merged = merge_on_name(merged, wh_p, list(wh_p.columns))   # suffix/accent-safe
 
     # Derive approximate K% from FantasyPros K and estimated TBF (K/IP * 9 / K9-to-TBF ratio)
     if "K" in merged.columns and "IP" in merged.columns:

@@ -210,7 +210,7 @@ A summary line above the cards shows your current record and projected end-of-we
 - **NN%** (corner) = your odds of winning that category, from a normal model of the final margin, colored to match the projected outcome (green = projected win, red = loss, white = tie) — uncertainty is each team's week-to-week spread in the stat and shrinks for counting cats as the week ends
 - **⚡** (corner) = toss-up — win odds near even (45–55%) **or** a projected tie; on a toss-up the ⚡ **replaces** the % (the exact number doesn't matter at a coin-flip)
 - **proj X.X vs Y.Y** = projected end-of-week (K/QS/W use your actual remaining starts × per-start rate; other cats use each team's weekly average)
-- **▲ / ▼ / ◆** flip badge = the projection flips the current result (▲ to a win, ▼ to a loss, ◆ to a tie)
+- **▲ / ▼ / ◆** (corner) = the **projected outcome** — ▲ green = projected win, ▼ red = loss, ◆ white = tie. Shown on every card; when it disagrees with the card's current color (WINNING/LOSING/TIED), that's a projected flip
 
 ### Week N Matchup
 Score banner (team logos + overall W-L-T, with a projected final record) followed by a category-by-category table. Each row shows your value and the opponent's, colored by who's currently winning. Below each value is the **projected** end-of-week value, **colored by its projected outcome** (green = you're projected to win that category, red = lose) with a **▲/▼/◆ flip arrow** on your side when the projection differs from the current standing — so a category you're currently losing but projected to win shows a red current value and a green projection with a ▲.
@@ -219,7 +219,7 @@ Score banner (team logos + overall W-L-T, with a projected final record) followe
 Your rostered relievers, showing season SV+H / K / W (from ESPN) plus ERA/WHIP from the best available dataset, with a role-aware **Score** badge. RP scoring is **skill-weighted (punt-saves)** — see [Composite Scores](#composite-scores).
 
 ### Pitcher Hot/Cold
-Your rostered pitchers sorted hottest → coldest. Compares **last-15-day ERA** to season ERA (15 days, not 7 — starters pitch too infrequently for a 7-day window to be meaningful). Includes a role-aware **Score** badge.
+Your rostered pitchers sorted hottest → coldest. Compares **last-15-day ERA** to season ERA (15 days, not 7 — starters pitch too infrequently for a 7-day window to be meaningful). Includes a **Whiff%** column (raw swing-and-miss rate, green ≥ 30%) and a role-aware **Score** badge.
 
 ### Roster Hot/Cold
 Your rostered **hitters** sorted hottest → coldest. Compares last-7-day OPS to season OPS. Includes an **HR%** column (modeled per-game home-run probability, hover for drivers — also listed inside the expanded Score panel for touch devices) and a **Score** badge. Tapping the Score badge shows a breakdown whose recent-form line names its window (e.g. "30-day form") — a broader window than this L7 column, so a bat can be 🔥 here yet read "cold" on the composite.
@@ -367,7 +367,7 @@ GitHub Actions automatically uses whatever is on `main`. The next scheduled run 
 | Roster, FA, transactions, roto scores, team logos, **season counting stats** (SV/K/W/IP/GS/GP) | ESPN Fantasy API (`espn_api` library) | Yes — `swid` + `espn_s2` cookies |
 | Probable starters (+6-day rotation projection) | MLB Stats API | No |
 | Opponent team **OPS and K rate** | MLB Stats API | No |
-| Barrel%/hard-hit% allowed, **xERA, xwOBA-against, whiff percentile** (pitchers) | Baseball Savant via `pybaseball` | No |
+| Barrel%/hard-hit% allowed, **xERA, xwOBA-against, whiff percentile, raw whiff%** (pitchers) | Baseball Savant via `pybaseball` | No |
 | xwOBA, xBA, xSLG, Barrel%, hard-hit%, sprint speed (hitters) | Baseball Savant via `pybaseball` | No |
 
 > **Note:** FanGraphs blocks direct HTTP requests with 403 errors. Always use `pybaseball` — it handles the necessary headers automatically.
@@ -416,7 +416,7 @@ Three canonical role scores:
 `data/snapshot.json` is rebuilt on every run. It's the only file shared between `fetch_data.py` and `send_digest.py`.
 
 **pitchers** (list of dicts, one per player per time range):
-`PlayerName, FantasyTeam, Position, Dataset` (7/15/30/2026), `IP, G, GS, K, ERA, WHIP, SV, HLD, SVHD, K/IP, Kpct_P, IP_per_G` (IP÷G — honest for mixed starters/relievers), `PSP_Date` (1999-01-01 = no start), `PSP_HomeVAway, PSP_Projected`, `PSP_Dates` + `PSP_HomeVAways` (lists of ALL upcoming starts, for two-start detection), `Team_OPS_Value, Team_K_Value` (opponent OPS & K-per-PA), advanced: `xERA, xwOBA_against, WhiffPctile, BarrelPctAllowed, HardHitPctAllowed, AvgEVAllowed`, ESPN season counts: `ESPN_SV, ESPN_K, ESPN_W, ESPN_IP, ESPN_GS, ESPN_GP, ESPN_SVHD`
+`PlayerName, FantasyTeam, Position, Dataset` (7/15/30/2026), `IP, G, GS, K, ERA, WHIP, SV, HLD, SVHD, K/IP, Kpct_P, IP_per_G` (IP÷G — honest for mixed starters/relievers), `PSP_Date` (1999-01-01 = no start), `PSP_HomeVAway, PSP_Projected`, `PSP_Dates` + `PSP_HomeVAways` (lists of ALL upcoming starts, for two-start detection), `Team_OPS_Value, Team_K_Value` (opponent OPS & K-per-PA), advanced: `xERA, xwOBA_against, WhiffPctile, WhiffPct` (raw rate, display-only), `BarrelPctAllowed, HardHitPctAllowed, AvgEVAllowed`, ESPN season counts: `ESPN_SV, ESPN_K, ESPN_W, ESPN_IP, ESPN_GS, ESPN_GP, ESPN_SVHD`
 
 **hitters** (list of dicts, one per player per time range):
 `PlayerName, FantasyTeam, Position, Dataset, HR, RBI, R, SB, AVG, OPS, wRCplus, xwOBA, xBA, xSLG, SprintSpeed, ISO, Barrel_Pct, HardHit_Pct, HR_Probability`

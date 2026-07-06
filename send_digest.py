@@ -1041,9 +1041,20 @@ def _hit_clauses(r, comps):
 
     prod_stat = f"wRC+ {int(wrc)}" if wrc > 0 else f"OPS {_st(ops)}"
     add("Prod", f"strong production ({prod_stat})", f"weak production ({prod_stat})")
-    add("HR", f"real power ({int(hr)} HR)", f"little power ({int(hr)} HR)")
+    # HR (volume) and ISO (rate) are the same "power" concept — never let one surface as a
+    # strength while the other reads as a weakness ("big raw power (ISO .190) … little power
+    # (6 HR)"). Keep the strength; drop the opposite power stat's weakness clause.
+    hr_fill  = comps.get("HR",  0.0) / maxes["HR"]  if "HR"  in comps else None
+    iso_fill = comps.get("ISO", 0.0) / maxes["ISO"] if ("ISO" in comps and iso > 0) else None
+    hr_weak, iso_weak = f"little power ({int(hr)} HR)", f"flat ISO ({_st(iso)})"
+    if hr_fill is not None and iso_fill is not None:
+        if iso_fill >= 0.60 and hr_fill <= 0.35:   # strong rate, weak volume → drop HR weakness
+            hr_weak = None
+        elif hr_fill >= 0.60 and iso_fill <= 0.35:  # strong volume, weak rate → drop ISO weakness
+            iso_weak = None
+    add("HR", f"real power ({int(hr)} HR)", hr_weak)
     if iso > 0:
-        add("ISO", f"big raw power (ISO {_st(iso)})", f"flat ISO ({_st(iso)})")
+        add("ISO", f"big raw power (ISO {_st(iso)})", iso_weak)
     add("RBI", f"drives in runs ({int(rbi)} RBI)", f"few RBI ({int(rbi)})")
     if sprint > 0:
         add("Speed", f"plus speed ({sprint:.1f} ft/s)", f"slow ({sprint:.1f} ft/s)")
@@ -1279,6 +1290,20 @@ def _opp_ops_sub(r):
     return (
         f'<div style="color:{MUTED};font-size:10px;margin-top:1px;white-space:nowrap;">'
         f'Opp OPS {val:.3f}</div>'
+    )
+
+
+def _whiff_sub(r):
+    """Small muted second line under the K% cell showing the pitcher's raw overall
+    swing-and-miss rate (Baseball Savant pitch-arsenal, pitches-weighted). DISPLAY
+    ONLY — never scored (WhiffPctile already drives the K component). Distinct from
+    the WhiffPctile 0-100 percentile: WhiffPct is a raw rate. Empty when missing."""
+    val = _n(r.get("WhiffPct"))
+    if val <= 0:
+        return ""
+    return (
+        f'<div style="color:{MUTED};font-size:10px;margin-top:1px;white-space:nowrap;">'
+        f'whiff {val:.0f}%</div>'
     )
 
 
@@ -1952,9 +1977,14 @@ def build_pitcher_hot_cold_section(pitchers, my_team, rec_p=None, best_recent_p=
             if r["recent_era"] else f'<span style="color:{MUTED};">—</span>'
         )
 
+        _whiff = _n(r["srow"].get("WhiffPct"))
+        whiff_cell = (
+            f'<span style="color:{GREEN};font-weight:700;">{_whiff:.0f}%</span>' if _whiff >= 30
+            else (f'{_whiff:.0f}%' if _whiff > 0 else f'<span style="color:{MUTED};">—</span>')
+        )
         _cell, _bdrow = score_reveal(
             r["score"], _pitcher_score_breakdown(r["srow"], best_recent_p),
-            _bd_uid("phc", r["name"]), 6)
+            _bd_uid("phc", r["name"]), 7)
         rows_html += (
             f'<tr style="{bg}">'
             f'<td style="{TD_S}font-weight:600;">{team_logo(r["team"])}{r["name"]}{r["inj"]}</td>'
@@ -1962,6 +1992,7 @@ def build_pitcher_hot_cold_section(pitchers, my_team, rec_p=None, best_recent_p=
             f'<td style="{TDC}">{r["season_era"]:.2f}</td>'
             f'<td style="{TDC}">{recent_str}</td>'
             f'<td style="{TDC}">{delta_html} {arrow}</td>'
+            f'<td style="{TDC}">{whiff_cell}</td>'
             f'<td style="{TDC}">{_cell}</td>'
             f'</tr>'
             f'{_bdrow}'
@@ -1980,6 +2011,7 @@ def build_pitcher_hot_cold_section(pitchers, my_team, rec_p=None, best_recent_p=
         f'<th style="{TH_S}text-align:center;">Season ERA</th>'
         f'<th style="{TH_S}text-align:center;">Last 15 ERA</th>'
         f'<th style="{TH_S}text-align:center;">Δ</th>'
+        f'<th style="{TH_S}text-align:center;">Whiff%</th>'
         f'<th style="{TH_S}text-align:center;">Score</th>'
         f'</tr></thead><tbody>{rows_html}</tbody></table>'
     )
@@ -2252,7 +2284,6 @@ def build_category_pulse(matchup, weekly_avgs=None, days_elapsed=None, remaining
         )
 
         # Projection footer
-        flip = False
         proj_res = None
         proj_html = ""
         win_pct = None
@@ -2273,8 +2304,6 @@ def build_category_pulse(matchup, weekly_avgs=None, days_elapsed=None, remaining
                 proj_res = "W" if pm_r < po_r else ("T" if pm_r == po_r else "L")
             else:
                 proj_res = "W" if pm_r > po_r else ("T" if pm_r == po_r else "L")
-
-            flip = proj_res != res
 
             # Win probability — combined per-week spread of the margin (falls back to the
             # close-threshold when a team has no weekly history yet).
@@ -2301,9 +2330,9 @@ def build_category_pulse(matchup, weekly_avgs=None, days_elapsed=None, remaining
         )
         close_flags.append(is_close)
 
-        # Top-right corner badge: ⚡ (toss-up) OR the WIN % · then ▲▼ (flip).
-        # On a toss-up the ⚡ replaces the number — the exact odds don't matter at a
-        # coin-flip, but a decisive % (79% / 9%) is worth showing.
+        # Top-right corner badge: ⚡ (toss-up) OR the WIN % · then the projected-outcome
+        # marker. On a toss-up the ⚡ replaces the number — the exact odds don't matter at
+        # a coin-flip, but a decisive % (79% / 9%) is worth showing.
         corner_parts = []
         if is_close:
             corner_parts.append(f'<span style="color:{YELLOW};font-size:10px;">⚡</span>')
@@ -2314,14 +2343,18 @@ def build_category_pulse(matchup, weekly_avgs=None, days_elapsed=None, remaining
             corner_parts.append(
                 f'<span style="color:{wp_c};font-weight:400;font-size:8px;">{win_pct}%</span>'
             )
-        if flip:
+        # Projected-outcome marker: ▲ green = projected win, ▼ red = projected loss,
+        # ◆ white = projected tie. Shown on EVERY card that has a projection (not only on
+        # a flip) — it still reveals a flip via contrast with the current WINNING/LOSING/
+        # TIED status, while always surfacing the week's projected result at a glance.
+        if proj_res is not None:
             if proj_res == "W":
-                flip_c, flip_arrow = GREEN, "▲"
+                mark_c, mark = GREEN, "▲"
             elif proj_res == "L":
-                flip_c, flip_arrow = RED, "▼"
+                mark_c, mark = RED, "▼"
             else:
-                flip_c, flip_arrow = TEXT, "◆"
-            corner_parts.append(f'<span style="color:{flip_c};font-size:10px;">{flip_arrow}</span>')
+                mark_c, mark = TEXT, "◆"
+            corner_parts.append(f'<span style="color:{mark_c};font-size:10px;">{mark}</span>')
         corner_html = (
             f'<div style="position:absolute;top:5px;right:6px;line-height:1;'
             f'display:flex;gap:2px;align-items:center;">{"".join(corner_parts)}</div>'
@@ -3005,6 +3038,9 @@ def build_glossary_section():
                "exit-velo + angle) or hit ≥95 mph. Lower is better."),
         _entry("L15 ERA", "ERA over the last 15 days — the hot/cold window for starters, who pitch "
                "infrequently (7 days is too noisy). Compared against season ERA."),
+        _entry("Whiff%", "Raw swing-and-miss rate — share of swings that miss, across all pitch types "
+               "(pitches-weighted, from Baseball Savant). A pitch-skill read on strikeout upside; ~25% is "
+               "league average, 30%+ is elite. Shown for reference only — not folded into the Score."),
         _entry("Proj. Line (IP · ER · K)", "Projected stat line for one upcoming start. ER adjusts the "
                "pitcher's ERA for opponent lineup strength (their OPS vs the league mean) and a home/away "
                "park factor; K uses his K/IP rate. IP is his per-start average."),
@@ -3025,10 +3061,12 @@ def build_glossary_section():
     proj = _group("Projections & matchup", [
         _entry("Category Pulse cards", "Per-category snapshot of the current week: your value vs the "
                "opponent, who's winning, and whether the odds are a toss-up (⚡ = win % near even)."),
-        _entry("Projected values & flip arrows", "“proj” is the end-of-week estimate — for K/QS/W it uses "
+        _entry("Projected values & outcome markers", "“proj” is the end-of-week estimate — for K/QS/W it uses "
                "your actual remaining starts × per-start rate; other cats use each team's weekly average. "
                "The projection is colored by its <b>projected</b> outcome (green = projected win, red = loss). "
-               "An arrow marks a flip vs the current standing: ▲ flipping to a win, ▼ to a loss, ◆ to a tie."),
+               "A marker on every card shows that projected result: ▲ green = projected win, ▼ red = loss, "
+               "◆ white = tie. When it disagrees with the card's current WINNING/LOSING/TIED status, that's "
+               "a projected flip."),
         _entry("Win % &amp; ⚡", "The <b>%</b> in each card corner is the odds you win that category, from "
                "a normal model of the final margin, colored to match the projected outcome (green = "
                "projected win, red = loss, white = tie). On a toss-up (odds near even, or a projected tie) "
@@ -3516,7 +3554,7 @@ def build_email(snap, override_team=None):
                     f'<td style="{_tdc}">{qsp_str}</td>'
                     f'<td style="{_tdc}">{v(r.get("ERA"), 2)}</td>'
                     + hot_cold_cell(r.get("ERA"), p15r.get("ERA"), lower_better=True, dec=2, no_data_title="No 15-day stats — player may not have pitched recently", td_style=_tdc) +
-                    f'<td style="{_tdc}">{kpct_s_cell}</td>'
+                    f'<td style="{_tdc}">{kpct_s_cell}{_whiff_sub(r)}</td>'
                     f'<td style="{_tdc}">{_cell}</td>'
                     f'</tr>'
                     f'{_bdrow}'
@@ -3752,7 +3790,7 @@ def build_email(snap, override_team=None):
                     f'<td style="{_tdc}">{qsp_str}</td>'
                     f'<td style="{_tdc}">{v(r.get("ERA"), 2)}</td>'
                     + hot_cold_cell(r.get("ERA"), p15r.get("ERA"), lower_better=True, dec=2, no_data_title="No 15-day stats — player may not have pitched recently", td_style=_tdc) +
-                    f'<td style="{_tdc}">{kpct_cell}</td>'
+                    f'<td style="{_tdc}">{kpct_cell}{_whiff_sub(r)}</td>'
                     f'<td style="{_tdc}">{_cell}</td>'
                     f'</tr>'
                     f'{_bdrow}'
