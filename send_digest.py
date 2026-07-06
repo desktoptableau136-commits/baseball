@@ -2135,19 +2135,6 @@ def _cat_win_prob(pm, po, cat, sigma, remaining_frac):
     return p_win, p_tie
 
 
-def _largest_remainder_round(values, total):
-    """Round floats to whole numbers that sum EXACTLY to `total` (Hamilton's method):
-    floor each, then hand the leftover units to the largest fractional remainders. Used
-    so the expected-finish record shows whole W/L/T that still add up to the category
-    count (a 6.3/5.0/0.6 split → 6/5/1, not three rounded-independently numbers)."""
-    floors = [int(math.floor(v)) for v in values]
-    rem = int(round(total - sum(floors)))
-    order = sorted(range(len(values)), key=lambda i: values[i] - floors[i], reverse=True)
-    for i in range(max(0, rem)):
-        floors[order[i % len(order)]] += 1
-    return floors
-
-
 def _project(current, avg, elapsed_frac, cat):
     """Project end-of-week value from current accumulated stat and historical weekly avg."""
     remaining = 1.0 - elapsed_frac
@@ -2229,7 +2216,6 @@ def build_category_pulse(matchup, weekly_avgs=None, days_elapsed=None, remaining
     opp_std  = (weekly_std or {}).get(opp_team_key, {})
     has_proj = bool(my_avgs and opp_avgs)
     proj_results = []
-    win_probs    = []   # (p_win, p_tie) per card that has a projection — for expected record
 
     def _card(c):
         cat   = c["cat"]
@@ -2293,8 +2279,7 @@ def build_category_pulse(matchup, weekly_avgs=None, days_elapsed=None, remaining
             sm, so = my_std.get(cat), opp_std.get(cat)
             sigma = math.sqrt(sm * sm + so * so) if (sm is not None and so is not None) \
                     else (_CLOSE_THRESH.get(cat, 1) or 1)
-            p_win, p_tie = _cat_win_prob(pm, po, cat, sigma, remaining_frac)
-            win_probs.append((p_win, p_tie))
+            p_win, _ = _cat_win_prob(pm, po, cat, sigma, remaining_frac)
             win_pct = round(p_win * 100)
 
             proj_html = (
@@ -2406,29 +2391,9 @@ def build_category_pulse(matchup, weekly_avgs=None, days_elapsed=None, remaining
             f'<span style="color:{TEXT}88;font-weight:600;">{proj_t}T</span>'
         )
 
-    # Expected finish — probability-weighted record (Σ win% / Σ tie%), a softer read
-    # than the integer point-estimate proj above: accounts for how likely each cat is.
-    expected_html = ""
-    if win_probs:
-        exp_w = sum(p for p, _ in win_probs)
-        exp_t = sum(t for _, t in win_probs)
-        exp_l = max(0.0, len(win_probs) - exp_w - exp_t)
-        w_i, l_i, t_i = _largest_remainder_round([exp_w, exp_l, exp_t], len(win_probs))
-        expected_html = (
-            f'<div style="margin-top:3px;color:{MUTED};font-size:10px;" '
-            f'title="Probability-weighted record across projected categories (expected '
-            f'wins = sum of each category\'s win %). Exact: '
-            f'{exp_w:.1f} W · {exp_l:.1f} L · {exp_t:.1f} T.">'
-            f'expected finish&nbsp;'
-            f'<span style="color:{GREEN}cc;font-weight:600;">{w_i} W</span> · '
-            f'<span style="color:{RED}cc;font-weight:600;">{l_i} L</span> · '
-            f'<span style="color:{TEXT};font-weight:600;">{t_i} T</span>'
-            f'</div>'
-        )
-
     return (
         section_head(f"Category Pulse — Week {week}", f"vs. {opp} · {'Final stretch — week ends today' if is_sunday else '⚡ = within striking distance · % = win odds'}") +
-        f'<div style="margin-bottom:8px;font-size:12px;">{summary}{expected_html}</div>' +
+        f'<div style="margin-bottom:8px;font-size:12px;">{summary}</div>' +
         table
     )
 
@@ -3052,13 +3017,11 @@ def build_glossary_section():
                "your actual remaining starts × per-start rate; other cats use each team's weekly average. "
                "The projection is colored by its <b>projected</b> outcome (green = projected win, red = loss). "
                "An arrow marks a flip vs the current standing: ▲ flipping to a win, ▼ to a loss, ◆ to a tie."),
-        _entry("Win % &amp; expected finish", "The <b>%</b> in each card corner is the odds you win that "
-               "category, from a normal model of the final margin (green ≥ 65%, red ≤ 35%, yellow in "
-               "between). Uncertainty comes from each team's week-to-week spread in that stat and shrinks "
-               "for counting cats as the week ends; a category with no history yet falls back to its "
-               "close-threshold. “Expected finish” sums those odds into a probability-weighted record "
-               "(e.g. 6 W · 5 L · 1 T; hover for the exact fractional) — a softer read than the "
-               "point-estimate “proj” record above it."),
+        _entry("Win %", "The <b>%</b> in each card corner is the odds you win that category, from a "
+               "normal model of the final margin (green ≥ 65%, red ≤ 35%, yellow in between). Uncertainty "
+               "comes from each team's week-to-week spread in that stat and shrinks for counting cats as "
+               "the week ends; a category with no history yet falls back to its close-threshold. It always "
+               "agrees in direction with the “proj” value on the same card."),
         _entry("Luck (standings)", "Roto rank minus record rank. Positive = your W-L is better than your "
                "category performance suggests (running lucky); negative = unlucky."),
     ])
