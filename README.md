@@ -202,11 +202,12 @@ Scoring categories: **R · HR · RBI · SB · OPS · B/SO** (batter strikeouts, 
 Scouting block for the current opponent, directly below Category Pulse. Shows their start count (and any two-start pitchers), top-3 hottest bats by recent OPS, season roto strengths/weaknesses (top-3 / bottom-3 categories), and wire activity (how active they've been on the FA wire). Only renders when the opponent has starters or hot hitters.
 
 ### Category Pulse
-A summary line above the cards shows your current record and projected end-of-week record, each as a full **W · L · T** (the tie count is always shown, even at `0T`), with a `⚡N close` count between them: `10W · 2L · 0T · ⚡3 close → proj 11W · 1L · 0T`.
+A summary line above the cards shows your current record and projected end-of-week record, each as a full **W · L · T** (the tie count is always shown, even at `0T`), with a `⚡N close` count between them: `10W · 2L · 0T · ⚡3 close → proj 11W · 1L · 0T`. A second line shows the **expected finish** — a probability-weighted record like `expected finish 6.3 W · 5.0 L · 0.6 T` (the sum of every category's win odds), a softer read than the whole-number projection.
 
 12 visual cards — 6 hitting, 6 pitching. Each card shows:
 - **Current value** (big, colored green/red/white) vs opponent value
 - **Fill bar** showing relative share of the combined total
+- **NN%** (corner) = your odds of winning that category (green ≥ 65%, red ≤ 35%, yellow in between), from a normal model of the final margin — uncertainty is each team's week-to-week spread in the stat and shrinks for counting cats as the week ends
 - **⚡** = within striking distance (close enough to flip)
 - **proj X.X vs Y.Y** = projected end-of-week (K/QS/W use your actual remaining starts × per-start rate; other cats use each team's weekly average)
 - **▲ / ▼ / ◆** flip badge = the projection flips the current result (▲ to a win, ▼ to a loss, ◆ to a tie)

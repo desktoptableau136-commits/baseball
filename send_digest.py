@@ -16,6 +16,7 @@ Skip refresh:   python send_digest.py --no-refresh
 """
 
 import json
+import math
 import os
 import re
 import subprocess
@@ -2083,6 +2084,57 @@ def compute_weekly_avgs(roto, current_week):
             for t, cats in buckets.items()}
 
 
+def compute_weekly_std(roto, current_week):
+    """Return {team: {cat: population stddev}} of the same weekly buckets used by
+    compute_weekly_avgs. Feeds the win-probability model (spread of a team's weekly
+    category totals ≈ the uncertainty in this week's final value). Cats with < 2
+    completed weeks are omitted (no meaningful spread → win-prob falls back to
+    _CLOSE_THRESH)."""
+    from collections import defaultdict
+    CATS = ["R", "HR", "RBI", "SB", "OPS", "B_SO", "K", "QS", "W", "ERA", "WHIP", "SVHD"]
+    past = [r for r in roto if int(r.get("Week", 0)) < current_week]
+    if not past:
+        return {}
+    buckets = defaultdict(lambda: {c: [] for c in CATS})
+    for row in past:
+        t = " ".join((row.get("Team", "") or "").split())
+        if not t:
+            continue
+        for c in CATS:
+            try:
+                buckets[t][c].append(float(row[c]))
+            except (KeyError, TypeError, ValueError):
+                pass
+
+    def _std(vals):
+        n = len(vals)
+        m = sum(vals) / n
+        return math.sqrt(sum((x - m) ** 2 for x in vals) / n)
+
+    return {t: {c: _std(v) for c, v in cats.items() if len(v) >= 2}
+            for t, cats in buckets.items()}
+
+
+def _cat_win_prob(pm, po, cat, sigma, remaining_frac):
+    """Probability (p_win, p_tie) that I win / tie a category, from a normal model of
+    the final margin. `pm`/`po` are my/opp projected end-of-week values; `sigma` is the
+    combined per-week spread of the margin. Counting-cat uncertainty shrinks toward the
+    week's end (× remaining_frac); rate cats keep their weekly spread. The tie band
+    matches the display-rounding precision so p_win/p_tie agree with the point-estimate
+    W/L/T (round(pm,dec) vs round(po,dec))."""
+    dec  = _CAT_DEC.get(cat, 0)
+    edge = (po - pm) if cat in _LOWER_BETTER else (pm - po)   # > 0 favors me
+    eff  = sigma if cat in _RATE_CATS else sigma * max(remaining_frac, 0.0)
+    eff  = max(eff, 1e-9)
+    h    = 0.5 * (10 ** (-dec))                               # half a display unit
+    def _phi(x):
+        return 0.5 * (1.0 + math.erf(x / math.sqrt(2)))
+    p_win  = 1.0 - _phi((h - edge) / eff)
+    p_loss = _phi((-h - edge) / eff)
+    p_tie  = max(0.0, 1.0 - p_win - p_loss)
+    return p_win, p_tie
+
+
 def _project(current, avg, elapsed_frac, cat):
     """Project end-of-week value from current accumulated stat and historical weekly avg."""
     remaining = 1.0 - elapsed_frac
@@ -2146,7 +2198,7 @@ def classify_categories(matchup, weekly_avgs=None, days_elapsed=None, remaining_
     return out
 
 
-def build_category_pulse(matchup, weekly_avgs=None, days_elapsed=None, remaining_proj=None, is_sunday=False):
+def build_category_pulse(matchup, weekly_avgs=None, days_elapsed=None, remaining_proj=None, is_sunday=False, weekly_std=None):
     if not matchup or not matchup.get("categories"):
         return ""
 
@@ -2156,11 +2208,15 @@ def build_category_pulse(matchup, weekly_avgs=None, days_elapsed=None, remaining
     opp_team_key = " ".join(matchup.get("opp_team", "").split())
 
     # Projection setup
-    elapsed_frac = min(1.0, max(0.0, (days_elapsed or 0) / 7))
+    elapsed_frac  = min(1.0, max(0.0, (days_elapsed or 0) / 7))
+    remaining_frac = 1.0 - elapsed_frac
     my_avgs  = (weekly_avgs or {}).get(my_team_key,  {})
     opp_avgs = (weekly_avgs or {}).get(opp_team_key, {})
+    my_std   = (weekly_std or {}).get(my_team_key,  {})
+    opp_std  = (weekly_std or {}).get(opp_team_key, {})
     has_proj = bool(my_avgs and opp_avgs)
     proj_results = []
+    win_probs    = []   # (p_win, p_tie) per card that has a projection — for expected record
 
     def _card(c):
         cat   = c["cat"]
@@ -2198,6 +2254,7 @@ def build_category_pulse(matchup, weekly_avgs=None, days_elapsed=None, remaining
         flip = False
         proj_res = None
         proj_html = ""
+        win_pct = None
         pm = po = None
         rp = (remaining_proj or {}).get(cat)
         if rp is not None:
@@ -2217,6 +2274,16 @@ def build_category_pulse(matchup, weekly_avgs=None, days_elapsed=None, remaining
                 proj_res = "W" if pm_r > po_r else ("T" if pm_r == po_r else "L")
 
             flip = proj_res != res
+
+            # Win probability — combined per-week spread of the margin (falls back to the
+            # close-threshold when a team has no weekly history yet).
+            sm, so = my_std.get(cat), opp_std.get(cat)
+            sigma = math.sqrt(sm * sm + so * so) if (sm is not None and so is not None) \
+                    else (_CLOSE_THRESH.get(cat, 1) or 1)
+            p_win, p_tie = _cat_win_prob(pm, po, cat, sigma, remaining_frac)
+            win_probs.append((p_win, p_tie))
+            win_pct = round(p_win * 100)
+
             proj_html = (
                 f'<div style="margin-top:4px;color:{MUTED};font-size:9px;">'
                 f'proj&nbsp;<span style="color:{TEXT};">{pm:.{dec}f}</span>'
@@ -2224,8 +2291,13 @@ def build_category_pulse(matchup, weekly_avgs=None, days_elapsed=None, remaining
                 f'</div>'
             )
 
-        # Top-right corner badge: ⚡ (close) and/or ▲▼ (flip)
+        # Top-right corner badge: WIN % · ⚡ (close) · ▲▼ (flip)
         corner_parts = []
+        if win_pct is not None:
+            wp_c = GREEN if win_pct >= 65 else (RED if win_pct <= 35 else YELLOW)
+            corner_parts.append(
+                f'<span style="color:{wp_c};font-weight:800;font-size:9px;">{win_pct}%</span>'
+            )
         if is_close:
             close_c = GREEN if res == "W" else RED
             corner_parts.append(f'<span style="color:{close_c};">⚡</span>')
@@ -2321,9 +2393,27 @@ def build_category_pulse(matchup, weekly_avgs=None, days_elapsed=None, remaining
             f'<span style="color:{TEXT}88;font-weight:600;">{proj_t}T</span>'
         )
 
+    # Expected finish — probability-weighted record (Σ win% / Σ tie%), a softer read
+    # than the integer point-estimate proj above: accounts for how likely each cat is.
+    expected_html = ""
+    if win_probs:
+        exp_w = sum(p for p, _ in win_probs)
+        exp_t = sum(t for _, t in win_probs)
+        exp_l = max(0.0, len(win_probs) - exp_w - exp_t)
+        expected_html = (
+            f'<div style="margin-top:3px;color:{MUTED};font-size:10px;" '
+            f'title="Probability-weighted record across projected categories '
+            f'(expected wins = sum of each category\'s win %).">'
+            f'expected finish&nbsp;'
+            f'<span style="color:{GREEN}cc;font-weight:600;">{exp_w:.1f} W</span> · '
+            f'<span style="color:{RED}cc;font-weight:600;">{exp_l:.1f} L</span> · '
+            f'<span style="color:{TEXT};font-weight:600;">{exp_t:.1f} T</span>'
+            f'</div>'
+        )
+
     return (
-        section_head(f"Category Pulse — Week {week}", f"vs. {opp} · {'Final stretch — week ends today' if is_sunday else '⚡ = within striking distance'}") +
-        f'<div style="margin-bottom:8px;font-size:12px;">{summary}</div>' +
+        section_head(f"Category Pulse — Week {week}", f"vs. {opp} · {'Final stretch — week ends today' if is_sunday else '⚡ = within striking distance · % = win odds'}") +
+        f'<div style="margin-bottom:8px;font-size:12px;">{summary}{expected_html}</div>' +
         table
     )
 
@@ -2947,6 +3037,12 @@ def build_glossary_section():
                "your actual remaining starts × per-start rate; other cats use each team's weekly average. "
                "The projection is colored by its <b>projected</b> outcome (green = projected win, red = loss). "
                "An arrow marks a flip vs the current standing: ▲ flipping to a win, ▼ to a loss, ◆ to a tie."),
+        _entry("Win % &amp; expected finish", "The <b>%</b> in each card corner is the odds you win that "
+               "category, from a normal model of the final margin (green ≥ 65%, red ≤ 35%, yellow in "
+               "between). Uncertainty comes from each team's week-to-week spread in that stat and shrinks "
+               "for counting cats as the week ends; a category with no history yet falls back to its "
+               "close-threshold. “Expected finish” sums those odds into a probability-weighted record "
+               "(e.g. 6.3 W · 5.0 L · 0.6 T) — a softer read than the whole-number “proj” record above it."),
         _entry("Luck (standings)", "Roto rank minus record rank. Positive = your W-L is better than your "
                "category performance suggests (running lucky); negative = unlucky."),
     ])
@@ -3032,6 +3128,7 @@ def build_email(snap, override_team=None):
     cats, n   = category_ranks(roto, my_team)
     current_week_num = matchup.get("week") or max((int(r.get("Week", 0)) for r in roto), default=0)
     weekly_avgs  = compute_weekly_avgs(roto, current_week_num)
+    weekly_std   = compute_weekly_std(roto, current_week_num)
     days_elapsed = datetime.now().weekday()   # Mon=0 (no stats yet) … Sun=6
     _today = datetime.now().date()
     week_end_str = (_today + timedelta(days=6 - _today.weekday())).strftime("%Y-%m-%d")
@@ -4099,7 +4196,7 @@ def build_email(snap, override_team=None):
     body_parts += [
         build_prev_matchup_recap(prev_matchup, team_logos=team_logos) if is_monday and prev_matchup.get("week") != (matchup or {}).get("week") else "",  # 2a MONDAY RECAP
         week_overview,                                                                    # 2  WEEK INTELLIGENCE
-        build_category_pulse(matchup, weekly_avgs=weekly_avgs, days_elapsed=days_elapsed, remaining_proj=pit_proj, is_sunday=is_sunday), # 3
+        build_category_pulse(matchup, weekly_avgs=weekly_avgs, days_elapsed=days_elapsed, remaining_proj=pit_proj, is_sunday=is_sunday, weekly_std=weekly_std), # 3
         opp_preview_section,                                                              # 3b OPPONENT SCOUTING (below Category Pulse)
         week_cat_section,                                                                 # 4  (before matchup panel)
         build_matchup_section(matchup, logos=team_logos, my_team=my_team,
