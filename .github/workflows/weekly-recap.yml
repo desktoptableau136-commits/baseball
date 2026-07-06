@@ -1,0 +1,31 @@
+name: Weekly League Recap
+
+on:
+  schedule:
+    - cron: '30 15 * * 1'  # Monday 15:30 UTC ≈ 11:30 AM EDT — runs after the week has fully settled
+  workflow_dispatch:        # allows manual trigger from the GitHub Actions UI
+
+jobs:
+  send-recap:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Send weekly recap
+        env:
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          ESPN_SWID: ${{ secrets.ESPN_SWID }}
+          ESPN_S2: ${{ secrets.ESPN_S2 }}
+        run: python weekly_recap.py

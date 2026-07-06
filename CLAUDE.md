@@ -11,10 +11,12 @@ python send_digest.py --dry-run                # save HTML to previews/, no emai
 python send_digest.py --dry-run --no-refresh   # instant preview, no network
 python send_digest.py --dry-run --no-refresh --team "Houck Tuah"  # another team's digest (needs all_matchups)
 python fetch_data.py                           # refresh data only → data/snapshot.json
+python weekly_recap.py                         # Monday recap: refresh + email full-league recap
+python weekly_recap.py --dry-run --no-refresh  # instant recap preview → previews/recap_week_N.html
 pip install -r requirements.txt
 ```
 
-No linter, no test suite. Verify by opening `previews/digest_preview_{team_slug}.html` in a browser.
+No linter, no test suite. Verify by opening `previews/digest_preview_{team_slug}.html` or `previews/recap_week_N.html` in a browser.
 
 ## Setup
 
@@ -22,7 +24,7 @@ Copy `.env.example` → `.env` and add a Gmail App Password (myaccount.google.co
 
 ## Architecture
 
-Two files, one intermediate artifact:
+Three files, one intermediate artifact. The daily digest and Monday recap are independent scripts that both read the same snapshot:
 
 **`fetch_data.py`** pulls from 5+ sources → `data/snapshot.json`:
 1. FantasyPros HTML (`pd.read_html`) — pitcher/hitter stats across 4 ranges (7/15/30/season)
@@ -31,6 +33,8 @@ Two files, one intermediate artifact:
 4. pybaseball — Statcast contact quality, expected stats, sprint speed, recent game logs
 
 **`send_digest.py`** reads the snapshot, computes all derived metrics, builds one self-contained HTML email via Gmail SMTP. Two parts: inline HTML body (Gmail may clip at 102 KB) + an attached `digest_YYYY-MM-DD.html` for full render. All new features go here.
+
+**`weekly_recap.py`** reads the same snapshot on Mondays, builds a full-league recap HTML email: My Matchup (full 12-cat table) · League Scoreboard (all 6 matchups) · Weekly Roto Rankings · Top Performers (rostered + hot FAs) · Standings & Luck · Season Trajectory. Does NOT import from `send_digest.py` — copies the ~100 lines of constants/helpers it needs. Output: `previews/recap_week_N.html`. GitHub Actions: `.github/workflows/weekly-recap.yml` (Monday 15:30 UTC).
 
 **`data/snapshot.json`** is the schema contract between the two files. ~1.2 MB, not committed. Numeric missing values are stored as `-1` (not `NaN`) after the merge pipelines run.
 
