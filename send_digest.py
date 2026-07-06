@@ -2135,6 +2135,19 @@ def _cat_win_prob(pm, po, cat, sigma, remaining_frac):
     return p_win, p_tie
 
 
+def _largest_remainder_round(values, total):
+    """Round floats to whole numbers that sum EXACTLY to `total` (Hamilton's method):
+    floor each, then hand the leftover units to the largest fractional remainders. Used
+    so the expected-finish record shows whole W/L/T that still add up to the category
+    count (a 6.3/5.0/0.6 split → 6/5/1, not three rounded-independently numbers)."""
+    floors = [int(math.floor(v)) for v in values]
+    rem = int(round(total - sum(floors)))
+    order = sorted(range(len(values)), key=lambda i: values[i] - floors[i], reverse=True)
+    for i in range(max(0, rem)):
+        floors[order[i % len(order)]] += 1
+    return floors
+
+
 def _project(current, avg, elapsed_frac, cat):
     """Project end-of-week value from current accumulated stat and historical weekly avg."""
     remaining = 1.0 - elapsed_frac
@@ -2400,14 +2413,16 @@ def build_category_pulse(matchup, weekly_avgs=None, days_elapsed=None, remaining
         exp_w = sum(p for p, _ in win_probs)
         exp_t = sum(t for _, t in win_probs)
         exp_l = max(0.0, len(win_probs) - exp_w - exp_t)
+        w_i, l_i, t_i = _largest_remainder_round([exp_w, exp_l, exp_t], len(win_probs))
         expected_html = (
             f'<div style="margin-top:3px;color:{MUTED};font-size:10px;" '
-            f'title="Probability-weighted record across projected categories '
-            f'(expected wins = sum of each category\'s win %).">'
+            f'title="Probability-weighted record across projected categories (expected '
+            f'wins = sum of each category\'s win %). Exact: '
+            f'{exp_w:.1f} W · {exp_l:.1f} L · {exp_t:.1f} T.">'
             f'expected finish&nbsp;'
-            f'<span style="color:{GREEN}cc;font-weight:600;">{exp_w:.1f} W</span> · '
-            f'<span style="color:{RED}cc;font-weight:600;">{exp_l:.1f} L</span> · '
-            f'<span style="color:{TEXT};font-weight:600;">{exp_t:.1f} T</span>'
+            f'<span style="color:{GREEN}cc;font-weight:600;">{w_i} W</span> · '
+            f'<span style="color:{RED}cc;font-weight:600;">{l_i} L</span> · '
+            f'<span style="color:{TEXT};font-weight:600;">{t_i} T</span>'
             f'</div>'
         )
 
@@ -3042,7 +3057,8 @@ def build_glossary_section():
                "between). Uncertainty comes from each team's week-to-week spread in that stat and shrinks "
                "for counting cats as the week ends; a category with no history yet falls back to its "
                "close-threshold. “Expected finish” sums those odds into a probability-weighted record "
-               "(e.g. 6.3 W · 5.0 L · 0.6 T) — a softer read than the whole-number “proj” record above it."),
+               "(e.g. 6 W · 5 L · 1 T; hover for the exact fractional) — a softer read than the "
+               "point-estimate “proj” record above it."),
         _entry("Luck (standings)", "Roto rank minus record rank. Positive = your W-L is better than your "
                "category performance suggests (running lucky); negative = unlucky."),
     ])

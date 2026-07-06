@@ -202,7 +202,7 @@ Scoring categories: **R · HR · RBI · SB · OPS · B/SO** (batter strikeouts, 
 Scouting block for the current opponent, directly below Category Pulse. Shows their start count (and any two-start pitchers), top-3 hottest bats by recent OPS, season roto strengths/weaknesses (top-3 / bottom-3 categories), and wire activity (how active they've been on the FA wire). Only renders when the opponent has starters or hot hitters.
 
 ### Category Pulse
-A summary line above the cards shows your current record and projected end-of-week record, each as a full **W · L · T** (the tie count is always shown, even at `0T`), with a `⚡N close` count between them: `10W · 2L · 0T · ⚡3 close → proj 11W · 1L · 0T`. A second line shows the **expected finish** — a probability-weighted record like `expected finish 6.3 W · 5.0 L · 0.6 T` (the sum of every category's win odds), a softer read than the whole-number projection.
+A summary line above the cards shows your current record and projected end-of-week record, each as a full **W · L · T** (the tie count is always shown, even at `0T`), with a `⚡N close` count between them: `10W · 2L · 0T · ⚡3 close → proj 11W · 1L · 0T`. A second line shows the **expected finish** — a probability-weighted record like `expected finish 6 W · 5 L · 1 T` (rounded from the sum of every category's win odds so it still adds up to 12; hover for the exact fractional), a softer read than the point-estimate projection.
 
 12 visual cards — 6 hitting, 6 pitching. Each card shows:
 - **Current value** (big, colored green/red/white) vs opponent value
