@@ -207,7 +207,7 @@ A summary line above the cards shows your current record and projected end-of-we
 12 visual cards — 6 hitting, 6 pitching. Each card shows:
 - **Current value** (big, colored green/red/white) vs opponent value
 - **Fill bar** showing relative share of the combined total
-- **NN%** (corner) = your odds of winning that category (green ≥ 65%, red ≤ 35%, yellow in between), from a normal model of the final margin — uncertainty is each team's week-to-week spread in the stat and shrinks for counting cats as the week ends
+- **NN%** (corner) = your odds of winning that category, from a normal model of the final margin, colored to match the projected outcome (green = projected win, red = loss, white = tie) — uncertainty is each team's week-to-week spread in the stat and shrinks for counting cats as the week ends
 - **⚡** = within striking distance (close enough to flip)
 - **proj X.X vs Y.Y** = projected end-of-week (K/QS/W use your actual remaining starts × per-start rate; other cats use each team's weekly average)
 - **▲ / ▼ / ◆** flip badge = the projection flips the current result (▲ to a win, ▼ to a loss, ◆ to a tie)

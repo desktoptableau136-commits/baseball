@@ -2292,7 +2292,9 @@ def build_category_pulse(matchup, weekly_avgs=None, days_elapsed=None, remaining
         # Top-right corner badge: WIN % · ⚡ (close) · ▲▼ (flip)
         corner_parts = []
         if win_pct is not None:
-            wp_c = GREEN if win_pct >= 65 else (RED if win_pct <= 35 else YELLOW)
+            # Color the confidence % to match the projected outcome (green = proj win,
+            # red = proj loss, white = proj tie) — it always agrees in direction.
+            wp_c = GREEN if proj_res == "W" else (RED if proj_res == "L" else TEXT)
             corner_parts.append(
                 f'<span style="color:{wp_c};font-weight:800;font-size:9px;">{win_pct}%</span>'
             )
@@ -3018,10 +3020,11 @@ def build_glossary_section():
                "The projection is colored by its <b>projected</b> outcome (green = projected win, red = loss). "
                "An arrow marks a flip vs the current standing: ▲ flipping to a win, ▼ to a loss, ◆ to a tie."),
         _entry("Win %", "The <b>%</b> in each card corner is the odds you win that category, from a "
-               "normal model of the final margin (green ≥ 65%, red ≤ 35%, yellow in between). Uncertainty "
-               "comes from each team's week-to-week spread in that stat and shrinks for counting cats as "
-               "the week ends; a category with no history yet falls back to its close-threshold. It always "
-               "agrees in direction with the “proj” value on the same card."),
+               "normal model of the final margin, colored to match the projected outcome (green = "
+               "projected win, red = loss, white = tie). Uncertainty comes from each team's week-to-week "
+               "spread in that stat and shrinks for counting cats as the week ends; a category with no "
+               "history yet falls back to its close-threshold. It always agrees in direction with the "
+               "“proj” value on the same card."),
         _entry("Luck (standings)", "Roto rank minus record rank. Positive = your W-L is better than your "
                "category performance suggests (running lucky); negative = unlucky."),
     ])
