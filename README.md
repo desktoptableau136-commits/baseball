@@ -460,10 +460,14 @@ HITTER_NAME_PATCHES = {
 
 ## File Reference
 
+Contributor docs are split in two: **`CLAUDE.md`** holds the actionable rules and gotchas (kept lean so it loads fast as agent context), and **`NOTES.md`** holds the background — the "why we did it this way" narrative and the forensic history behind past decisions.
+
 ```
 baseball/
 ├── fetch_data.py                        # Data pipeline — runs first (~60s)
 ├── send_digest.py                       # Email builder + sender
+├── CLAUDE.md                            # Actionable rules / gotchas for contributors
+├── NOTES.md                             # Background & rationale ("why we did it this way")
 ├── requirements.txt                     # pip install -r requirements.txt
 ├── .env                                 # GMAIL_APP_PASSWORD — do not commit
 ├── .env.example                         # Safe template to share
