@@ -4128,7 +4128,9 @@ def build_email(snap, override_team=None):
             if _two:
                 _two_html = (
                     ' · <span style="color:' + GREEN + ';font-weight:700;">2-start:</span> '
+                    + '<span style="color:' + TEXT + ';font-weight:600;">'
                     + ", ".join(t.get("PlayerName", "") for t in _two)
+                    + '</span>'
                 )
             _lines.append(
                 f'<div style="margin:3px 0;"><span style="color:{MUTED};">Pitching:</span> '
