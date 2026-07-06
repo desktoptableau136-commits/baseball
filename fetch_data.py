@@ -1333,6 +1333,55 @@ def get_all_matchups(league) -> dict:
 
 
 
+def get_matchup_dates(league) -> dict:
+    """Return actual start/end dates for the current and next matchup periods.
+
+    Uses league.settings.matchup_periods (scoring-period-ID lists per period) +
+    league.scoringPeriodId (today) to derive calendar dates. Works for 1-week (7
+    scoring periods) and 2-week (14) periods — e.g. the All-Star break matchup.
+
+    Returns keys: matchup_start_date, matchup_end_date, matchup_period_days,
+    next_matchup_end_date  (all YYYY-MM-DD strings except matchup_period_days=int).
+    Returns {} if ESPN doesn't expose the needed fields.
+    """
+    current_week = getattr(league, "currentMatchupPeriod", None)
+    today_sp     = getattr(league, "scoringPeriodId",      None)
+    first_sp     = getattr(league, "firstScoringPeriod",   1)
+    if not current_week or not today_sp:
+        return {}
+    matchup_periods = getattr(league.settings, "matchup_periods", {}) or {}
+    scoring_ids = matchup_periods.get(str(current_week)) or matchup_periods.get(current_week) or []
+    if not scoring_ids:
+        return {}
+
+    # matchup_periods values are WEEKLY scoring period IDs (not daily).
+    # scoringPeriodId is a daily counter; (daily - first_sp) // 7 + 1 gives the weekly period.
+    today = datetime.now().date()
+    today_weekly = (int(today_sp) - int(first_sp)) // 7 + 1
+    matchup_start_weekly = min(int(x) for x in scoring_ids)
+    matchup_end_weekly   = max(int(x) for x in scoring_ids)
+    # days elapsed since matchup Monday
+    days_into_matchup = (today_weekly - matchup_start_weekly) * 7 + today.weekday()
+    start_date = today - timedelta(days=days_into_matchup)
+    period_days = (matchup_end_weekly - matchup_start_weekly + 1) * 7
+    end_date = start_date + timedelta(days=period_days - 1)
+
+    # Next matchup period end date (for end-of-matchup lookahead mode)
+    next_ids = matchup_periods.get(str(current_week + 1)) or matchup_periods.get(current_week + 1) or []
+    if next_ids:
+        next_weeks = (max(int(x) for x in next_ids) - min(int(x) for x in next_ids) + 1)
+        next_end_str = (end_date + timedelta(days=next_weeks * 7)).strftime("%Y-%m-%d")
+    else:
+        next_end_str = (end_date + timedelta(days=7)).strftime("%Y-%m-%d")
+
+    return {
+        "matchup_start_date":   start_date.strftime("%Y-%m-%d"),
+        "matchup_end_date":     end_date.strftime("%Y-%m-%d"),
+        "matchup_period_days":  (end_date - start_date).days + 1,
+        "next_matchup_end_date": next_end_str,
+    }
+
+
 def get_all_prev_matchups(league) -> dict:
     """Return the most recently completed matchup for ALL teams as
     {normalized_team_name: matchup_dict} — same structure/keys as get_all_matchups,
@@ -1450,8 +1499,10 @@ def main():
     current_matchup   = all_matchups.get(" ".join(my_team.split()), {})
     all_prev_matchups = get_all_prev_matchups(league)
     prev_matchup      = all_prev_matchups.get(" ".join(my_team.split()), {})
+    matchup_dates     = get_matchup_dates(league)
     if current_matchup:
-        print(f"       Week {current_matchup['week']}: {my_team} vs {current_matchup['opp_team']} ({current_matchup['wins']}-{current_matchup['losses']}) | {len(all_matchups)} teams indexed")
+        days = matchup_dates.get("matchup_period_days", 7)
+        print(f"       Week {current_matchup['week']}: {my_team} vs {current_matchup['opp_team']} ({current_matchup['wins']}-{current_matchup['losses']}) | {days}-day period | {len(all_matchups)} teams indexed")
     else:
         print("       No active matchup found.")
     if prev_matchup:
@@ -1481,6 +1532,7 @@ def main():
         "prev_matchup":    prev_matchup,
         "all_matchups":    all_matchups,
         "all_prev_matchups": all_prev_matchups,
+        **matchup_dates,
         "recent_hitting":  recent_hitting,
         "recent_pitching": recent_pitching,
     }
