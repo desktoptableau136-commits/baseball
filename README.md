@@ -182,7 +182,8 @@ KPI row: **Record** · **Current Matchup** (W-L-T + win%) · **Roster** (whole-t
 
 **SEASON**
 16. **My Season Category Rankings**
-17. **League Luck Standings**
+17. **Week N Roto Rankings** — live all-12-team roto table for the current week (tracks as the week progresses)
+18. **League Luck Standings**
 
 **REFERENCE**
 18. **Glossary & Methodology** — collapsible in-digest reference for every score, metric, and data source
@@ -284,6 +285,9 @@ Badges next to the name: `2-START` (purple), `QS` (green — projected quality s
 
 ### My Season Category Rankings
 Season-to-date roto rank across all 12 categories. Same color coding as the weekly version at the top, but for the full season.
+
+### Week N Roto Rankings
+All 12 teams ranked by current-week roto score, with all 12 category columns. Updates live throughout the week so you can watch standings shift. Uses the same 5-tier heat-map coloring as the Monday recap: bright green = #1 in cat, light green = #2, amber = #11, red = #12, muted = middle pack. Your team is bold blue; category leaders get accent-colored pills. Row background tints top-3 green, bottom-3 red.
 
 ### League Luck Standings
 All 12 teams sorted by record. Shows W-L-T · Win% · Roto rank · Cumulative roto points · Luck delta. **Luck** = roto rank minus record rank. Positive luck means your W-L-T is better than your underlying stats deserve; negative means you're underperforming your true quality.

@@ -4067,6 +4067,111 @@ def build_email(snap, override_team=None):
         f'<tr>{week_cat_cells}</tr></table>'
     )
 
+    # ── This week's full league roto rankings (live, all 12 teams) ────────────
+    week_roto_rankings_section = ""
+    if week_roto:
+        _wrt_th  = TH_S.replace("padding:8px 10px", "padding:3px 5px").replace("font-size:10px", "font-size:9px")
+        _wrt_tdc = TDC.replace("padding:7px 10px", "padding:3px 5px").replace("font-size:13px", "font-size:10px")
+        _wrt_tds = TD_S.replace("padding:7px 10px", "padding:3px 5px").replace("font-size:13px", "font-size:10px")
+        _wrt_key = " ".join(my_team.split())
+
+        _wrt_leaders: dict = {}
+        for _wrt_cat, _ in CAT_LABELS:
+            _pt_field = f"{_wrt_cat}_Points"
+            _best_pts = max((float(r.get(_pt_field) or 0) for r in week_roto), default=0)
+            if _best_pts > 0:
+                for r in week_roto:
+                    if float(r.get(_pt_field) or 0) == _best_pts:
+                        _wrt_leaders.setdefault(r["Team"], []).append(_wrt_cat)
+
+        _ranked_wrt = sorted(week_roto, key=lambda r: -float(r.get("Roto_Score") or 0))
+        _wrt_n = len(_ranked_wrt)
+
+        def _wrt_fmt(val, cat):
+            dec = 3 if cat == "OPS" else (2 if cat in {"ERA", "WHIP"} else 0)
+            try:
+                f = f"{float(val):.{dec}f}"
+                if dec > 0 and float(val) < 1.0:
+                    f = f.lstrip("0") or "0"
+                return f
+            except (TypeError, ValueError):
+                return "—"
+
+        _wrt_rows = ""
+        for _wrt_rank, r in enumerate(_ranked_wrt, 1):
+            _wrt_team  = r.get("Team", "")
+            _wrt_score = float(r.get("Roto_Score") or 0)
+            _wrt_led   = _wrt_leaders.get(_wrt_team, [])
+            _wrt_is_my = " ".join(_wrt_team.split()) == _wrt_key
+
+            if _wrt_rank <= 3:
+                _wrt_row_bg = "background:rgba(34,197,94,0.07);"
+            elif _wrt_rank >= _wrt_n - 2:
+                _wrt_row_bg = "background:rgba(239,68,68,0.07);"
+            else:
+                _wrt_row_bg = ""
+
+            _wrt_logo       = fantasy_logo(team_logos.get(" ".join(_wrt_team.split()), ""), 16, _wrt_team)
+            _wrt_rank_color = GREEN if _wrt_rank <= 3 else (RED if _wrt_rank >= _wrt_n - 2 else MUTED)
+            _wrt_led_pills  = "".join(
+                f'<span style="background:{ACCENT}22;color:{ACCENT};padding:1px 4px;'
+                f'border-radius:10px;font-size:8px;font-weight:700;margin-left:2px;">'
+                f'{_CAT_DISPLAY.get(c, c)}</span>'
+                for c in _wrt_led
+            )
+            _wrt_stat_cells = ""
+            for _wrt_c, _ in CAT_LABELS:
+                _wrt_pts     = float(r.get(f"{_wrt_c}_Points") or 0)
+                _wrt_val_str = _wrt_fmt(r.get(_wrt_c, 0), _wrt_c)
+                if _wrt_val_str == "—":
+                    _wrt_color = MUTED
+                elif _wrt_pts == _wrt_n:
+                    _wrt_color = GREEN
+                elif _wrt_pts == _wrt_n - 1:
+                    _wrt_color = "#86efac"
+                elif _wrt_pts == 1:
+                    _wrt_color = RED
+                elif _wrt_pts == 2:
+                    _wrt_color = YELLOW
+                else:
+                    _wrt_color = MUTED
+                _wrt_stat_cells += f'<td style="{_wrt_tdc}color:{_wrt_color};">{_wrt_val_str}</td>'
+
+            _wrt_rows += (
+                f'<tr style="{_wrt_row_bg}">'
+                f'<td style="{_wrt_tdc}color:{_wrt_rank_color};font-weight:700;width:24px;">{_wrt_rank}</td>'
+                f'<td style="{_wrt_tds}font-weight:{"800" if _wrt_is_my else "600"};'
+                f'color:{ACCENT if _wrt_is_my else TEXT};white-space:nowrap;">'
+                f'{_wrt_logo}{_wrt_team}'
+                + (f'<span style="margin-left:4px;">{_wrt_led_pills}</span>' if _wrt_led_pills else "")
+                + f'</td>'
+                f'<td style="{_wrt_tdc}font-weight:700;">{_wrt_score:.1f}</td>'
+                + _wrt_stat_cells +
+                f'</tr>'
+            )
+
+        _wrt_stat_headers = "".join(
+            f'<th style="{_wrt_th}text-align:center;">{_CAT_DISPLAY.get(c, c)}</th>'
+            for c, _ in CAT_LABELS
+        )
+        _wrt_header_row = (
+            f'<th style="{_wrt_th}text-align:center;width:24px;">#</th>'
+            f'<th style="{_wrt_th}">Team</th>'
+            f'<th style="{_wrt_th}text-align:center;">Pts</th>'
+            + _wrt_stat_headers
+        )
+        _wrt_table = (
+            f'<div style="overflow-x:auto;-webkit-overflow-scrolling:touch;">'
+            f'<table style="width:100%;border-collapse:collapse;font-size:10px;">'
+            f'<thead><tr>{_wrt_header_row}</tr></thead>'
+            f'<tbody>{_wrt_rows}</tbody></table></div>'
+        )
+        week_roto_rankings_section = (
+            section_head(f"Week {current_week_num} Roto Rankings",
+                         f"Live standings \xb7 green = best in cat \xb7 red = worst") +
+            _wrt_table
+        )
+
     # ── Positional Breakdown ───────────────────────────────────────────────────
     pos_rows = ""
     for i, p in enumerate(pos_data):
@@ -4313,6 +4418,7 @@ def build_email(snap, override_team=None):
         fa_hit_section,                                                                   # 13
         band_divider("SEASON", anchor="band-season"),                                     # SEASON CONTEXT band header
         cat_section,                                                                      # 14
+        week_roto_rankings_section,                                                       # 14b weekly roto table (all teams, live)
         luck_section,                                                                     # 15
         band_divider("REFERENCE", anchor="band-glossary"),                                # REFERENCE band header
         build_glossary_section(),                                                         # 16 Glossary & Methodology
