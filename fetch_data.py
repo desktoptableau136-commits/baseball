@@ -1336,9 +1336,15 @@ def get_all_matchups(league) -> dict:
 def get_matchup_dates(league) -> dict:
     """Return actual start/end dates for the current and next matchup periods.
 
-    Uses league.settings.matchup_periods (scoring-period-ID lists per period) +
-    league.scoringPeriodId (today) to derive calendar dates. Works for 1-week (7
-    scoring periods) and 2-week (14) periods — e.g. the All-Star break matchup.
+    Uses finalScoringPeriod to infer whether the current matchup is longer than
+    7 days (e.g. All-Star break = 14 days). ESPN's matchupPeriods dict maps each
+    matchup period ID → a list of WEEKLY scoring period IDs (not daily), so
+    len([15]) == 1 even when the All-Star break matchup spans 14 days. Instead:
+
+      remaining_daily_sps  = finalScoringPeriod - this_monday_sp + 1
+      expected_days        = remaining_regular_mps * 7 + playoff_days
+      extra_days           = remaining_daily_sps - expected_days   (≥ 0)
+      period_days          = 7 + min(extra_days, 7)
 
     Returns keys: matchup_start_date, matchup_end_date, matchup_period_days,
     next_matchup_end_date  (all YYYY-MM-DD strings except matchup_period_days=int).
@@ -1346,39 +1352,45 @@ def get_matchup_dates(league) -> dict:
     """
     current_week = getattr(league, "currentMatchupPeriod", None)
     today_sp     = getattr(league, "scoringPeriodId",      None)
-    first_sp     = getattr(league, "firstScoringPeriod",   1)
-    if not current_week or not today_sp:
+    final_sp     = getattr(league, "finalScoringPeriod",   None)
+    if not current_week or not today_sp or not final_sp:
         return {}
     matchup_periods = getattr(league.settings, "matchup_periods", {}) or {}
-    scoring_ids = matchup_periods.get(str(current_week)) or matchup_periods.get(current_week) or []
-    if not scoring_ids:
+    if not matchup_periods:
         return {}
 
-    # matchup_periods values are WEEKLY scoring period IDs (not daily).
-    # scoringPeriodId is a daily counter; (daily - first_sp) // 7 + 1 gives the weekly period.
     today = datetime.now().date()
-    today_weekly = (int(today_sp) - int(first_sp)) // 7 + 1
-    matchup_start_weekly = min(int(x) for x in scoring_ids)
-    matchup_end_weekly   = max(int(x) for x in scoring_ids)
-    # days elapsed since matchup Monday
-    days_into_matchup = (today_weekly - matchup_start_weekly) * 7 + today.weekday()
-    start_date = today - timedelta(days=days_into_matchup)
-    period_days = (matchup_end_weekly - matchup_start_weekly + 1) * 7
-    end_date = start_date + timedelta(days=period_days - 1)
+    # This Monday's daily scoring period (anchor for start_date)
+    matchup_start_sp = int(today_sp) - today.weekday()
+    start_date = today - timedelta(days=today.weekday())
 
-    # Next matchup period end date (for end-of-matchup lookahead mode)
-    next_ids = matchup_periods.get(str(current_week + 1)) or matchup_periods.get(current_week + 1) or []
-    if next_ids:
-        next_weeks = (max(int(x) for x in next_ids) - min(int(x) for x in next_ids) + 1)
-        next_end_str = (end_date + timedelta(days=next_weeks * 7)).strftime("%Y-%m-%d")
-    else:
-        next_end_str = (end_date + timedelta(days=7)).strftime("%Y-%m-%d")
+    # Counts: regular (1 weekly SP) vs playoff/extended (>1 weekly SPs)
+    regular_mp_count  = sum(1 for v in matchup_periods.values() if len(v) == 1)
+    playoff_sps       = sum(len(v) for v in matchup_periods.values() if len(v) > 1)
+    playoff_days      = playoff_sps * 7
+
+    # How many regular matchup periods remain from this one onward?
+    remaining_regular = regular_mp_count - int(current_week) + 1
+    remaining_daily   = int(final_sp) - matchup_start_sp + 1
+    expected_days     = max(0, remaining_regular) * 7 + playoff_days
+    extra_days        = max(0, remaining_daily - expected_days)
+    period_days       = 7 + min(extra_days, 7)
+    end_date          = start_date + timedelta(days=period_days - 1)
+
+    # Next matchup: advance one period forward
+    next_start_sp     = matchup_start_sp + period_days
+    next_remaining    = int(final_sp) - next_start_sp + 1
+    next_regular      = remaining_regular - 1
+    next_expected     = max(0, next_regular) * 7 + playoff_days
+    next_extra        = max(0, next_remaining - next_expected)
+    next_period_days  = 7 + min(next_extra, 7)
+    next_end          = end_date + timedelta(days=next_period_days)
 
     return {
-        "matchup_start_date":   start_date.strftime("%Y-%m-%d"),
-        "matchup_end_date":     end_date.strftime("%Y-%m-%d"),
-        "matchup_period_days":  (end_date - start_date).days + 1,
-        "next_matchup_end_date": next_end_str,
+        "matchup_start_date":    start_date.strftime("%Y-%m-%d"),
+        "matchup_end_date":      end_date.strftime("%Y-%m-%d"),
+        "matchup_period_days":   period_days,
+        "next_matchup_end_date": next_end.strftime("%Y-%m-%d"),
     }
 
 
