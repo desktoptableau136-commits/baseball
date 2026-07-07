@@ -4127,18 +4127,22 @@ def build_email(snap, override_team=None):
                 _wrt_pts     = float(r.get(f"{_wrt_c}_Points") or 0)
                 _wrt_val_str = _wrt_fmt(r.get(_wrt_c, 0), _wrt_c)
                 if _wrt_val_str == "—":
-                    _wrt_color, _wrt_box = MUTED, ""
+                    _wrt_color, _wrt_badge = MUTED, False
                 elif _wrt_pts == _wrt_n:
-                    _wrt_color, _wrt_box = GREEN, f"border:1px solid {GREEN};border-radius:3px;padding:2px 5px;"
+                    _wrt_color, _wrt_badge = GREEN, True
                 elif _wrt_pts == _wrt_n - 1:
-                    _wrt_color, _wrt_box = "#86efac", ""
+                    _wrt_color, _wrt_badge = "#86efac", False
                 elif _wrt_pts == 1:
-                    _wrt_color, _wrt_box = RED, f"border:1px solid {RED};border-radius:3px;padding:2px 5px;"
+                    _wrt_color, _wrt_badge = RED, True
                 elif _wrt_pts == 2:
-                    _wrt_color, _wrt_box = YELLOW, ""
+                    _wrt_color, _wrt_badge = YELLOW, False
                 else:
-                    _wrt_color, _wrt_box = MUTED, ""
-                _wrt_stat_cells += f'<td style="{_wrt_tdc}color:{_wrt_color};{_wrt_box}">{_wrt_val_str}</td>'
+                    _wrt_color, _wrt_badge = MUTED, False
+                _wrt_inner = (
+                    f'<span style="border:1px solid {_wrt_color};border-radius:3px;padding:2px 6px;">{_wrt_val_str}</span>'
+                    if _wrt_badge else _wrt_val_str
+                )
+                _wrt_stat_cells += f'<td style="{_wrt_tdc}color:{_wrt_color};">{_wrt_inner}</td>'
 
             _wrt_rows += (
                 f'<tr style="{_wrt_row_bg}">'
