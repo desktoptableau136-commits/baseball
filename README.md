@@ -31,7 +31,7 @@ fetch_data.py  →  data/snapshot.json  →  send_digest.py   →  daily email
 
 2. **`send_digest.py`** reads the snapshot, builds a single HTML email, and sends it via Gmail SMTP. The email includes both an inline HTML body and an attached `digest_YYYY-MM-DD.html` file — the attachment bypasses Gmail's 102 KB inline clip limit so the full digest is always accessible by opening the attachment in a browser. Alternatively saves `digest_preview.html` for local browser preview (no email).
 
-3. **`weekly_recap.py`** reads the same snapshot every Monday and emails a full-league recap: your matchup result, all 6 scoreboard matchups, Weekly Roto Rankings (all 12 categories, 5-tier heat-map coloring by weekly rank), Top Performers, Standings & Luck, and Season Trajectory. Saves `previews/recap_week_N.html` on dry runs. GitHub Actions: `.github/workflows/weekly-recap.yml` (Monday 15:30 UTC).
+3. **`weekly_recap.py`** reads the same snapshot every Monday and emails a full-league recap: **Week N Highlights** (commissioner-style prose + stat sidebar — roto winner, hitter/pitcher/FA of the week with MLB team logos and named historical benchmarks), your matchup result, all 6 scoreboard matchups, Weekly Roto Rankings (all 12 categories, 5-tier heat-map coloring), Top Performers, Standings & Luck, and Season Trajectory. Saves `previews/recap_week_N.html` on dry runs. GitHub Actions: `.github/workflows/weekly-recap.yml` (Monday 15:30 UTC).
 
 4. **GitHub Actions** runs both scripts automatically using credentials stored as repository secrets — no laptop needed.
 

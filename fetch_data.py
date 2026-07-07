@@ -1207,7 +1207,9 @@ def fetch_recent_pitcher_stats(days: int = 7) -> list:
         name_col = next((c for c in df.columns if c.lower() in ("name", "playername")), None)
         if name_col and name_col != "PlayerName":
             df = df.rename(columns={name_col: "PlayerName"})
-        keep = [c for c in ["PlayerName", "G", "GS", "IP", "ERA", "WHIP", "K", "BB"] if c in df.columns]
+        if "SO" in df.columns and "K" not in df.columns:
+            df = df.rename(columns={"SO": "K"})
+        keep = [c for c in ["PlayerName", "Team", "G", "GS", "QS", "IP", "K", "ERA", "WHIP", "BB"] if c in df.columns]
         df = df[keep].copy()
         for c in keep[1:]:
             df[c] = pd.to_numeric(df[c], errors="coerce")
@@ -1233,7 +1235,9 @@ def fetch_recent_hitter_stats(days: int = 7) -> list:
         name_col = next((c for c in df.columns if c.lower() in ("name", "playername")), None)
         if name_col and name_col != "PlayerName":
             df = df.rename(columns={name_col: "PlayerName"})
-        keep = [c for c in ["PlayerName", "G", "PA", "AB", "R", "HR", "RBI", "SB", "AVG", "OBP", "SLG", "OPS"] if c in df.columns]
+        if "BA" in df.columns and "AVG" not in df.columns:
+            df = df.rename(columns={"BA": "AVG"})
+        keep = [c for c in ["PlayerName", "Team", "G", "PA", "AB", "R", "HR", "RBI", "SB", "AVG", "OBP", "SLG", "OPS"] if c in df.columns]
         df = df[keep].copy()
         for c in keep[1:]:
             df[c] = pd.to_numeric(df[c], errors="coerce")
