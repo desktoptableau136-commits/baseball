@@ -23,14 +23,17 @@ Automated email digest for ESPN fantasy league 277836 (Guerrero Warfare). Runs t
 ## How It Works
 
 ```
-fetch_data.py  →  data/snapshot.json  →  send_digest.py  →  email
+fetch_data.py  →  data/snapshot.json  →  send_digest.py   →  daily email
+                                      →  weekly_recap.py  →  Monday recap email
 ```
 
 1. **`fetch_data.py`** pulls data from ESPN, FantasyPros, MLB Stats API, and Baseball Savant / Baseball Reference (via `pybaseball`). Takes ~60–90 seconds. Saves everything to `data/snapshot.json`. *(FanGraphs is never called directly — it returns 403; `pybaseball` handles the headers.)*
 
 2. **`send_digest.py`** reads the snapshot, builds a single HTML email, and sends it via Gmail SMTP. The email includes both an inline HTML body and an attached `digest_YYYY-MM-DD.html` file — the attachment bypasses Gmail's 102 KB inline clip limit so the full digest is always accessible by opening the attachment in a browser. Alternatively saves `digest_preview.html` for local browser preview (no email).
 
-3. **GitHub Actions** runs this twice daily using credentials stored as repository secrets — no laptop needed.
+3. **`weekly_recap.py`** reads the same snapshot every Monday and emails a full-league recap: your matchup result, all 6 scoreboard matchups, Weekly Roto Rankings (all 12 categories, 5-tier heat-map coloring by weekly rank), Top Performers, Standings & Luck, and Season Trajectory. Saves `previews/recap_week_N.html` on dry runs. GitHub Actions: `.github/workflows/weekly-recap.yml` (Monday 15:30 UTC).
+
+4. **GitHub Actions** runs both scripts automatically using credentials stored as repository secrets — no laptop needed.
 
 ---
 
@@ -98,6 +101,18 @@ python fetch_data.py
 ```
 
 After `--dry-run`, open `previews/digest_preview_{TeamName}.html` (e.g. `previews/digest_preview_Guerrero_Warfare.html`) in any browser to see the output. Add `--team "Team Name"` to preview any team's digest (requires a fresh snapshot).
+
+### Running the Monday Recap
+
+```bash
+# Monday recap — refresh + send email
+python weekly_recap.py
+
+# Recap preview using cached data (instant, no network calls)
+python weekly_recap.py --dry-run --no-refresh
+```
+
+After `--dry-run`, open `previews/recap_week_N.html` in any browser.
 
 **On Windows PowerShell**, if `git` isn't found, run this first to restore it:
 ```powershell

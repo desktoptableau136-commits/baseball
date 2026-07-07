@@ -500,6 +500,11 @@ def build_weekly_roto_rankings(roto, prev_week, logos):
     n      = len(ranked)
     my_key = " ".join(MY_TEAM.split())
 
+    # Compact local styles — tighter than global TH_S/TDC to avoid horizontal scroll
+    _th  = TH_S.replace("padding:8px 10px", "padding:3px 5px").replace("font-size:10px", "font-size:9px")
+    _tdc = TDC.replace("padding:7px 10px", "padding:3px 5px").replace("font-size:13px", "font-size:10px")
+    _tds = TD_S.replace("padding:7px 10px", "padding:3px 5px").replace("font-size:13px", "font-size:10px")
+
     rows_html = ""
     for rank, r in enumerate(ranked, 1):
         team  = r.get("Team", "")
@@ -514,58 +519,71 @@ def build_weekly_roto_rankings(roto, prev_week, logos):
         else:
             row_bg = ""
 
-        logo = fantasy_logo(logos.get(" ".join(team.split()), ""), 20, team)
+        logo = fantasy_logo(logos.get(" ".join(team.split()), ""), 16, team)
         rank_color = GREEN if rank <= 3 else (RED if rank >= n - 2 else MUTED)
 
         led_pills = "".join(
-            f'<span style="background:{ACCENT}22;color:{ACCENT};padding:1px 5px;'
-            f'border-radius:10px;font-size:9px;font-weight:700;margin-left:3px;">'
+            f'<span style="background:{ACCENT}22;color:{ACCENT};padding:1px 4px;'
+            f'border-radius:10px;font-size:8px;font-weight:700;margin-left:2px;">'
             f'{_CAT_DISPLAY.get(c, c)}</span>'
             for c in led
         )
 
-        # Key stat columns for context
+        # All 12 cat columns, 5-tier rank heat-map (1st→2nd→mid→11th→last)
         stat_cells = ""
-        for cat in ["R", "HR", "RBI", "OPS", "K", "ERA", "WHIP", "SVHD"]:
-            display_str, color = _fmt_stat(cat, r.get(cat))
+        for cat in _CAT_ORDER:
+            pts     = float(r.get(f"{cat}_Points") or 0)
+            val_str = _fmt_cat(r.get(cat, 0), cat)
+            if val_str == "—":
+                color = MUTED
+            elif pts == n:          # rank 1 — best
+                color = GREEN
+            elif pts == n - 1:      # rank 2 — 2nd best
+                color = "#86efac"
+            elif pts == 1:          # rank last — worst
+                color = RED
+            elif pts == 2:          # rank 2nd worst
+                color = YELLOW
+            else:                   # ranks 3–10 — middle pack
+                color = MUTED
             stat_cells += (
-                f'<td style="{TDC}font-size:11px;color:{color};">{display_str}</td>'
+                f'<td style="{_tdc}color:{color};">{val_str}</td>'
             )
 
         rows_html += (
             f'<tr style="{row_bg}">'
-            f'<td style="{TDC}color:{rank_color};font-weight:700;width:30px;">{rank}</td>'
-            f'<td style="{TD_S}font-weight:{"800" if is_my else "600"};'
-            f'color:{ACCENT if is_my else TEXT};">'
+            f'<td style="{_tdc}color:{rank_color};font-weight:700;width:24px;">{rank}</td>'
+            f'<td style="{_tds}font-weight:{"800" if is_my else "600"};'
+            f'color:{ACCENT if is_my else TEXT};white-space:nowrap;">'
             f'{logo}{team}'
-            + (f'<span style="margin-left:6px;">{led_pills}</span>' if led_pills else "")
+            + (f'<span style="margin-left:4px;">{led_pills}</span>' if led_pills else "")
             + f'</td>'
-            f'<td style="{TDC}font-weight:700;">{score:.1f}</td>'
+            f'<td style="{_tdc}font-weight:700;">{score:.1f}</td>'
             + stat_cells +
             f'</tr>'
         )
 
     stat_headers = "".join(
-        f'<th style="{TH_S}text-align:center;">{_CAT_DISPLAY.get(c, c)}</th>'
-        for c in ["R", "HR", "RBI", "OPS", "K", "ERA", "WHIP", "SV+H"]
+        f'<th style="{_th}text-align:center;">{_CAT_DISPLAY.get(c, c)}</th>'
+        for c in _CAT_ORDER
     )
     header_row = (
-        f'<th style="{TH_S}text-align:center;width:30px;">#</th>'
-        f'<th style="{TH_S}">Team</th>'
-        f'<th style="{TH_S}text-align:center;">Roto Pts</th>'
+        f'<th style="{_th}text-align:center;width:24px;">#</th>'
+        f'<th style="{_th}">Team</th>'
+        f'<th style="{_th}text-align:center;">Pts</th>'
         + stat_headers
     )
 
     table = (
         f'<div style="overflow-x:auto;-webkit-overflow-scrolling:touch;">'
-        f'<table style="width:100%;border-collapse:collapse;">'
+        f'<table style="width:100%;border-collapse:collapse;font-size:10px;">'
         f'<thead><tr>{header_row}</tr></thead>'
         f'<tbody>{rows_html}</tbody></table></div>'
     )
 
     return (
         section_head(f"Weekly Roto Rankings — Week {prev_week}",
-                     "Roto score for this week only (not season total) \xb7 pills = led that category") +
+                     "Roto score for this week only \xb7 green = top 3 in cat \xb7 red = bottom 3") +
         table
     )
 
