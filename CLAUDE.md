@@ -194,10 +194,10 @@ Five bands separated by `band_divider()` rules. The Triage divider renders only 
 **Jump-to nav (`nav_bar`)** — pill nav (`My Roster · Free Agents · Season`) with anchor links to `band-myroster`/`band-fa`/`band-season`. Lives in the **header's top-right** (two-column table: `.hdr-main` left, `.hdr-nav` right) so it doesn't push Week at a Glance down. Mobile media query stacks the two cells. Anchors are `<a name= id=>`; they jump in the browser attachment and degrade to harmless links inline. `nav_bar` drops a `<a name="top" id="top">`; every anchored `band_divider` renders a right-aligned `↑ TOP` back-link.
 
 - **⚑ ALERTS** (conditional): 1. Roster Alerts
-- **MY ROSTER:** 2. Week at a Glance · 3. Category Pulse · 3b. Opponent This Week (`opponent_week_intel`/`opp_preview_section`, below Category Pulse; opponent start count, two-start pitchers, top-3 hot bats by recent OPS, season roto strengths/weaknesses via `category_ranks`, wire activity; logo via `fantasy_logo()`; renders only when opponent has starters or hot hitters) · 4. Current Matchup (category rankings) · 5. Matchup (score banner + category table)
+- **MY ROSTER:** 2. Week at a Glance · 3. Category Pulse · 3b. Opponent This Week (`opponent_week_intel`/`opp_preview_section`, below Category Pulse; opponent start count, two-start pitchers, top-3 hot bats by recent OPS, season roto strengths/weaknesses via `category_ranks`, wire activity; logo via `fantasy_logo()`; renders only when opponent has starters or hot hitters) · 4. Current Matchup (category rankings) · 4b. Week N Roto Rankings (all 12 teams, live; hidden on Monday before stats accumulate — when all `Roto_Score` values are equal) · 5. Matchup (score banner + category table)
 - **MY ROSTER (holes first):** 10. Positional Breakdown · 6. My Upcoming Starts · 7. My Relief Pitchers · 8. Pitcher Hot/Cold · 9. Roster Hot/Cold
 - **FREE AGENTS:** 11. FA — Starting Pitchers · 12. FA — Relief Pitchers · 13. FA — Hitters
-- **SEASON:** 14. My Season Category Rankings · 14b. Week N Roto Rankings (all 12 teams, live) · 15. League Luck Standings
+- **SEASON:** 14. My Season Category Rankings · 15. League Luck Standings
 
 **My Season Category Rankings subtitle** shows a pseudo-single-week roto score: `sum(n - rank + 1 for rank in cats.values())` (max = n × 12) — directly comparable to "This Week's Category Rankings".
 

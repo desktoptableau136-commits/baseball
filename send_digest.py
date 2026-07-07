@@ -4069,7 +4069,8 @@ def build_email(snap, override_team=None):
 
     # ── This week's full league roto rankings (live, all 12 teams) ────────────
     week_roto_rankings_section = ""
-    if week_roto:
+    _wrt_scores = [float(r.get("Roto_Score") or 0) for r in week_roto]
+    if week_roto and len(set(_wrt_scores)) > 1:
         _wrt_th  = TH_S.replace("padding:8px 10px", "padding:3px 5px").replace("font-size:10px", "font-size:9px")
         _wrt_tdc = TDC.replace("padding:7px 10px", "padding:3px 5px").replace("font-size:13px", "font-size:10px")
         _wrt_tds = TD_S.replace("padding:7px 10px", "padding:3px 5px").replace("font-size:13px", "font-size:10px")
@@ -4401,6 +4402,7 @@ def build_email(snap, override_team=None):
         build_category_pulse(matchup, weekly_avgs=weekly_avgs, days_elapsed=days_elapsed, remaining_proj=pit_proj, is_sunday=is_sunday, weekly_std=weekly_std, matchup_days=matchup_period_days, game_days_elapsed=game_days_elapsed, matchup_game_days=matchup_game_days), # 3
         opp_preview_section,                                                              # 3b OPPONENT SCOUTING (below Category Pulse)
         week_cat_section,                                                                 # 4  (before matchup panel)
+        week_roto_rankings_section,                                                       # 4b league-wide roto (hidden Monday before stats accumulate)
         build_matchup_section(matchup, logos=team_logos, my_team=my_team,
                               weekly_avgs=weekly_avgs, days_elapsed=days_elapsed,
                               remaining_proj=pit_proj, matchup_days=matchup_period_days,
@@ -4418,7 +4420,6 @@ def build_email(snap, override_team=None):
         fa_hit_section,                                                                   # 13
         band_divider("SEASON", anchor="band-season"),                                     # SEASON CONTEXT band header
         cat_section,                                                                      # 14
-        week_roto_rankings_section,                                                       # 14b weekly roto table (all teams, live)
         luck_section,                                                                     # 15
         band_divider("REFERENCE", anchor="band-glossary"),                                # REFERENCE band header
         build_glossary_section(),                                                         # 16 Glossary & Methodology
