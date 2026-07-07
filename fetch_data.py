@@ -225,7 +225,7 @@ def get_pitcher_roster(league) -> pd.DataFrame:
                     "FantasyTeam": tm.team_name,
                     "Position":    ", ".join(slots),
                     "ESPN_Status": pl.injuryStatus or "ACTIVE",
-                    "ESPN_OnIL":   getattr(pl, "lineupSlot", "") == "IL",
+                    "ESPN_OnIL":   getattr(pl, "lineupSlot", "") == "IL" or bool(getattr(pl, "injured", False)),
                 })
     df = pd.DataFrame(rows).drop_duplicates(subset="PlayerName")
     return apply_name_patches(df, PITCHER_NAME_PATCHES)
@@ -281,7 +281,7 @@ def get_hitter_roster(league) -> pd.DataFrame:
                     "FantasyTeam": tm.team_name,
                     "Position":    ", ".join(slots),
                     "ESPN_Status": pl.injuryStatus or "ACTIVE",
-                    "ESPN_OnIL":   getattr(pl, "lineupSlot", "") == "IL",
+                    "ESPN_OnIL":   getattr(pl, "lineupSlot", "") == "IL" or bool(getattr(pl, "injured", False)),
                 })
     df = pd.DataFrame(rows).drop_duplicates(subset="PlayerName")
     return apply_name_patches(df, HITTER_NAME_PATCHES)
@@ -1548,6 +1548,16 @@ def main():
     recent_pitching = fetch_recent_pitcher_stats(days=15)
     print(f"       {len(recent_pitching)} pitchers with recent stats")
 
+    # Total roster cap = max total players (active + IL) on any team. The fullest team is at the cap.
+    # send_digest uses: open_spots = league_total_roster_max - my_total → free pickup if > 0.
+    from collections import Counter as _Counter
+    _team_total = _Counter()
+    for r in pitchers + hitters:
+        tm = r.get("FantasyTeam", "")
+        if tm and int(r.get("Dataset", 0) or 0) == CURRENT_YEAR:
+            _team_total[tm] += 1
+    league_total_roster_max = max(_team_total.values()) if _team_total else 28
+
     print("\n[10/10] Writing snapshot...")
     snapshot = {
         "refreshed_at":    datetime.now(timezone.utc).isoformat(),  # tz-aware (UTC) so the digest can show the fetch time in ET regardless of where it ran (CI is UTC, manual runs local)
@@ -1564,6 +1574,7 @@ def main():
         "all_matchups":    all_matchups,
         "all_prev_matchups": all_prev_matchups,
         **matchup_dates,
+        "league_total_roster_max": league_total_roster_max,
         "recent_hitting":  recent_hitting,
         "recent_pitching": recent_pitching,
     }

@@ -2581,7 +2581,8 @@ def _cat_score(r, cat):
 
 def _roster_suggestion(matchup, pitchers, hitters, fa_sp, fa_rp, fa_hit,
                         my_team, best_recent_p, best_recent_h,
-                        all_matchups, week_end_str, classification=None):
+                        all_matchups, week_end_str, classification=None,
+                        league_total_roster_max=28):
     """Return one add/drop or trade suggestion bullet HTML for Week at a Glance."""
     if not matchup:
         return ""
@@ -2592,8 +2593,6 @@ def _roster_suggestion(matchup, pitchers, hitters, fa_sp, fa_rp, fa_hit,
     opp         = matchup.get("opp_team", "")
     losing      = [c for c in cats if c["result"] == "L"]
     losing_cats = {c["cat"] for c in losing}
-    if not losing_cats:
-        return ""
 
     losing_pit = losing_cats & _PIT_CATS
     losing_hit = losing_cats & _HIT_CATS
@@ -2621,16 +2620,6 @@ def _roster_suggestion(matchup, pitchers, hitters, fa_sp, fa_rp, fa_hit,
                 if " ".join((r.get("FantasyTeam") or "").split()) == my_norm
                 and int(r.get("Dataset", 0) or 0) == YEAR]
 
-    # Droppable candidates: pitchers without an upcoming start this week + all hitters
-    drop_pit = [r for r in full_pit
-                if r.get("PSP_Date", "1999-01-01") in ("1999-01-01", "")
-                or r.get("PSP_Date", "9999-99-99") > week_end_str]
-    scored_drop = sorted(
-        [(r, _score_p(r, best_recent_p),              "pit") for r in drop_pit] +
-        [(r, _blend(r, hitter_score, best_recent_h),  "hit") for r in full_hit],
-        key=lambda x: x[1]
-    )
-
     def _pos_tags(r):
         pos_str = (r.get("Position") or "").upper()
         return {p.strip() for p in pos_str.replace("/", ",").split(",") if p.strip()}
@@ -2645,6 +2634,29 @@ def _roster_suggestion(matchup, pitchers, hitters, fa_sp, fa_rp, fa_hit,
         parts = [p.strip() for p in str(r.get("Position") or "").split(",")
                  if p.strip() and p.strip().upper() != "P"]
         return ", ".join(parts) or str(r.get("Position") or "")
+
+    # Free pickup: if total roster < league cap, there's open space — no drop needed.
+    my_total_count = len(full_pit) + len(full_hit)
+    open_spots = max(0, league_total_roster_max - my_total_count)
+    if open_spots > 0 and add_candidate:
+        an = add_candidate.get("PlayerName", "")
+        if an:
+            return (
+                f'Free Pickup: Add <span style="color:{TEXT};font-weight:700;">{an}</span>'
+                f'<span style="color:{MUTED};"> ({_pos_disp(add_candidate)})</span>'
+                f'<span style="color:{MUTED};"> ({add_reason})</span>'
+                f'<span style="color:{GREEN};font-size:10px;margin-left:6px;">&#10003; roster spot open</span>'
+            )
+
+    # Droppable candidates: pitchers without an upcoming start this week + all hitters
+    drop_pit = [r for r in full_pit
+                if r.get("PSP_Date", "1999-01-01") in ("1999-01-01", "")
+                or r.get("PSP_Date", "9999-99-99") > week_end_str]
+    scored_drop = sorted(
+        [(r, _score_p(r, best_recent_p),              "pit") for r in drop_pit] +
+        [(r, _blend(r, hitter_score, best_recent_h),  "hit") for r in full_hit],
+        key=lambda x: x[1]
+    )
 
     def _can_drop(cand):
         """True if dropping cand leaves at least one healthy player at every position it fills."""
@@ -4267,10 +4279,12 @@ def build_email(snap, override_team=None):
             + f'<div style="background:{SURFACE2};border:1px solid {BORDER};border-radius:8px;'
               f'padding:10px 14px;margin-bottom:24px;font-size:12px;">{"".join(_lines)}</div>'
         )
+    league_total_roster_max = int(snap.get("league_total_roster_max") or 28)
     roster_suggestion = _roster_suggestion(
         matchup, pitchers, hitters, fa_sp, fa_rp, fa_hit,
         my_team, best_recent_p, best_recent_h,
-        all_matchups, week_end_str, classification=category_classification
+        all_matchups, week_end_str, classification=category_classification,
+        league_total_roster_max=league_total_roster_max,
     )
     week_overview = build_week_overview(
         matchup, week_cats, week_n, fa_sp, starts, days_elapsed, my_starts_by_day,
