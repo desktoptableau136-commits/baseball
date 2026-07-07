@@ -583,7 +583,7 @@ def build_weekly_roto_rankings(roto, prev_week, logos):
 
     return (
         section_head(f"Weekly Roto Rankings — Week {prev_week}",
-                     "Roto score for this week only \xb7 green = top 3 in cat \xb7 red = bottom 3") +
+                     "Roto score for this week only \xb7 bright green = #1 \xb7 light green = #2 \xb7 amber = #11 \xb7 red = #12") +
         table
     )
 

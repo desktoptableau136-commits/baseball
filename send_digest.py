@@ -4171,7 +4171,7 @@ def build_email(snap, override_team=None):
         )
         week_roto_rankings_section = (
             section_head(f"Week {current_week_num} Roto Rankings",
-                         f"Live standings \xb7 green = best in cat \xb7 red = worst") +
+                         f"Live standings \xb7 bright green = #1 \xb7 light green = #2 \xb7 amber = #11 \xb7 red = #12") +
             _wrt_table
         )
 
