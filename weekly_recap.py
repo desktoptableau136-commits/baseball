@@ -535,19 +535,19 @@ def build_weekly_roto_rankings(roto, prev_week, logos):
             pts     = float(r.get(f"{cat}_Points") or 0)
             val_str = _fmt_cat(r.get(cat, 0), cat)
             if val_str == "—":
-                color = MUTED
+                color, box = MUTED, ""
             elif pts == n:          # rank 1 — best
-                color = GREEN
+                color, box = GREEN, f"border:1px solid {GREEN};border-radius:3px;padding:2px 5px;"
             elif pts == n - 1:      # rank 2 — 2nd best
-                color = "#86efac"
+                color, box = "#86efac", ""
             elif pts == 1:          # rank last — worst
-                color = RED
+                color, box = RED, f"border:1px solid {RED};border-radius:3px;padding:2px 5px;"
             elif pts == 2:          # rank 2nd worst
-                color = YELLOW
+                color, box = YELLOW, ""
             else:                   # ranks 3–10 — middle pack
-                color = MUTED
+                color, box = MUTED, ""
             stat_cells += (
-                f'<td style="{_tdc}color:{color};">{val_str}</td>'
+                f'<td style="{_tdc}color:{color};{box}">{val_str}</td>'
             )
 
         rows_html += (
