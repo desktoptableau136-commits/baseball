@@ -3118,7 +3118,14 @@ def build_email(snap, override_team=None):
     roto          = snap.get("roto", [])
     standings     = snap.get("standings", [])
     refreshed_iso = snap.get("refreshed_at", "")
-    refreshed     = refreshed_iso[:10]
+    # Convert to ET before slicing — a raw UTC slice shows "tomorrow" for any fetch after 8 PM ET.
+    try:
+        _rdt = datetime.fromisoformat(refreshed_iso)
+        if _rdt.tzinfo is not None and _ET is not None:
+            _rdt = _rdt.astimezone(_ET)
+        refreshed = _rdt.strftime("%Y-%m-%d")
+    except Exception:
+        refreshed = refreshed_iso[:10]
     refreshed_clock = _fmt_refresh_time(refreshed_iso)  # "6:32 AM ET" or "" — surfaced next to the freshness badge
     all_matchups  = snap.get("all_matchups", {})
     matchup       = all_matchups.get(" ".join(my_team.split())) or (snap.get("current_matchup", {}) if not override_team else {})
