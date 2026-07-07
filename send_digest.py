@@ -3277,11 +3277,18 @@ def build_email(snap, override_team=None):
     _rp_pool  = [r for r in pitchers if int(_n(r.get("Dataset")) or 0) == YEAR and not _is_sp(r)]
     hit_pctile = build_cat_percentiles(_hit_pool, _FA_HIT_CATS)
     rp_pctile  = build_cat_percentiles(_rp_pool,  _FA_RP_CATS)
-    # Pseudo roto score from the ranks shown in the week table (n - rank + 1 per
-    # category). Matches the Season section's method so the two subtitles are on
-    # the same scale, and matches the ranks rendered directly below it. (Raw
-    # Roto_Score diverges here because ESPN splits points on ties.)
-    my_week_roto_pts = sum(week_n - rank + 1 for rank in week_cats.values() if rank is not None)
+    # Current Matchup subtitle uses the SAME stored Roto_Score the Week N Roto
+    # Rankings table renders (ESPN's method, which splits points on ties) so the
+    # two panels agree. A pseudo rank-sum (n - rank + 1) would over-count ties
+    # (ordinal ranks give a tied leader the full points), diverging by a few pts.
+    _my_wrow = next(
+        (r for r in week_roto
+         if " ".join((r.get("Team") or "").split()) == " ".join(my_team.split())),
+        None,
+    )
+    _my_week_roto_raw = float(_my_wrow.get("Roto_Score") or 0) if _my_wrow else 0.0
+    my_week_roto_pts = (int(_my_week_roto_raw) if _my_week_roto_raw == int(_my_week_roto_raw)
+                        else round(_my_week_roto_raw, 1))
     my_season_pseudo_roto = sum(n - rank + 1 for rank in cats.values() if rank is not None)
     alerts    = roster_alerts(pitchers, hitters, my_team)
     starts    = my_upcoming_starts(pitchers, my_team)

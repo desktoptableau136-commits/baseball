@@ -210,7 +210,7 @@ Four-bullet summary placed directly above the category rankings grid:
 4. **Pickup: Add / Drop** — a concrete **hitter** add (pitcher streaming is already covered by bullets 2–3 and the FA Starting Pitchers table) paired with a position-aware drop. The drop never targets an injured player sitting in one of your **2 IL roster slots** — those slots don't take up active/bench room, so cutting them frees nothing (a DL player on your *bench* can still be the drop, since that *does* free a spot).
 
 ### Current Matchup (category rankings)
-Your roto rank (out of 12 teams) in each of the 12 scoring categories for the **current matchup week only**. Green = top 3, red = bottom half.
+Your roto rank (out of 12 teams) in each of the 12 scoring categories for the **current matchup week only**. Green = top 3, red = bottom half. The subtitle's total roto points is your stored `Roto_Score` — the same figure shown in the Week N Roto Rankings table, so the two panels agree (tied categories split points, so this can be a half-point below the sum of the ordinal rank chips shown in the grid).
 
 Scoring categories: **R · HR · RBI · SB · OPS · B/SO** (batter strikeouts, hitting) + **K · QS · W · ERA · WHIP · SV+H** (pitching)
 

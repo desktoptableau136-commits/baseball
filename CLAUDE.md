@@ -205,6 +205,8 @@ Five bands separated by `band_divider()` rules. The Triage divider renders only 
 
 **My Season Category Rankings subtitle** shows a pseudo-single-week roto score: `sum(n - rank + 1 for rank in cats.values())` (max = n × 12).
 
+**Current Matchup subtitle (`my_week_roto_pts`)** reads my team's **stored `Roto_Score`** from `week_roto` — the SAME field the Week N Roto Rankings table (4b) renders — so the two panels always agree. Deliberately NOT the pseudo rank-sum used by the Season subtitle: `Roto_Score` splits points on ties (ESPN's method), whereas an ordinal rank-sum gives a tied leader full points, over-counting by a few pts. Formats as int when whole, else 1 decimal (tie-split half-points like `112.5` survive). Note the per-category rank chips inside the Current Matchup panel stay ordinal, so their visual sum can exceed the subtitle total by the tie-split amount.
+
 **My Upcoming Starts subheader:** `X starts across Y days | N this wk[, N next wk]`. "this wk" count is red when 0; ", N next wk" omitted when next-week count is 0.
 
 **FA SP / My Upcoming Starts columns (8):** Pitcher · Proj. Line · Matchup · QS% · ERA · L15 ERA · K% · Score. "Proj. Line" = projected `IP · ER · K` per start, IP in baseball notation via `_fmt_ip()`. **Opp OPS is folded into the Matchup cell** as a muted second line (`_opp_ops_sub(r)` → "Opp OPS .742"). **Raw whiff% is folded under the K% cell** as a muted subline (`_whiff_sub(r)` → "whiff 28%") — keeps the table at 8 cols. Date-header rows span `colspan="8"` with background on `<tr>`.
