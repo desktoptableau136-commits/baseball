@@ -438,44 +438,36 @@ def build_league_scoreboard(all_prev_matchups, logos):
         w_a, l_a, t_a = matchup.get("wins", 0), matchup.get("losses", 0), matchup.get("ties", 0)
         is_my_a = " ".join(team_a.split()) == my_key
 
-        logo_a = fantasy_logo(logos.get(" ".join(team_a.split()), ""), 22, team_a)
-        logo_b = fantasy_logo(logos.get(" ".join(team_b.split()), ""), 22, team_b)
+        logo_a = fantasy_logo(logos.get(" ".join(team_a.split()), ""), 18, team_a)
+        logo_b = fantasy_logo(logos.get(" ".join(team_b.split()), ""), 18, team_b)
         col_a = ACCENT if is_my_a else TEXT
 
         score_a = f"{w_a}–{l_a}" + (f"–{t_a}" if t_a else "")
         score_b = f"{l_a}–{w_a}" + (f"–{t_a}" if t_a else "")
 
-        header_div = (
-            f'<div style="display:flex;align-items:center;justify-content:space-between;'
-            f'padding:9px 12px;background:{SURFACE2};border-bottom:1px solid {BORDER};">'
-            f'<div style="display:flex;align-items:center;gap:6px;">'
-            f'{logo_a}'
-            f'<span style="color:{col_a};font-weight:700;font-size:13px;">{team_a}</span>'
-            f'<span style="color:{MUTED};font-size:11px;font-weight:700;margin-left:4px;">{score_a}</span>'
-            f'</div>'
-            f'<span style="color:{MUTED};font-size:10px;font-weight:600;padding:0 8px;">vs</span>'
-            f'<div style="display:flex;align-items:center;gap:6px;flex-direction:row-reverse;">'
-            f'{logo_b}'
-            f'<span style="color:{TEXT};font-weight:700;font-size:13px;">{team_b}</span>'
-            f'<span style="color:{MUTED};font-size:11px;font-weight:700;margin-right:4px;">{score_b}</span>'
-            f'</div>'
-            f'</div>'
-        )
-
-        header_cells = f'<th style="{th}text-align:left;padding-left:8px;min-width:36px;"></th>'
+        # First column is the team label (logo + name + W–L–T); category headers follow.
+        header_cells = f'<th style="{th}text-align:left;padding-left:8px;min-width:130px;"></th>'
         for i, cat in enumerate(_CAT_ORDER):
             lbl = _CAT_DISPLAY.get(cat, cat)
-            c   = cats.get(cat, {})
-            res = c.get("result", "T")
-            col = GREEN if res == "W" else (RED if res == "L" else MUTED)
             sep = f"border-left:1px solid {BORDER};" if i == 6 else ""
+            # Neutral header — win/loss coloring only makes sense from one team's
+            # POV; the full-league scoreboard is even-handed (outlined value = winner).
             header_cells += (
-                f'<th style="{th}{sep}color:{col};border-bottom:2px solid {col};">{lbl}</th>'
+                f'<th style="{th}{sep}color:{MUTED};border-bottom:2px solid {BORDER};">{lbl}</th>'
             )
 
-        def _row(label, label_color, val_key, win_result, team_a=team_a, cats=cats):
-            row = (f'<td style="{td_val}text-align:left;color:{label_color};font-weight:700;'
-                   f'font-size:10px;padding-left:8px;">{label}</td>')
+        def _row(logo, label, label_color, score, val_key, win_result, cats=cats):
+            label_cell = (
+                f'<td style="{td_val}text-align:left;padding-left:8px;'
+                f'overflow:hidden;text-overflow:ellipsis;">'
+                f'{logo}'
+                f'<span style="color:{label_color};font-weight:700;font-size:11px;'
+                f'vertical-align:middle;">{label}</span>'
+                f'<span style="color:{MUTED};font-weight:700;font-size:10px;'
+                f'vertical-align:middle;margin-left:5px;">{score}</span>'
+                f'</td>'
+            )
+            row = label_cell
             for i, cat in enumerate(_CAT_ORDER):
                 c   = cats.get(cat, {})
                 val = c.get(val_key, 0)
@@ -488,27 +480,33 @@ def build_league_scoreboard(all_prev_matchups, logos):
                 row += f'<td style="{td_val}color:{VAL_COLOR};{lb}">{val_str}</td>'
             return f"<tr>{row}</tr>"
 
+        # Fixed layout + colgroup so every matchup card shares the SAME column
+        # positions (label col + 12 equal cat cols) — otherwise each table sizes
+        # its first column to its own team-name length and the axis drifts card-to-card.
+        colgroup = ('<colgroup><col style="width:150px;">'
+                    + '<col>' * len(_CAT_ORDER) + '</colgroup>')
         cat_table = (
             f'<div style="overflow-x:auto;-webkit-overflow-scrolling:touch;">'
-            f'<table style="width:100%;border-collapse:collapse;min-width:440px;">'
+            f'<table style="width:100%;border-collapse:collapse;min-width:520px;'
+            f'table-layout:fixed;">'
+            f'{colgroup}'
             f'<thead><tr>{header_cells}</tr></thead>'
             f'<tbody>'
-            + _row(team_a, col_a, "my_val",  "W")
-            + _row(team_b, TEXT,  "opp_val", "L")
+            + _row(logo_a, team_a, col_a, score_a, "my_val",  "W")
+            + _row(logo_b, team_b, TEXT,  score_b, "opp_val", "L")
             + "</tbody></table></div>"
         )
 
         blocks.append(
             f'<div style="background:{SURFACE};border:1px solid {BORDER};border-radius:6px;'
             f'overflow:hidden;margin-bottom:14px;">'
-            + header_div
             + f'<div style="padding:4px 0 8px;">{cat_table}</div>'
             f'</div>'
         )
 
     return (
         section_head(f"League Scoreboard — Week {week}",
-                     "All 6 matchups \xb7 green col = team A won that cat \xb7 outlined value = winner") +
+                     "All 6 matchups \xb7 outlined value = category winner") +
         "\n".join(blocks)
     )
 
