@@ -457,10 +457,10 @@ Each category: `cat, my_val, opp_val, result` (W/L/T), `lower_better`
 `PlayerName, G, GS, IP, ERA, WHIP, BB`
 
 **prev_week_hitting** (list of dicts — exact previous matchup Mon–Sun, all MLB hitters):
-Same schema as `recent_hitting`. Used by `build_commissioner_story` for hitter-of-the-week selection.
+Same schema as `recent_hitting`. Used by `build_commissioner_story` (hitter-of-the-week) **and `build_top_performers`** so the recap's Top Performers timeline matches the rest of the recap (the exact matchup week), not a rolling window.
 
 **prev_week_pitching** (list of dicts — exact previous matchup Mon–Sun, all MLB pitchers):
-Same schema as `recent_pitching`. Used by `build_commissioner_story` for pitcher-of-the-week selection.
+Same schema as `recent_pitching`. Used by `build_commissioner_story` (pitcher-of-the-week) **and `build_top_performers`** (matchup-week timeline). The Top Performers pitcher table shows **K** rather than G.
 
 **weekly_results** (dict — `{"1": {"Team Name": "W"/"L"/"T", ...}, ...}`):
 Per-week head-to-head matchup results for every team. Keys are week numbers as strings. Note: the sparkline dot encoding uses roto-derived rank results computed in `send_digest.py` from the `roto` data — not this H2H field directly.

@@ -664,8 +664,14 @@ def _performer_table(players, stat_keys, stat_labels):
     )
 
 
-def build_top_performers(recent_hitting, recent_pitching, hitters, pitchers, logos, snap_year=2026):
-    """Top rostered performers of the week + hot free agents."""
+def build_top_performers(recent_hitting, recent_pitching, hitters, pitchers, logos, snap_year=2026,
+                         week_dates=""):
+    """Top rostered performers of the week + hot free agents.
+
+    `recent_hitting`/`recent_pitching` are the exact prev-week matchup window
+    (`prev_week_hitting`/`prev_week_pitching`) so the timeline matches the rest
+    of the recap — NOT the rolling 7-day/15-day windows.
+    """
 
     # Build name-keyed season-row lookups for FantasyTeam tagging
     h_exact, h_keyed = {}, {}
@@ -683,17 +689,19 @@ def build_top_performers(recent_hitting, recent_pitching, hitters, pitchers, log
             p_keyed.setdefault(_name_key(n), r)
 
     def _enrich_h(rh):
-        n  = rh.get("PlayerName", "")
-        s  = h_exact.get(n) or h_keyed.get(_name_key(n)) or {}
+        raw_n = rh.get("PlayerName", "")
+        n  = _fix_mojibake(raw_n)   # prev_week_* names arrive mojibaked (e.g. "Eury PÃ©rez")
+        s  = h_exact.get(raw_n) or h_exact.get(n) or h_keyed.get(_name_key(n)) or {}
         ft = (s.get("FantasyTeam") or "").strip()
-        return {**rh, "FantasyTeam": ft, "Position": s.get("Position", ""),
+        return {**rh, "PlayerName": n, "FantasyTeam": ft, "Position": s.get("Position", ""),
                 "_logo": fantasy_logo(logos.get(" ".join(ft.split()), ""), 18, ft) if ft else ""}
 
     def _enrich_p(rp):
-        n  = rp.get("PlayerName", "")
-        s  = p_exact.get(n) or p_keyed.get(_name_key(n)) or {}
+        raw_n = rp.get("PlayerName", "")
+        n  = _fix_mojibake(raw_n)
+        s  = p_exact.get(raw_n) or p_exact.get(n) or p_keyed.get(_name_key(n)) or {}
         ft = (s.get("FantasyTeam") or "").strip()
-        return {**rp, "FantasyTeam": ft, "Position": s.get("Position", ""),
+        return {**rp, "PlayerName": n, "FantasyTeam": ft, "Position": s.get("Position", ""),
                 "_logo": fantasy_logo(logos.get(" ".join(ft.split()), ""), 18, ft) if ft else ""}
 
     def _is_fa(ft):
@@ -719,12 +727,12 @@ def build_top_performers(recent_hitting, recent_pitching, hitters, pitchers, log
 
     HIT_KEYS   = ["OPS", "HR", "RBI", "R", "SB"]
     HIT_LABELS = ["OPS", "HR", "RBI", "R", "SB"]
-    PIT_KEYS   = ["ERA", "WHIP", "IP", "G"]
-    PIT_LABELS = ["ERA", "WHIP", "IP", "G"]
+    PIT_KEYS   = ["ERA", "WHIP", "IP", "K"]
+    PIT_LABELS = ["ERA", "WHIP", "IP", "K"]
 
+    _window = f"{week_dates} \xb7 " if week_dates else ""
     out = section_head("Top Performers",
-                       "Hitting: FanGraphs last 7 days (min 10 AB) \xb7 "
-                       "Pitching: last 15 days (min 8 IP)")
+                       f"{_window}Hitting: min 10 AB \xb7 Pitching: min 8 IP")
 
     if rostered_h:
         out += (f'<div style="font-size:10px;font-weight:700;color:{MUTED};text-transform:uppercase;'
@@ -1457,7 +1465,8 @@ def build_recap(snap):
         band_divider("WEEKLY PERFORMANCE", anchor="band-roto"),
         build_weekly_roto_rankings(roto, prev_week, logos),
         band_divider("TOP PERFORMERS", anchor="band-performers"),
-        build_top_performers(recent_hitting, recent_pitching, hitters, pitchers, logos, snap_year),
+        build_top_performers(prev_week_hitting, prev_week_pitching, hitters, pitchers, logos,
+                             snap_year, week_dates=week_dates),
         band_divider("STANDINGS & SEASON", anchor="band-standings"),
         build_standings_section(roto, standings, logos),
         f'<div style="margin-top:28px;"></div>',
