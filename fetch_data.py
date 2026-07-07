@@ -798,7 +798,12 @@ def roto_score_week(league, week: int) -> pd.DataFrame:
             team  = getattr(b, f"{side}_team").team_name
             stats = getattr(b, f"{side}_stats")
             for cat, info in stats.items():
-                if info.get("result") is not None:
+                # Rank roto cats by VALUE, not ESPN's per-category `result`: for the
+                # live (in-progress) matchup period ESPN leaves `result` = None until the
+                # period closes, so a result-gated filter drops the whole current week.
+                # Value is present live, and the ranking math below never used `result`
+                # (completed weeks are unaffected — value + result are both present there).
+                if cat in ROTO_CATS and info.get("value") is not None:
                     rows.append({
                         "Team":     team,
                         "Category": cat,
@@ -808,6 +813,7 @@ def roto_score_week(league, week: int) -> pd.DataFrame:
     if not rows:
         return pd.DataFrame()
     df = pd.DataFrame(rows)
+    df["Value"] = pd.to_numeric(df["Value"], errors="coerce")
     pivot = df.groupby(["Team", "Category"])["Value"].sum().unstack(fill_value=0)
     pivot = pivot.reindex(columns=ROTO_CATS, fill_value=0)
     n = len(pivot)
@@ -862,8 +868,9 @@ def get_all_roto(league) -> list:
             df = roto_score_week(league, wk)
             if df is not None and not df.empty:
                 results.append(df)
-        except Exception:
-            break
+        except Exception as e:
+            log(f"  roto_score_week({wk}) failed: {e}")
+            continue
     if not results:
         return []
     combined = pd.concat(results, ignore_index=True)

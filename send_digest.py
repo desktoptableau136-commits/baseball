@@ -4174,9 +4174,11 @@ def build_email(snap, override_team=None):
             f'<tbody>{_wrt_rows}</tbody></table></div>'
         )
         week_roto_rankings_section = (
+            '<div style="margin-bottom:24px;">' +
             section_head(f"Week {current_week_num} Roto Rankings",
                          f"Live standings \xb7 bright green = #1 \xb7 light green = #2 \xb7 amber = #11 \xb7 red = #12") +
-            _wrt_table
+            _wrt_table +
+            '</div>'
         )
 
     # ── Positional Breakdown ───────────────────────────────────────────────────
