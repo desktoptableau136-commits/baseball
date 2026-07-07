@@ -919,12 +919,18 @@ def build_commissioner_story(roto, prev_week, recent_hitting, recent_pitching,
             n = r["PlayerName"]
             h_exact.setdefault(n, r)
             h_keyed.setdefault(_name_key(n), r)
-    p_exact, p_keyed = {}, {}
+    p_exact, p_keyed, p_15d = {}, {}, {}
     for r in pitchers:
-        if int(r.get("Dataset", 0) or 0) == snap_year and r.get("PlayerName"):
-            n = r["PlayerName"]
+        n = r.get("PlayerName")
+        if not n:
+            continue
+        ds = int(r.get("Dataset", 0) or 0)
+        if ds == snap_year:
             p_exact.setdefault(n, r)
             p_keyed.setdefault(_name_key(n), r)
+        if ds == 15:
+            p_15d.setdefault(n, r)
+            p_15d.setdefault(_name_key(n), r)
 
     def _enrich_h(rh):
         raw_n = rh.get("PlayerName", "")
@@ -940,10 +946,15 @@ def build_commissioner_story(roto, prev_week, recent_hitting, recent_pitching,
         raw_n = rp.get("PlayerName", "")
         n  = _fix_mojibake(raw_n)
         s  = p_exact.get(raw_n) or p_keyed.get(_name_key(n)) or {}
+        fp15 = p_15d.get(raw_n) or p_15d.get(_name_key(n)) or {}
         ft = (s.get("FantasyTeam") or "").strip()
         mlb = rp.get("Team") or s.get("Team", "")
+        # K and QS come from FP 15-day data when absent from recent_pitching
+        k_val  = rp.get("K") if rp.get("K") is not None else fp15.get("K")
+        qs_val = rp.get("QS") if rp.get("QS") is not None else fp15.get("QS")
         return {**rp, "PlayerName": n, "FantasyTeam": ft,
                 "Position": s.get("Position", ""), "MLBTeam": mlb,
+                "K": k_val, "QS": qs_val,
                 "_logo": fantasy_logo(logos.get(" ".join(ft.split()), ""), 18, ft) if ft else ""}
 
     def _is_fa(ft):
@@ -1227,16 +1238,16 @@ def build_commissioner_story(roto, prev_week, recent_hitting, recent_pitching,
     # ── Sidebar stat cards ────────────────────────────────────────────────────
     def _card(label, label_color, name, logo, stat_lines):
         lines_html = "".join(
-            f'<div style="color:{MUTED};font-size:11px;line-height:1.6;">{ln}</div>'
+            f'<div style="color:{MUTED};font-size:10px;line-height:1.6;">{ln}</div>'
             for ln in stat_lines
         )
         return (
             f'<div style="padding:8px 0;border-top:1px solid {BORDER};">'
-            f'<div style="color:{label_color};font-size:9px;font-weight:700;'
+            f'<div style="color:{label_color};font-size:8px;font-weight:700;'
             f'text-transform:uppercase;letter-spacing:.8px;margin-bottom:4px;">{label}</div>'
             f'<div style="display:flex;align-items:center;gap:4px;margin-bottom:3px;">'
             f'{logo}'
-            f'<span style="color:{TEXT};font-weight:700;font-size:12px;">{name}</span>'
+            f'<span style="color:{TEXT};font-weight:700;font-size:11px;">{name}</span>'
             f'</div>'
             f'{lines_html}'
             f'</div>'
@@ -1253,9 +1264,10 @@ def build_commissioner_story(roto, prev_week, recent_hitting, recent_pitching,
         n_t2   = len(week_rows)
         wled   = [_CAT_DISPLAY.get(c, c) for c in _CAT_ORDER
                   if float(wrow2.get(f"{c}_Points", 0)) == n_t2]
-        card_lines = [f"{winner_score:.1f} roto pts"]
+        score_line = f"{winner_score:.1f} roto pts"
         if wled:
-            card_lines.append("#1 in: " + ", ".join(wled))
+            score_line += " | #1 in: " + ", ".join(wled)
+        card_lines = [score_line]
         sidebar_cards.append(_card(
             f"Week {prev_week} Roto Winner", wcolor,
             winner_team, wlogo, card_lines,
@@ -1310,7 +1322,6 @@ def build_commissioner_story(roto, prev_week, recent_hitting, recent_pitching,
         stat_lines = []
         if slash: stat_lines.append(slash)
         if cnts_parts: stat_lines.append(" \xb7 ".join(cnts_parts))
-        stat_lines.append("Free Agent")
         sidebar_cards.append(_card("Best Available", YELLOW,
                                    name + _mlb_logo(mlb), "", stat_lines))
 
