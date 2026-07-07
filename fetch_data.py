@@ -1195,12 +1195,12 @@ def build_hitter_data(league) -> list:
 
 # â”€â”€ RECENT HITTER STATS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-def fetch_recent_pitcher_stats(days: int = 7) -> list:
-    """Pull last N days of pitcher stats from FanGraphs via pybaseball."""
+def fetch_recent_pitcher_stats(days: int = 7, start_dt: str = None, end_dt: str = None) -> list:
+    """Pull pitcher stats from FanGraphs via pybaseball. Pass start_dt/end_dt for an exact window."""
     try:
         from pybaseball import pitching_stats_range
-        end_dt   = datetime.now().strftime("%Y-%m-%d")
-        start_dt = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+        end_dt   = end_dt   or datetime.now().strftime("%Y-%m-%d")
+        start_dt = start_dt or (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
         df = pitching_stats_range(start_dt, end_dt)
         if df is None or df.empty:
             return []
@@ -1222,12 +1222,12 @@ def fetch_recent_pitcher_stats(days: int = 7) -> list:
         return []
 
 
-def fetch_recent_hitter_stats(days: int = 7) -> list:
-    """Pull last N days of hitter stats from FanGraphs via pybaseball."""
+def fetch_recent_hitter_stats(days: int = 7, start_dt: str = None, end_dt: str = None) -> list:
+    """Pull hitter stats from FanGraphs via pybaseball. Pass start_dt/end_dt for an exact window."""
     try:
         from pybaseball import batting_stats_range
-        end_dt   = datetime.now().strftime("%Y-%m-%d")
-        start_dt = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+        end_dt   = end_dt   or datetime.now().strftime("%Y-%m-%d")
+        start_dt = start_dt or (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
         df = batting_stats_range(start_dt, end_dt)
         if df is None or df.empty:
             return []
@@ -1552,6 +1552,24 @@ def main():
     recent_pitching = fetch_recent_pitcher_stats(days=15)
     print(f"       {len(recent_pitching)} pitchers with recent stats")
 
+    # Prev-week exact window (Mon–Sun) for weekly recap commissioner story
+    _today = datetime.now()
+    if _today.weekday() == 0:
+        _prev_mon = _today - timedelta(days=7)
+        _prev_sun = _today - timedelta(days=1)
+    else:
+        _dsm = _today.weekday()
+        _prev_mon = _today - timedelta(days=_dsm + 7)
+        _prev_sun = _prev_mon + timedelta(days=6)
+    _pw_start = _prev_mon.strftime("%Y-%m-%d")
+    _pw_end   = _prev_sun.strftime("%Y-%m-%d")
+    print(f"\n       Fetching prev-week hitter stats ({_pw_start} to {_pw_end})...")
+    prev_week_hitting = fetch_recent_hitter_stats(start_dt=_pw_start, end_dt=_pw_end)
+    print(f"       {len(prev_week_hitting)} hitters in prev-week window")
+    print(f"       Fetching prev-week pitcher stats ({_pw_start} to {_pw_end})...")
+    prev_week_pitching = fetch_recent_pitcher_stats(start_dt=_pw_start, end_dt=_pw_end)
+    print(f"       {len(prev_week_pitching)} pitchers in prev-week window")
+
     # Total roster cap = max total players (active + IL) on any team. The fullest team is at the cap.
     # send_digest uses: open_spots = league_total_roster_max - my_total → free pickup if > 0.
     from collections import Counter as _Counter
@@ -1579,8 +1597,10 @@ def main():
         "all_prev_matchups": all_prev_matchups,
         **matchup_dates,
         "league_total_roster_max": league_total_roster_max,
-        "recent_hitting":  recent_hitting,
-        "recent_pitching": recent_pitching,
+        "recent_hitting":    recent_hitting,
+        "recent_pitching":   recent_pitching,
+        "prev_week_hitting":  prev_week_hitting,
+        "prev_week_pitching": prev_week_pitching,
     }
 
     with open(OUTPUT_FILE, "w") as f:

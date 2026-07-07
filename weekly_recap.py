@@ -1361,8 +1361,11 @@ def build_recap(snap):
     roto     = snap.get("roto") or []
     standings = snap.get("standings") or []
     weekly_results  = snap.get("weekly_results") or {}
-    recent_hitting  = snap.get("recent_hitting") or []
+    recent_hitting  = snap.get("recent_hitting")  or []
     recent_pitching = snap.get("recent_pitching") or []
+    # Exact prev-week window (Mon–Sun) for commissioner story; fall back to rolling window
+    prev_week_hitting  = snap.get("prev_week_hitting")  or recent_hitting
+    prev_week_pitching = snap.get("prev_week_pitching") or recent_pitching
     hitters  = snap.get("hitters") or []
     pitchers = snap.get("pitchers") or []
     snap_year = int(snap.get("league_year") or 2026)
@@ -1443,7 +1446,7 @@ def build_recap(snap):
     body_parts = [
         _nav_bar(),
         build_commissioner_story(
-            roto, prev_week, recent_hitting, recent_pitching,
+            roto, prev_week, prev_week_hitting, prev_week_pitching,
             hitters, pitchers, standings, logos,
             weekly_results=weekly_results, snap_year=snap_year,
         ),

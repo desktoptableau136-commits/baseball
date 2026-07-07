@@ -450,11 +450,17 @@ Three canonical role scores:
 `week, my_team, opp_team, wins, losses, ties, categories[]`
 Each category: `cat, my_val, opp_val, result` (W/L/T), `lower_better`
 
-**recent_hitting** (list of dicts — last 7 days, all MLB hitters):
+**recent_hitting** (list of dicts — last 7 rolling days, all MLB hitters):
 `PlayerName, G, PA, AB, R, HR, RBI, SB, OBP, SLG, OPS`
 
-**recent_pitching** (list of dicts — last 15 days, all MLB pitchers):
+**recent_pitching** (list of dicts — last 15 rolling days, all MLB pitchers):
 `PlayerName, G, GS, IP, ERA, WHIP, BB`
+
+**prev_week_hitting** (list of dicts — exact previous matchup Mon–Sun, all MLB hitters):
+Same schema as `recent_hitting`. Used by `build_commissioner_story` for hitter-of-the-week selection.
+
+**prev_week_pitching** (list of dicts — exact previous matchup Mon–Sun, all MLB pitchers):
+Same schema as `recent_pitching`. Used by `build_commissioner_story` for pitcher-of-the-week selection.
 
 **weekly_results** (dict — `{"1": {"Team Name": "W"/"L"/"T", ...}, ...}`):
 Per-week head-to-head matchup results for every team. Keys are week numbers as strings. Note: the sparkline dot encoding uses roto-derived rank results computed in `send_digest.py` from the `roto` data — not this H2H field directly.
