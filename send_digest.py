@@ -4042,6 +4042,9 @@ def build_email(snap, override_team=None):
     )
 
     # ── This week's category rankings ──────────────────────────────────────────
+    # Suppress both this section and the league roto table on Monday before stats
+    # accumulate — when all teams share an equal Roto_Score the ranks are arbitrary.
+    _all_roto_tied = len(set(float(r.get("Roto_Score") or 0) for r in week_roto)) <= 1
     week_cat_cells = ""
     for key, label in CAT_LABELS:
         rank = week_cats.get(key)
@@ -4061,7 +4064,7 @@ def build_email(snap, override_team=None):
             f'<div class="cat-val" style="color:{color};font-size:17px;font-weight:800;margin-top:3px;">{display}</div>'
             f'</td>'
         )
-    week_cat_section = (
+    week_cat_section = ("" if _all_roto_tied else
         section_head("Current Matchup", f"Week {current_week_num} · {my_week_roto_pts} roto pts · vs. this week's matchup") +
         f'<table style="width:100%;border-collapse:collapse;background:{SURFACE};border-radius:6px;margin-bottom:24px;overflow:hidden;">'
         f'<tr>{week_cat_cells}</tr></table>'
@@ -4069,8 +4072,7 @@ def build_email(snap, override_team=None):
 
     # ── This week's full league roto rankings (live, all 12 teams) ────────────
     week_roto_rankings_section = ""
-    _wrt_scores = [float(r.get("Roto_Score") or 0) for r in week_roto]
-    if week_roto and len(set(_wrt_scores)) > 1:
+    if week_roto and not _all_roto_tied:
         _wrt_th  = TH_S.replace("padding:8px 10px", "padding:3px 5px").replace("font-size:10px", "font-size:9px")
         _wrt_tdc = TDC.replace("padding:7px 10px", "padding:3px 5px").replace("font-size:13px", "font-size:10px")
         _wrt_tds = TD_S.replace("padding:7px 10px", "padding:3px 5px").replace("font-size:13px", "font-size:10px")
