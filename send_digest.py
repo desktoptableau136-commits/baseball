@@ -1613,7 +1613,8 @@ _CAT_DEC = {
 
 
 def build_matchup_section(matchup, logos=None, my_team=MY_TEAM,
-                          weekly_avgs=None, days_elapsed=None, remaining_proj=None):
+                          weekly_avgs=None, days_elapsed=None, remaining_proj=None,
+                          matchup_days=7, game_days_elapsed=None, matchup_game_days=None):
     if not matchup or not matchup.get("categories"):
         return ""
 
@@ -1627,7 +1628,10 @@ def build_matchup_section(matchup, logos=None, my_team=MY_TEAM,
     # Projection setup (mirrors build_category_pulse)
     my_team_key  = " ".join(matchup.get("my_team",  "").split())
     opp_team_key = " ".join(matchup.get("opp_team", "").split())
-    elapsed_frac = min(1.0, max(0.0, (days_elapsed or 0) / 7))
+    if game_days_elapsed is not None and matchup_game_days:
+        elapsed_frac = min(1.0, max(0.0, game_days_elapsed / matchup_game_days))
+    else:
+        elapsed_frac = min(1.0, max(0.0, (days_elapsed or 0) / matchup_days))
     my_avgs  = (weekly_avgs or {}).get(my_team_key,  {})
     opp_avgs = (weekly_avgs or {}).get(opp_team_key, {})
     has_proj = bool(my_avgs and opp_avgs)
@@ -2184,7 +2188,8 @@ def _project(current, avg, elapsed_frac, cat):
         return current + remaining * avg                  # counting: add expected remainder
 
 
-def classify_categories(matchup, weekly_avgs=None, days_elapsed=None, remaining_proj=None, matchup_days=7):
+def classify_categories(matchup, weekly_avgs=None, days_elapsed=None, remaining_proj=None, matchup_days=7,
+                        game_days_elapsed=None, matchup_game_days=None):
     """Classify each category's closeness, using the same projection math as Category
     Pulse. Returns {cat: (proj_res, tier)} where proj_res is W/L/T and tier is
     'tossup' (within a close-threshold — a thin margin) or 'leaning' (clear).
@@ -2193,7 +2198,10 @@ def classify_categories(matchup, weekly_avgs=None, days_elapsed=None, remaining_
     if not matchup or not matchup.get("categories"):
         return out
     de = days_elapsed or 0
-    elapsed_frac = min(1.0, max(0.0, de / matchup_days))
+    if game_days_elapsed is not None and matchup_game_days:
+        elapsed_frac = min(1.0, max(0.0, game_days_elapsed / matchup_game_days))
+    else:
+        elapsed_frac = min(1.0, max(0.0, de / matchup_days))
     my_key  = " ".join(matchup.get("my_team",  "").split())
     opp_key = " ".join(matchup.get("opp_team", "").split())
     my_avgs  = (weekly_avgs or {}).get(my_key,  {})
@@ -2236,7 +2244,8 @@ def classify_categories(matchup, weekly_avgs=None, days_elapsed=None, remaining_
     return out
 
 
-def build_category_pulse(matchup, weekly_avgs=None, days_elapsed=None, remaining_proj=None, is_sunday=False, weekly_std=None, matchup_days=7):
+def build_category_pulse(matchup, weekly_avgs=None, days_elapsed=None, remaining_proj=None, is_sunday=False, weekly_std=None, matchup_days=7,
+                         game_days_elapsed=None, matchup_game_days=None):
     if not matchup or not matchup.get("categories"):
         return ""
 
@@ -2245,8 +2254,12 @@ def build_category_pulse(matchup, weekly_avgs=None, days_elapsed=None, remaining
     my_team_key  = " ".join(matchup.get("my_team",  "").split())
     opp_team_key = " ".join(matchup.get("opp_team", "").split())
 
-    # Projection setup
-    elapsed_frac  = min(1.0, max(0.0, (days_elapsed or 0) / matchup_days))
+    # Projection setup — use game days when available so dark days (All-Star break etc.)
+    # don't inflate projected totals or deflate win probability.
+    if game_days_elapsed is not None and matchup_game_days:
+        elapsed_frac = min(1.0, max(0.0, game_days_elapsed / matchup_game_days))
+    else:
+        elapsed_frac  = min(1.0, max(0.0, (days_elapsed or 0) / matchup_days))
     remaining_frac = 1.0 - elapsed_frac
     my_avgs  = (weekly_avgs or {}).get(my_team_key,  {})
     opp_avgs = (weekly_avgs or {}).get(opp_team_key, {})
@@ -3185,6 +3198,13 @@ def build_email(snap, override_team=None):
         next_week_end_str   = (_today + timedelta(days=13 - _today.weekday())).strftime("%Y-%m-%d")
 
     days_elapsed = max(0, (_today - matchup_start_date).days)   # 0 on matchup start day
+
+    # Game days: excludes dark days (All-Star break, etc.) so projections and win-prob
+    # fractions don't assume stats accumulate on days with no MLB games.
+    _mgdays    = snap.get("matchup_game_days")
+    _mgdays_el = snap.get("matchup_game_days_elapsed")
+    matchup_game_days    = int(_mgdays)    if _mgdays    is not None else matchup_period_days
+    game_days_elapsed    = int(_mgdays_el) if _mgdays_el is not None else days_elapsed
     is_sunday  = _today >= matchup_end_date   # last day of matchup period (not always a Sunday)
     is_monday  = _today == matchup_start_date # first day of matchup period
     week_roto = [r for r in roto if int(r.get("Week", 0)) == current_week_num]
@@ -3226,7 +3246,8 @@ def build_email(snap, override_team=None):
     # Computed here (before the FA tables) so need_cats is available to them.
     category_classification = classify_categories(
         matchup, weekly_avgs=weekly_avgs, days_elapsed=days_elapsed, remaining_proj=pit_proj,
-        matchup_days=matchup_period_days
+        matchup_days=matchup_period_days,
+        game_days_elapsed=game_days_elapsed, matchup_game_days=matchup_game_days,
     )
     # need_cats = the categories I'm losing OR that are a tossup — highlighted in FA "Cats".
     _losing_now = {c["cat"] for c in (matchup.get("categories", []) if matchup else []) if c.get("result") == "L"}
@@ -4251,12 +4272,13 @@ def build_email(snap, override_team=None):
     body_parts += [
         build_prev_matchup_recap(prev_matchup, team_logos=team_logos) if is_monday and prev_matchup.get("week") != (matchup or {}).get("week") else "",  # 2a MONDAY RECAP
         week_overview,                                                                    # 2  WEEK INTELLIGENCE
-        build_category_pulse(matchup, weekly_avgs=weekly_avgs, days_elapsed=days_elapsed, remaining_proj=pit_proj, is_sunday=is_sunday, weekly_std=weekly_std, matchup_days=matchup_period_days), # 3
+        build_category_pulse(matchup, weekly_avgs=weekly_avgs, days_elapsed=days_elapsed, remaining_proj=pit_proj, is_sunday=is_sunday, weekly_std=weekly_std, matchup_days=matchup_period_days, game_days_elapsed=game_days_elapsed, matchup_game_days=matchup_game_days), # 3
         opp_preview_section,                                                              # 3b OPPONENT SCOUTING (below Category Pulse)
         week_cat_section,                                                                 # 4  (before matchup panel)
         build_matchup_section(matchup, logos=team_logos, my_team=my_team,
                               weekly_avgs=weekly_avgs, days_elapsed=days_elapsed,
-                              remaining_proj=pit_proj),                                    # 5
+                              remaining_proj=pit_proj, matchup_days=matchup_period_days,
+                              game_days_elapsed=game_days_elapsed, matchup_game_days=matchup_game_days),  # 5
         band_divider("MY ROSTER", anchor="band-myroster"),                                # MY TEAM band header
         alert_section,                                                                    # 1  ALERTS (top of My Roster)
         pos_section,                                                                      # 10 Positional Breakdown (moved to top of My Roster)

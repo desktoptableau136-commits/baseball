@@ -1386,11 +1386,30 @@ def get_matchup_dates(league) -> dict:
     next_period_days  = 7 + min(next_extra, 7)
     next_end          = end_date + timedelta(days=next_period_days)
 
+    # Count actual MLB game days in the matchup window (excludes All-Star break etc.)
+    start_str = start_date.strftime("%Y-%m-%d")
+    end_str   = end_date.strftime("%Y-%m-%d")
+    today_str = today.strftime("%Y-%m-%d")
+    try:
+        sched = requests.get(
+            f"https://statsapi.mlb.com/api/v1/schedule"
+            f"?sportId=1&startDate={start_str}&endDate={end_str}&gameType=R",
+            timeout=10,
+        ).json()
+        game_date_set = {d["date"] for d in sched.get("dates", []) if d.get("games")}
+        matchup_game_days    = len(game_date_set)
+        game_days_elapsed    = sum(1 for d in game_date_set if d < today_str)
+    except Exception:
+        matchup_game_days    = period_days
+        game_days_elapsed    = (today - start_date).days
+
     return {
-        "matchup_start_date":    start_date.strftime("%Y-%m-%d"),
-        "matchup_end_date":      end_date.strftime("%Y-%m-%d"),
-        "matchup_period_days":   period_days,
-        "next_matchup_end_date": next_end.strftime("%Y-%m-%d"),
+        "matchup_start_date":         start_date.strftime("%Y-%m-%d"),
+        "matchup_end_date":           end_date.strftime("%Y-%m-%d"),
+        "matchup_period_days":        period_days,
+        "next_matchup_end_date":      next_end.strftime("%Y-%m-%d"),
+        "matchup_game_days":          matchup_game_days,
+        "matchup_game_days_elapsed":  game_days_elapsed,
     }
 
 
