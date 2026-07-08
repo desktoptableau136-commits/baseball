@@ -192,6 +192,20 @@ _GP_VIABLE_FRAC = 0.30    # a viable RP has this fraction of the leader's appear
 _IP_VIABLE_FRAC = 0.38    # …or this fraction of the leader's innings
 _PIT_FALLBACK   = {"IP_RELY": 20.0, "GS_VIABLE": 3.0, "GP_VIABLE": 12.0, "IP_VIABLE": 20.0}
 
+# Live score calibration (approach A). The SP/RP raw-score distributions are re-anchored each
+# run so raw p50 -> 50 and p90 -> 80 on the shared 0-100 scale (same math as
+# recalibrate_scores.py), instead of the constants being hand-pasted after a manual rerun.
+# Recomputing live means the anchors track the season automatically; the median/p90 player is
+# pinned by construction, so day-to-day drift is sub-point for most players. SMALL-POOL
+# FALLBACK: when a role's qualified pool is below _MIN_CALIB_POOL (early season / thin sample)
+# or degenerate, that role KEEPS these hand-tuned constants so a noisy distribution can't
+# produce a wild transform. Populated by compute_score_calibration() at the top of build_email.
+_SCORE_CALIB = {
+    "sp": (1.5070, -44.3346),   # recalibrated 2026-07-06 — also the small-pool fallback
+    "rp": (1.6543, -28.0645),
+}
+_MIN_CALIB_POOL = 30            # qualified pitchers a role needs before live re-anchoring kicks in
+
 
 def compute_pitcher_benchmarks(pitchers):
     """Leader IP/GS/GP per (window, role) from the live snapshot, so pitcher volume
@@ -303,9 +317,10 @@ def pitcher_score(r, _raw=False, _parts=False):
     s = sum(c.values()) * mult
     if _raw:
         return s
-    # Calibrate to shared 0-100 scale (p50→50, p90→80) — see recalibrate_scores.py
-    # (recalibrated 2026-07-06)
-    s = s * 1.5070 - 44.3346
+    # Calibrate to shared 0-100 scale (p50→50, p90→80) — re-anchored live per snapshot by
+    # compute_score_calibration(); falls back to the hand-tuned constants for a thin pool.
+    A, C = _SCORE_CALIB["sp"]
+    s = s * A + C
     return max(0, min(100, round(s)))
 
 
@@ -563,10 +578,46 @@ def rp_score(r, _raw=False, _parts=False):
     s = sum(c.values())
     if _raw:
         return s
-    # Calibrate to shared 0-100 scale (p50→50, p90→80) — see recalibrate_scores.py
-    # (recalibrated 2026-07-06)
-    s = s * 1.6543 - 28.0645
+    # Calibrate to shared 0-100 scale (p50→50, p90→80) — re-anchored live per snapshot by
+    # compute_score_calibration(); falls back to the hand-tuned constants for a thin pool.
+    A, C = _SCORE_CALIB["rp"]
+    s = s * A + C
     return max(0, min(100, round(s)))
+
+
+def compute_score_calibration(pitchers):
+    """Re-anchor the SP/RP score calibration live from this snapshot's raw-score distribution
+    (approach A) so displayed scores track the season without a hand-paste. For each role,
+    solve A/C such that raw p50 -> 50 and p90 -> 80, using the SAME qualified pool as
+    recalibrate_scores.py (SP: _is_sp + IP past the reliability floor; RP: _pit_viable_min on
+    GP or IP; both from YEAR rows). Writes the module global _SCORE_CALIB. SMALL-POOL GUARD:
+    a role whose qualified pool is below _MIN_CALIB_POOL or degenerate (p90 <= p50) KEEPS its
+    hand-tuned fallback constants, so a noisy early-season distribution can't warp the scale.
+    Must run AFTER compute_pitcher_benchmarks — qualification + _raw scores read _PIT_BENCH."""
+    ps = [r for r in pitchers if int(_n(r.get("Dataset")) or 0) == YEAR]
+    sp_ip_min = (_PIT_BENCH.get((YEAR, "SP"), {}).get("IP") or 0) * _IP_RELY_FRAC \
+                or _PIT_FALLBACK["IP_RELY"]
+    sp_raw = sorted(pitcher_score(r, _raw=True) for r in ps
+                    if _is_sp(r) and _n(r.get("IP")) >= sp_ip_min)
+    rp_raw = sorted(rp_score(r, _raw=True) for r in ps
+                    if not _is_sp(r) and (_n(r.get("ESPN_GP")) >= _pit_viable_min("RP", "GP")
+                                          or _n(r.get("IP")) >= _pit_viable_min("RP", "IP")))
+
+    def _pctl(vals, q):
+        i = q * (len(vals) - 1)
+        lo = int(i); hi = min(lo + 1, len(vals) - 1)
+        return vals[lo] + (vals[hi] - vals[lo]) * (i - lo)
+
+    for role, raws in (("sp", sp_raw), ("rp", rp_raw)):
+        if len(raws) < _MIN_CALIB_POOL:
+            continue                        # too thin — keep the hand-tuned fallback
+        p50, p90 = _pctl(raws, 0.50), _pctl(raws, 0.90)
+        if p90 - p50 <= 0:
+            continue                        # degenerate spread — keep the fallback
+        A = 30.0 / (p90 - p50)
+        C = 50.0 - A * p50
+        _SCORE_CALIB[role] = (A, C)
+    return _SCORE_CALIB
 
 
 def _score_p(r, idx_recent=None):
@@ -3398,6 +3449,7 @@ def build_email(snap, override_team=None):
     # with the season instead of stale hard-coded minimums (hitter AB, pitcher IP/GS/GP).
     compute_ab_benchmarks(hitters)
     compute_pitcher_benchmarks(pitchers)
+    compute_score_calibration(pitchers)          # re-anchor SP/RP score scale (after benchmarks)
     compute_league_averages(hitters, pitchers)   # league-avg reference points → _LG
 
     # Map Baseball Ref recent rows to add fields pitcher_score expects

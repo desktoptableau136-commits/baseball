@@ -443,7 +443,7 @@ Three canonical role scores:
 
 **QS Probability:** Formula-based estimate (no MLB API support). Inputs: IP/G, ERA, WHIP, Brl%, K%, opponent OPS. Baseline = 38% (league average). Key driver is IP/G — uses total games (not just starts) so relief appearances bleed down the innings-depth signal for mixed-role pitchers. Calibration: ace (~75%), league avg (~38%), short reliever making a spot start (~15%). Shown as a color-coded percentage in FA SP and My Upcoming Starts tables: green ≥ 60%, white ≥ 40%, muted < 40%.
 
-> When the raw component mix of a score changes, rerun `python recalibrate_scores.py` and paste the new p50→50 / p90→80 constants back into the score function.
+> **Pitcher scores self-recalibrate.** The SP/RP p50→50 / p90→80 constants are re-derived from the live data on every run (`compute_score_calibration`), so the 0–100 scale tracks the season without any hand-editing. If the qualified pitcher pool is too thin (early season), it falls back to the last hand-tuned constants. `recalibrate_scores.py` is now just a manual inspection tool (prints the current live constants) and the home of those fallback values — update them there if you materially change a score's component mix. Hitter scores still use fixed constants.
 
 ---
 
