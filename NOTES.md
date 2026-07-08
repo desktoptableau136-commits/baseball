@@ -2,6 +2,14 @@
 
 Forensic detail and "why we did it this way" narrative moved out of `CLAUDE.md` to keep that file to actionable rules. Nothing here is required to follow the rules; consult it only when you need the history behind a decision. Rules live in `CLAUDE.md`; this is the "why".
 
+## "Week" → "Matchup" terminology (2026-07-08)
+
+User flagged that labeling everything "Week N" is misleading: ESPN's unit is a **matchup period** (`currentMatchupPeriod`), which is usually 7 days but **14 days for the All-Star break and playoffs**, and the number is a matchup *index* (a 2-week matchup still advances `currentMatchupPeriod` by only 1, so it can diverge from a calendar-week count). His words: *"I'll be looking for a Matchup 15 Roto readout, not just a 'Week' of it."* And the "Weekly Recap" is really the *previous matchup period* recap.
+
+The code already handled the *timing* correctly (everything keys off `matchup_end_date` / `matchup_period_days`, so a 2-week All-Star matchup already spans 14 days) — this was purely a **display-label** fix, so it's low-risk: no snapshot fields, variable names, filenames, or workflow names changed, only user-visible strings. User chose **full consistency** and the term **"Matchup 15"** (matches ESPN's own UI).
+
+Policy (also captured as a CLAUDE.md rule so future edits follow it): every label for the matchup unit → "Matchup {n}" (Roto Rankings, the matchup score panel, Category Pulse, "Matchup at a Glance", KPI "Starts This Matchup", "Opponent This Matchup", the recap title/subject/highlights, Season Trajectory "by matchup", sidebar "…of the Matchup"). **Kept as "week"**: genuine 7-day rolling windows (last-7-days, 7-day OPS, L15 ERA) and the **Lineup Watch**, which is deliberately the current *calendar* week (Mon→yesterday) — a real distinction from the full matchup, so its "week to date" / "so far this week" wording is correct and stays. Verified both rendered emails: 0 stray "Week N" labels, and the kept "week" instances all belong to Lineup Watch / 7-day windows.
+
 ## Season Trajectory ported recap → digest (2026-07-08)
 
 User asked to carry the recap's Season Trajectory panel (W/L/T grid, teams×weeks, current streak in the final column) into the daily digest's SEASON band. `send_digest.py` and `weekly_recap.py` deliberately **don't import each other** (each copies the constants/helpers it needs), so `build_season_trajectory` is a near-verbatim copy of `weekly_recap.build_trajectory` — the only change is a `my_team` param (default `MY_TEAM`) so the `--team` view highlights the right row instead of always Guerrero Warfare. Both read the same snapshot `weekly_results` (`{week: {team: W/L/T}}`) + `standings`, so they stay in sync by construction. If the panel logic ever changes, update both copies. Placed as digest section 16, after Luck Standings.

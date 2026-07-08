@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-weekly_recap.py — League Weekly Recap
+weekly_recap.py — League Matchup Recap
 Reads data/snapshot.json (refreshing if needed), builds a full-league
 previous-week recap HTML email, and sends it.
 
@@ -391,7 +391,7 @@ def build_my_matchup(prev_matchup, logos):
     )
 
     return (
-        section_head(f"Guerrero Warfare — Week {week}", f"vs. {opp}") +
+        section_head(f"Guerrero Warfare — Matchup {week}", f"vs. {opp}") +
         f'<div style="background:{SURFACE};border:1px solid {BORDER};border-radius:6px;'
         f'padding:12px 16px;margin-bottom:16px;">'
         f'<div style="display:flex;align-items:baseline;gap:10px;">'
@@ -580,7 +580,7 @@ def build_league_scoreboard(all_prev_matchups, logos):
         )
 
     return (
-        section_head(f"League Scoreboard — Week {week}",
+        section_head(f"League Scoreboard — Matchup {week}",
                      "All 6 matchups \xb7 outlined value = category winner") +
         "\n".join(blocks)
     )
@@ -690,8 +690,8 @@ def build_weekly_roto_rankings(roto, prev_week, logos):
     )
 
     return (
-        section_head(f"Weekly Roto Rankings — Week {prev_week}",
-                     "Roto score for this week only \xb7 bright green = #1 \xb7 light green = #2 \xb7 amber = #11 \xb7 red = #12") +
+        section_head(f"Matchup {prev_week} Roto Rankings",
+                     "Roto score for this matchup only \xb7 bright green = #1 \xb7 light green = #2 \xb7 amber = #11 \xb7 red = #12") +
         table
     )
 
@@ -981,7 +981,7 @@ def build_trajectory(weekly_results, standings, logos):
 
     return (
         section_head("Season Trajectory",
-                     "W/L/T by week \xb7 current streak in final column") +
+                     "W/L/T by matchup \xb7 current streak in final column") +
         table
     )
 
@@ -1144,7 +1144,7 @@ def build_commissioner_story(roto, prev_week, recent_hitting, recent_pitching,
         suffix = "  That's us!" if mine else ""
 
         sent = (f"Congrats to {_b(winner_team, wcolor)}{stand_note}, "
-                f"for winning Week {prev_week} with {_b(f'{winner_score:.1f}')} roto points.{suffix}")
+                f"for winning Matchup {prev_week} with {_b(f'{winner_score:.1f}')} roto points.{suffix}")
         if led_cats:
             sent += (f"  They led the league in {', '.join(led_cats[:3])}"
                      + (" and more" if len(led_cats) > 3 else "") + " this week.")
@@ -1168,7 +1168,7 @@ def build_commissioner_story(roto, prev_week, recent_hitting, recent_pitching,
         pos_str  = f"{pos} " if pos else ""
         team_str = f" ({_b(ft, ACCENT if mine else MUTED)})" if ft else ""
 
-        sent = f"The fantasy position player of the week was {pos_str}{_b(name, nc)}{team_str}."
+        sent = f"The fantasy position player of the matchup was {pos_str}{_b(name, nc)}{team_str}."
         if slash and cnts:
             sent += f"  {first} slashed {_b(slash)} with {cnts}."
 
@@ -1238,7 +1238,7 @@ def build_commissioner_story(roto, prev_week, recent_hitting, recent_pitching,
         elif era > 0:
             ratio = f" a {_b(f'{era:.2f}')} ERA"
 
-        sent = f"The fantasy pitcher of the week was {_b(name, nc)}{team_str}.  {g_str}{first} posted{ratio}"
+        sent = f"The fantasy pitcher of the matchup was {_b(name, nc)}{team_str}.  {g_str}{first} posted{ratio}"
         sent += f" across {', '.join(stats)}." if stats else "."
 
         # Named ERA benchmarks
@@ -1294,7 +1294,7 @@ def build_commissioner_story(roto, prev_week, recent_hitting, recent_pitching,
         first = name.split()[0]
         pos_str = f"{pos} " if pos else ""
 
-        sent = f"The top available player of the week was {pos_str}{_b(name)}."
+        sent = f"The top available player of the matchup was {pos_str}{_b(name)}."
         if slash and cnts:
             sent += f"  {first} slashed {_b(slash)} with {cnts}."
 
@@ -1350,7 +1350,7 @@ def build_commissioner_story(roto, prev_week, recent_hitting, recent_pitching,
             score_line += " | #1 in: " + ", ".join(wled)
         card_lines = [score_line]
         sidebar_cards.append(_card(
-            f"Week {prev_week} Roto Winner", wcolor,
+            f"Matchup {prev_week} Roto Winner", wcolor,
             winner_team, wlogo, card_lines,
         ))
 
@@ -1368,7 +1368,7 @@ def build_commissioner_story(roto, prev_week, recent_hitting, recent_pitching,
         stat_lines = []
         if slash: stat_lines.append(slash)
         if cnts_parts: stat_lines.append(" \xb7 ".join(cnts_parts))
-        sidebar_cards.append(_card("Hitter of the Week", GREEN,
+        sidebar_cards.append(_card("Hitter of the Matchup", GREEN,
                                    name + _mlb_logo(mlb), logo, stat_lines))
 
     if potw_pit:
@@ -1388,7 +1388,7 @@ def build_commissioner_story(roto, prev_week, recent_hitting, recent_pitching,
         if k:  ip_line += f" \xb7 {k} K"
         if qs: ip_line += f" \xb7 {qs} QS"
         if ip_line: stat_lines.append(ip_line)
-        sidebar_cards.append(_card("Pitcher of the Week", ACCENT,
+        sidebar_cards.append(_card("Pitcher of the Matchup", ACCENT,
                                    name + _mlb_logo(mlb), logo, stat_lines))
 
     if fa_potw:
@@ -1424,8 +1424,8 @@ def build_commissioner_story(roto, prev_week, recent_hitting, recent_pitching,
     )
     return (
         anchor +
-        section_head(f"Week {prev_week} Highlights",
-                     "Roto winner \xb7 player of the week \xb7 best available") +
+        section_head(f"Matchup {prev_week} Highlights",
+                     "Roto winner \xb7 player of the matchup \xb7 best available") +
         f'<div style="background:{SURFACE};border-left:3px solid {YELLOW}88;'
         f'border-radius:0 6px 6px 0;padding:14px 20px;margin-bottom:6px;">'
         f'<table style="width:100%;border-collapse:collapse;"><tr>'
@@ -1497,7 +1497,7 @@ def build_recap(snap):
         f'<tr>'
         f'<td style="vertical-align:top;">'
         f'<div style="color:{ACCENT};font-size:20px;font-weight:800;letter-spacing:-.3px;">'
-        f'Week {prev_week} Recap</div>'
+        f'Matchup {prev_week} Recap</div>'
         f'<div style="color:{MUTED};font-size:12px;margin-top:2px;">{week_dates}</div>'
         f'<div style="margin-top:8px;">'
         f'<span style="color:{ACCENT};font-weight:800;">Guerrero Warfare</span>'
@@ -1537,7 +1537,7 @@ def build_recap(snap):
          if (_lineup_eff := build_lineup_efficiency(snap.get("lineup_efficiency") or {})) else ""),
         band_divider("LEAGUE SCOREBOARD", anchor="band-scoreboard"),
         build_league_scoreboard(all_prev, logos),
-        band_divider("WEEKLY PERFORMANCE", anchor="band-roto"),
+        band_divider("MATCHUP PERFORMANCE", anchor="band-roto"),
         build_weekly_roto_rankings(roto, prev_week, logos),
         band_divider("TOP PERFORMERS", anchor="band-performers"),
         build_top_performers(prev_week_hitting, prev_week_pitching, hitters, pitchers, logos,
@@ -1556,7 +1556,7 @@ def build_recap(snap):
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Week {prev_week} Recap — Guerrero Warfare</title>
+  <title>Matchup {prev_week} Recap — Guerrero Warfare</title>
   <style>
     @media only screen and (max-width:600px) {{
       .ew {{ width:100% !important; padding:8px !important; }}
@@ -1617,7 +1617,7 @@ def main():
 
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     print("=" * 60)
-    print("  League Weekly Recap")
+    print("  League Matchup Recap")
     print(f"  {ts}")
     print("=" * 60)
 
@@ -1655,7 +1655,7 @@ def main():
             my_l      = v.get("losses", 0)
             break
 
-    subject    = f"Week {prev_week} Recap — Guerrero Warfare {my_w}-{my_l}"
+    subject    = f"Matchup {prev_week} Recap — Guerrero Warfare {my_w}-{my_l}"
     attach_name = f"recap_week_{prev_week}.html"
 
     if dry_run:
