@@ -404,6 +404,81 @@ def build_my_matchup(prev_matchup, logos):
     )
 
 
+def build_lineup_efficiency(eff):
+    """MY team's start/sit opportunity cost last week: batter production stranded on
+    the bench (net of the bat I'd have sat to play him) + active-slot pitcher blowups
+    that counted then got dropped. Data from fetch_data.get_lineup_efficiency."""
+    if not eff:
+        return ""
+    bench   = eff.get("bench") or []
+    blowups = eff.get("blowups") or []
+    if not bench and not blowups:
+        return ""
+
+    net = eff.get("net") or {}
+    parts = []
+
+    # ── headline: net recoverable ──
+    net_bits = [f"{net.get(c, 0):+.0f} {c}" for c in ("HR", "RBI", "R", "SB") if net.get(c, 0)]
+    if net_bits:
+        parts.append(
+            f'<div style="background:{SURFACE};border:1px solid {RED}55;border-radius:6px;'
+            f'padding:12px 16px;margin-bottom:14px;">'
+            f'<div style="color:{RED};font-weight:800;font-size:13px;letter-spacing:.3px;">'
+            f'LEFT ON THE BENCH &nbsp;{" &middot; ".join(net_bits)}</div>'
+            f'<div style="color:{MUTED};font-size:11px;margin-top:3px;">'
+            f'Net of the bat you\'d have benched to start him &mdash; production that never '
+            f'counted toward your categories.</div></div>'
+        )
+    elif bench:
+        parts.append(
+            f'<div style="color:{GREEN};font-weight:700;font-size:12px;margin-bottom:12px;">'
+            f'Bench production was covered &mdash; every startable bat was in your lineup.</div>'
+        )
+
+    # ── per-player bench leakage ──
+    for b in bench:
+        slash = f"{b['H']}-{b['AB']}"
+        tot = " &middot; ".join(f"{b[c]} {c}" for c in ("R", "HR", "RBI", "SB") if b[c])
+        parts.append(
+            f'<div style="background:{SURFACE};border:1px solid {BORDER};border-radius:6px;'
+            f'padding:10px 14px;margin-bottom:8px;">'
+            f'<div><span style="color:{TEXT};font-weight:700;font-size:13px;">{b["name"]}</span>'
+            f'<span style="color:{MUTED};font-size:11px;"> &nbsp;{slash} on the bench &nbsp;&mdash;&nbsp; {tot}</span></div>'
+            + "".join(
+                f'<div style="color:{MUTED};font-size:11px;margin-top:3px;">'
+                f'<span style="color:{YELLOW};">&rsaquo;</span> {d["date"]} '
+                f'<span style="color:{TEXT};">{d["line"]}</span>'
+                + (f' ({d["extra"]})' if d.get("extra") else '')
+                + f' <span style="color:{MUTED};">[{d["tag"]}]</span></div>'
+                for d in b.get("days", [])
+            )
+            + '</div>'
+        )
+
+    # ── pitcher blowups that counted ──
+    if blowups:
+        parts.append(
+            f'<div style="color:{MUTED};font-size:11px;font-weight:700;text-transform:uppercase;'
+            f'letter-spacing:.5px;margin:14px 0 6px;">Active-slot blowups (ER/WHIP counted)</div>'
+        )
+        for p in blowups:
+            drop = ''
+            if p.get("drop_when"):
+                drop = (f' <span style="color:{RED};font-weight:700;">dropped {p["drop_when"]}</span>'
+                        f'<span style="color:{MUTED};"> &mdash; imploded then cut, damage already banked</span>')
+            parts.append(
+                f'<div style="background:{SURFACE};border:1px solid {BORDER};border-radius:6px;'
+                f'padding:9px 14px;margin-bottom:7px;">'
+                f'<span style="color:{TEXT};font-weight:700;font-size:12px;">{p["name"]}</span>'
+                f'<span style="color:{MUTED};font-size:11px;"> &nbsp;{p["date"]} &nbsp;'
+                f'{p["ip"]} IP, <span style="color:{RED};font-weight:700;">{p["er"]} ER</span>, '
+                f'{p["k"]} K (+{p["h"]} H, {p["bb"]} BB)</span>{drop}</div>'
+            )
+
+    return "".join(parts)
+
+
 def build_league_scoreboard(all_prev_matchups, logos):
     """All 6 matchups with full 12-category breakdown, one card each."""
     if not all_prev_matchups:
@@ -1458,6 +1533,8 @@ def build_recap(snap):
         ),
         _sec_anchor,
         build_my_matchup(prev_matchup, logos),
+        (band_divider("LINEUP EFFICIENCY", anchor="band-lineup") + _lineup_eff
+         if (_lineup_eff := build_lineup_efficiency(snap.get("lineup_efficiency") or {})) else ""),
         band_divider("LEAGUE SCOREBOARD", anchor="band-scoreboard"),
         build_league_scoreboard(all_prev, logos),
         band_divider("WEEKLY PERFORMANCE", anchor="band-roto"),

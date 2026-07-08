@@ -3103,6 +3103,13 @@ def build_glossary_section():
                "“proj” value on the same card."),
         _entry("Luck (standings)", "Roto rank minus record rank. Positive = your W-L is better than your "
                "category performance suggests (running lucky); negative = unlucky."),
+        _entry("Lineup Watch", "Reconstructs your <b>daily</b> lineup for the week so far (Mon→yesterday) "
+               "from ESPN's historical slots. Flags (a) counting-stat production a hitter put up while "
+               "sitting on your <b>bench</b> — shown <b>net</b> of the bat you'd have benched to start him "
+               "(so it only counts what a legal lineup change would actually have gained), and (b) a starter "
+               "who imploded in an <b>active</b> slot (ER/WHIP already counted). Only the still-fixable, "
+               "net-positive misses surface — it's silent on a clean week. The Monday recap shows the fuller "
+               "completed-week version."),
     ])
     sources = _group("Data sources", [
         _entry("FantasyPros", "Pitcher & hitter stat lines across 4 ranges (last 7/15/30 days + season)."),
@@ -3118,6 +3125,56 @@ def build_glossary_section():
         section_head("Glossary &amp; Methodology",
                      "How every score and metric is computed, and where the data comes from · tap a section to expand")
         + f'<div style="margin-bottom:24px;">{scores}{pitching}{hitting}{proj}{sources}</div>'
+    )
+
+
+def build_bench_watch(eff):
+    """Compact current-week 'Lineup Watch' callout for the daily digest: batter
+    production you've stranded on the bench so far this week (net of the bat you'd have
+    sat — still fixable for the remaining days) + any starter who imploded in an active
+    slot (ER/WHIP already counted). eff = snapshot['lineup_efficiency_current']
+    (Mon->yesterday). Silent on a clean week. Fuller Mon-Sun post-mortem lives in the
+    recap's build_lineup_efficiency."""
+    if not eff:
+        return ""
+    bench   = eff.get("bench") or []
+    blowups = eff.get("blowups") or []
+    net     = eff.get("net") or {}
+    net_bits = [f"{net.get(c, 0):+.0f} {c}" for c in ("HR", "RBI", "R", "SB") if net.get(c, 0)]
+    if not net_bits and not blowups:
+        return ""
+
+    rows = []
+    if net_bits:
+        rows.append(
+            f'<div style="font-size:12px;color:{TEXT};padding:3px 0;">'
+            f'<strong>{" &middot; ".join(net_bits)}</strong> '
+            f'<span style="color:{MUTED};">left on your bench so far this week</span></div>'
+        )
+        for b in bench[:2]:
+            days = b.get("days") or []
+            swap = next((d["tag"] for d in days if str(d.get("tag", "")).startswith("vs ")), "")
+            hits = " &middot; ".join(f"{b[c]} {c}" for c in ("HR", "RBI", "SB", "R") if b[c])
+            note = f' <span style="color:{MUTED};">(startable {swap})</span>' if swap else ""
+            rows.append(
+                f'<div style="font-size:11px;color:{MUTED};padding:1px 0 1px 16px;">'
+                f'<span style="color:{TEXT};font-weight:600;">{b["name"]}</span> &mdash; {hits} on the bench{note}</div>'
+            )
+    for p in blowups:
+        drop = f', <span style="color:{RED};">dropped {p["drop_when"]}</span>' if p.get("drop_when") else ""
+        rows.append(
+            f'<div style="font-size:11px;color:{MUTED};padding:1px 0;">'
+            f'<span style="color:{TEXT};font-weight:600;">{p["name"]}</span> imploded in your active slot '
+            f'({p["ip"]} IP, {p["er"]} ER){drop} &mdash; ER/WHIP already counted</div>'
+        )
+
+    dates = eff.get("week_dates", "")
+    return (
+        f'<div style="background:{SURFACE};border:1px solid {BORDER};border-left:3px solid {RED};'
+        f'border-radius:6px;padding:12px 14px;margin-bottom:20px;">'
+        f'<div style="color:{RED};font-size:10px;font-weight:700;text-transform:uppercase;'
+        f'letter-spacing:.7px;margin-bottom:6px;">&#9888; Lineup Watch &middot; week to date ({dates})</div>'
+        f'{"".join(rows)}</div>'
     )
 
 
@@ -4411,6 +4468,8 @@ def build_email(snap, override_team=None):
         matchup, week_cats, week_n, fa_sp, starts, days_elapsed, my_starts_by_day,
         week_end=week_end_str, is_sunday=is_sunday, roster_suggestion=roster_suggestion
     )
+    # Current-week Lineup Watch (my team only — snapshot stores only my daily lineup).
+    bench_watch = build_bench_watch(snap.get("lineup_efficiency_current") or {}) if not override_team else ""
     body_parts += [
         build_prev_matchup_recap(prev_matchup, team_logos=team_logos) if is_monday and prev_matchup.get("week") != (matchup or {}).get("week") else "",  # 2a MONDAY RECAP
         week_overview,                                                                    # 2  WEEK INTELLIGENCE
@@ -4424,6 +4483,7 @@ def build_email(snap, override_team=None):
                               game_days_elapsed=game_days_elapsed, matchup_game_days=matchup_game_days),  # 5
         band_divider("MY ROSTER", anchor="band-myroster"),                                # MY TEAM band header
         alert_section,                                                                    # 1  ALERTS (top of My Roster)
+        bench_watch,                                                                      # 1b Lineup Watch (current-week bench leakage / blowups)
         pos_section,                                                                      # 10 Positional Breakdown (moved to top of My Roster)
         starts_section,                                                                   # 6
         my_rp_section,                                                                    # 7

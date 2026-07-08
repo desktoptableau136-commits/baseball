@@ -1424,6 +1424,208 @@ def get_matchup_dates(league) -> dict:
     }
 
 
+def get_lineup_efficiency(league, my_team_name: str, mode: str = "prev") -> dict:
+    """Reconstruct MY team's DAILY lineup and quantify the opportunity cost of my
+    start/sit calls. `mode="prev"` audits the last COMPLETED matchup week (Mon-Sun,
+    for the Monday recap post-mortem); `mode="current"` audits the IN-PROGRESS week
+    Mon->yesterday (for the daily digest, so misses are still fixable). Returns {} for
+    the current week on a Monday (no completed days yet).
+
+      (a) BATTER BENCH LEAKAGE - a hitter's R/HR/RBI/SB put up while sitting in a BE
+          slot (never counted), NET of the weakest startable bat I'd have benched to
+          play him (open slot => net of nothing). Quiet bench days (nothing to
+          recover) are ignored.
+      (b) PITCHER BLOWUPS - an active-slot start of 5+ ER (or 4+ ER in <3 IP) that
+          counted toward ERA/WHIP, flagged if I then dropped him (damage banked).
+
+    Uses `mRoster` fetched per `scoringPeriodId` (the only way to see the slot AS SET
+    that day for a categories league - box_scores exposes team totals only) plus the
+    league's lineupSlotCounts + each player's eligibleSlots for a max-bipartite-matching
+    'could he have been slotted without benching anyone' test. Returns a
+    JSON-serializable dict consumed by weekly_recap. Standalone/opponent version lives
+    in bench_leakage.py. Returns {} on any failure (never breaks the fetch)."""
+    try:
+        from espn_api.baseball.constant import POSITION_MAP  # noqa: F401
+        AB, H, HR, R, RBI, SB, B_SO = "0", "1", "5", "20", "21", "23", "27"
+        TB, BB_H = "8", "10"
+        OUTS, P_H, P_BB, ER, K = "34", "37", "39", "45", "48"
+        PIT_IDS = {13, 14, 15}
+        BE_ID, IL_ID = 16, 17
+        HIT_POS = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 19}
+
+        def _f(d, k):
+            try:
+                return float(d.get(k))
+            except (TypeError, ValueError):
+                return 0.0
+
+        def _split(pl, sp):
+            for s in pl.get("stats", []):
+                if s.get("scoringPeriodId") == sp and s.get("statSourceId") == 0 and s.get("stats"):
+                    return s["stats"]
+            return {}
+
+        def _is_pit(elig):
+            return bool(set(elig) & PIT_IDS) and not (set(elig) & HIT_POS)
+
+        def _full_match(player_eligs):
+            match = {}
+
+            def aug(p, seen):
+                for s in player_eligs[p]:
+                    if s in seen:
+                        continue
+                    seen.add(s)
+                    if s not in match or aug(match[s], seen):
+                        match[s] = p
+                        return True
+                return False
+            return all(aug(p, set()) for p in range(len(player_eligs)))
+
+        my_norm = " ".join(my_team_name.split())
+        myid = next((t.team_id for t in league.teams if " ".join(t.team_name.split()) == my_norm), None)
+        if myid is None:
+            return {}
+
+        today = datetime.now().date()
+        today_sp = int(league.scoringPeriodId)
+        this_mon_sp = today_sp - today.weekday()
+        cur_week = int(getattr(league, "currentMatchupPeriod", 0))
+        if mode == "current":
+            # In-progress week: Monday through YESTERDAY (today is incomplete, excluded).
+            prev_days = list(range(this_mon_sp, today_sp))
+            start_date = today - timedelta(days=today.weekday())
+            week = cur_week
+        else:
+            prev_days = list(range(this_mon_sp - 7, this_mon_sp))
+            start_date = today - timedelta(days=today.weekday() + 7)
+            week = cur_week - 1
+        if not prev_days:
+            return {}
+        dates = [start_date + timedelta(days=i) for i in range(len(prev_days))]
+
+        slot_counts = league.espn_request.league_get(
+            params={"view": "mSettings"})["settings"]["rosterSettings"]["lineupSlotCounts"]
+        hit_inst, hit_ids = [], set()
+        for sid_str, cnt in slot_counts.items():
+            sid = int(sid_str)
+            if sid in PIT_IDS or sid in (BE_ID, IL_ID) or cnt <= 0:
+                continue
+            hit_ids.add(sid)
+            hit_inst.extend([sid] * cnt)
+
+        hit_leak, pit_lines = {}, []
+        for sp, dt in zip(prev_days, dates):
+            data = league.espn_request.league_get(params={"view": "mRoster", "scoringPeriodId": sp})
+            mt = next((t for t in data.get("teams", []) if t.get("id") == myid), None)
+            if not mt:
+                continue
+            entries = mt["roster"]["entries"]
+
+            active_hit = []  # (name, eligible-hit-slot-set, day-stats)
+            for e in entries:
+                pl = e["playerPoolEntry"]["player"]
+                sid = e.get("lineupSlotId")
+                elig = pl.get("eligibleSlots", [])
+                if sid not in (BE_ID, IL_ID) and sid not in PIT_IDS and not _is_pit(elig):
+                    active_hit.append((pl.get("fullName", "?"),
+                                       {s for s in elig if s in hit_ids}, _split(pl, sp)))
+
+            def _fits(cand_elig):
+                base = [[i for i, styp in enumerate(hit_inst) if styp in he] for _, he, _ in active_hit]
+                cand = [i for i, styp in enumerate(hit_inst) if styp in cand_elig]
+                return _full_match(base + [cand])
+
+            for e in entries:
+                pl = e["playerPoolEntry"]["player"]
+                nm = pl.get("fullName", "?")
+                sid = e.get("lineupSlotId")
+                elig = pl.get("eligibleSlots", [])
+                st = _split(pl, sp)
+                if not st:
+                    continue
+
+                if not _is_pit(elig) and sid == BE_ID and _f(st, AB) > 0:
+                    agg = hit_leak.setdefault(nm, {"R": 0, "HR": 0, "RBI": 0, "SB": 0, "H": 0, "AB": 0,
+                                                   "net": {"R": 0, "HR": 0, "RBI": 0, "SB": 0}, "days": []})
+                    for c, key in (("R", R), ("HR", HR), ("RBI", RBI), ("SB", SB), ("H", H), ("AB", AB)):
+                        agg[c] += _f(st, key)
+                    notable = _f(st, HR) or _f(st, SB) or _f(st, R) >= 2 or _f(st, RBI) >= 2
+                    if not notable:
+                        continue
+                    cand_elig = {s for s in elig if s in hit_ids}
+                    free = _fits(cand_elig)
+                    disp_st, disp_nm = {}, None
+                    if not free:
+                        overlap = [(anm, ast) for anm, ae, ast in active_hit if ae & cand_elig]
+                        if overlap:
+                            best = min(overlap, key=lambda x: _f(x[1], TB) + _f(x[1], BB_H) + _f(x[1], SB))
+                            disp_nm, disp_st = best[0], best[1]
+                    for c, key in (("R", R), ("HR", HR), ("RBI", RBI), ("SB", SB)):
+                        agg["net"][c] += _f(st, key) - _f(disp_st, key)
+                    ln = f"{int(_f(st, H))}-{int(_f(st, AB))}"
+                    ex = []
+                    if _f(st, HR):  ex.append(f"{int(_f(st, HR))} HR")
+                    if _f(st, RBI): ex.append(f"{int(_f(st, RBI))} RBI")
+                    if _f(st, R):   ex.append(f"{int(_f(st, R))} R")
+                    if _f(st, SB):  ex.append(f"{int(_f(st, SB))} SB")
+                    if free:
+                        tag = "open slot"
+                    elif disp_nm:
+                        tag = f"vs {disp_nm} {int(_f(disp_st, H))}-{int(_f(disp_st, AB))}"
+                    else:
+                        tag = "swap"
+                    agg["days"].append({"date": dt.strftime("%a %m/%d"), "line": ln,
+                                        "extra": ", ".join(ex), "tag": tag})
+
+                if _is_pit(elig) and sid not in (BE_ID, IL_ID) and _f(st, OUTS) > 0:
+                    pit_lines.append({"name": nm, "date": dt, "outs": _f(st, OUTS), "er": _f(st, ER),
+                                      "k": _f(st, K), "h": _f(st, P_H), "bb": _f(st, P_BB)})
+
+        # drops of my players (for implode-then-drop flag)
+        my_drops = []
+        try:
+            for act in league.recent_activity(size=150):
+                for team_obj, tx_type, player_obj in act.actions:
+                    tn = " ".join((team_obj.team_name if team_obj else "").split())
+                    if tn == my_norm and "DROP" in str(tx_type).upper():
+                        my_drops.append((str(player_obj), datetime.fromtimestamp(act.date / 1000).date()))
+        except Exception:
+            pass
+
+        blowups = []
+        for p in sorted((x for x in pit_lines if x["er"] >= 5 or (x["er"] >= 4 and x["outs"] < 9)),
+                        key=lambda x: x["er"], reverse=True):
+            whole, rem = divmod(int(round(p["outs"])), 3)
+            after = [d for nm, d in my_drops if nm == p["name"] and d >= p["date"] and (d - p["date"]).days <= 4]
+            drop_when = None
+            if after:
+                lag = (min(after) - p["date"]).days
+                drop_when = "same day" if lag == 0 else f"{lag}d later"
+            blowups.append({"name": p["name"], "date": p["date"].strftime("%a %m/%d"),
+                            "ip": f"{whole}.{rem}", "er": int(p["er"]), "k": int(p["k"]),
+                            "h": int(p["h"]), "bb": int(p["bb"]), "drop_when": drop_when})
+
+        bench = []
+        for nm, a in sorted(hit_leak.items(), key=lambda kv: (kv[1]["HR"], kv[1]["RBI"], kv[1]["R"]), reverse=True):
+            if not a["days"]:
+                continue  # produced nothing notable while benched
+            bench.append({"name": nm, "H": int(a["H"]), "AB": int(a["AB"]), "R": int(a["R"]),
+                          "HR": int(a["HR"]), "RBI": int(a["RBI"]), "SB": int(a["SB"]),
+                          "net": {k: round(v) for k, v in a["net"].items()}, "days": a["days"]})
+
+        net = {c: round(sum(a["net"][c] for a in hit_leak.values())) for c in ("R", "HR", "RBI", "SB")}
+        gross = {c: int(sum(a[c] for a in hit_leak.values())) for c in ("R", "HR", "RBI", "SB")}
+        return {
+            "week": week, "mode": mode,
+            "week_dates": f"{dates[0].strftime('%b %d')} - {dates[-1].strftime('%b %d')}",
+            "bench": bench, "gross": gross, "net": net, "blowups": blowups,
+        }
+    except Exception as e:
+        log(f"  get_lineup_efficiency failed: {e}")
+        return {}
+
+
 def get_all_prev_matchups(league) -> dict:
     """Return the most recently completed matchup for ALL teams as
     {normalized_team_name: matchup_dict} — same structure/keys as get_all_matchups,
@@ -1551,6 +1753,15 @@ def main():
         prev_wk = prev_matchup.get("week", "?")
         print(f"       Prev week {prev_wk}: {prev_matchup['wins']}-{prev_matchup['losses']}-{prev_matchup['ties']} vs {prev_matchup['opp_team']}")
 
+    print("       Reconstructing daily lineup efficiency (prev + current week)...")
+    lineup_efficiency = get_lineup_efficiency(league, my_team, mode="prev")            # Monday recap
+    lineup_efficiency_current = get_lineup_efficiency(league, my_team, mode="current")  # daily digest
+    for _lbl, _eff in (("prev", lineup_efficiency), ("current", lineup_efficiency_current)):
+        if _eff.get("bench") or _eff.get("blowups"):
+            _n = _eff.get("net", {})
+            print(f"       [{_lbl}] bench net: {_n.get('HR',0):+} HR / {_n.get('RBI',0):+} RBI | "
+                  f"{len(_eff.get('blowups',[]))} active-slot blowup(s)")
+
     print("\n[8/10] Fetching last-7-day hitter stats...")
     recent_hitting = fetch_recent_hitter_stats(days=7)
     print(f"       {len(recent_hitting)} hitters with recent stats")
@@ -1608,6 +1819,8 @@ def main():
         "recent_pitching":   recent_pitching,
         "prev_week_hitting":  prev_week_hitting,
         "prev_week_pitching": prev_week_pitching,
+        "lineup_efficiency":         lineup_efficiency,
+        "lineup_efficiency_current": lineup_efficiency_current,
     }
 
     with open(OUTPUT_FILE, "w") as f:

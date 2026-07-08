@@ -31,7 +31,7 @@ fetch_data.py  →  data/snapshot.json  →  send_digest.py   →  daily email
 
 2. **`send_digest.py`** reads the snapshot, builds a single HTML email, and sends it via Gmail SMTP. The email includes both an inline HTML body and an attached `digest_YYYY-MM-DD.html` file — the attachment bypasses Gmail's 102 KB inline clip limit so the full digest is always accessible by opening the attachment in a browser. Alternatively saves `digest_preview.html` for local browser preview (no email).
 
-3. **`weekly_recap.py`** reads the same snapshot every Monday and emails a full-league recap: **Week N Highlights** (commissioner-style prose + stat sidebar — roto winner, hitter/pitcher/FA of the week with MLB team logos and named historical benchmarks), your matchup result, all 6 scoreboard matchups, Weekly Roto Rankings (all 12 categories, 5-tier heat-map coloring), Top Performers, Standings & Luck, and Season Trajectory. Saves `previews/recap_week_N.html` on dry runs. GitHub Actions: `.github/workflows/weekly-recap.yml` (Monday 15:30 UTC).
+3. **`weekly_recap.py`** reads the same snapshot every Monday and emails a full-league recap: **Week N Highlights** (commissioner-style prose + stat sidebar — roto winner, hitter/pitcher/FA of the week with MLB team logos and named historical benchmarks), your matchup result, **Lineup Efficiency** (last week's start/sit opportunity cost — bench leakage + active-slot pitcher blowups), all 6 scoreboard matchups, Weekly Roto Rankings (all 12 categories, 5-tier heat-map coloring), Top Performers, Standings & Luck, and Season Trajectory. Saves `previews/recap_week_N.html` on dry runs. GitHub Actions: `.github/workflows/weekly-recap.yml` (Monday 15:30 UTC).
 
 4. **GitHub Actions** runs both scripts automatically using credentials stored as repository secrets — no laptop needed.
 
@@ -170,6 +170,7 @@ KPI row: **Record** · **Current Matchup** (W-L-T + win%) · **Roster** (whole-t
 
 **⚑ MY ROSTER**
 7. **Roster Alerts** — *(only if you have injured players)*
+7b. **Lineup Watch** — *(current-week bench leakage / active-slot pitcher blowups; silent on a clean week)*
 8. **Positional Breakdown**
 9. **My Upcoming Starts**
 10. **My Relief Pitchers**
@@ -249,6 +250,14 @@ For each position (C, 1B, 2B, 3B, SS, OF, SP, RP): your weakest rostered player 
 
 ### Roster Alerts
 Any injured players on your roster. Only shown if there are active alerts. Color: yellow = DTD, red = IL/OUT.
+
+### Lineup Watch
+A compact callout that audits your **daily** lineup for the week so far (Monday → yesterday), reconstructed from ESPN's historical per-day slots. It surfaces two kinds of start/sit mistakes:
+
+- **Bench leakage** — counting-stat production (R/HR/RBI/SB) a hitter racked up while sitting in a bench slot, so it never counted. Shown **net of the bat you'd have benched to start him** — if your active lineup was full at his eligible positions, playing him meant sitting someone, so the tool subtracts that player's line (a feasibility check on your lineup slots + each player's position eligibility decides whether an open slot even existed). This is the honest "money left on the table," not raw bench stats.
+- **Active-slot blowups** — a starter who imploded (5+ ER, or 4+ ER in <3 IP) *in your active lineup*, so the ERA/WHIP damage counted. Flagged with a note if you then dropped him ("imploded then cut").
+
+Only still-actionable, net-positive misses appear — it's silent on a clean week. The Monday recap carries the fuller completed-week version (**Lineup Efficiency**). Deep-dive / opponent comparison: run `python bench_leakage.py`.
 
 ### FA Pickup — Starting Pitchers
 Free agent starters with a confirmed upcoming start, grouped by date with day headers. Sorted by composite SP score within each day. Starts past Sunday get a `NEXT WK` badge; a pitcher with ≥ 2 starts in the matchup week gets a purple `2-START` chip.
@@ -465,6 +474,9 @@ Same schema as `recent_pitching`. Used by `build_commissioner_story` (pitcher-of
 **weekly_results** (dict — `{"1": {"Team Name": "W"/"L"/"T", ...}, ...}`):
 Per-week head-to-head matchup results for every team. Keys are week numbers as strings. Note: the sparkline dot encoding uses roto-derived rank results computed in `send_digest.py` from the `roto` data — not this H2H field directly.
 
+**lineup_efficiency** / **lineup_efficiency_current** (dicts — MY team's daily start/sit audit):
+`week, mode` ("prev"/"current"), `week_dates`, `bench[]` (per stranded hitter: name, slash, R/HR/RBI/SB, `net` correction, and per-day `days[]` with the swap target), `gross`/`net` totals, `blowups[]` (active-slot pitcher meltdowns + drop flag). `lineup_efficiency` is the last completed week (Monday recap); `lineup_efficiency_current` is the in-progress week Mon→yesterday (daily-digest Lineup Watch). Both come from `get_lineup_efficiency`, which reads ESPN's historical per-day lineup via `mRoster?scoringPeriodId=<day>`.
+
 ---
 
 ## Player Name Patches
@@ -492,6 +504,8 @@ Contributor docs are split in two: **`CLAUDE.md`** holds the actionable rules an
 baseball/
 ├── fetch_data.py                        # Data pipeline — runs first (~60s)
 ├── send_digest.py                       # Email builder + sender
+├── weekly_recap.py                      # Monday full-league recap email builder
+├── bench_leakage.py                     # Standalone daily-lineup audit (my team + opponent → console)
 ├── CLAUDE.md                            # Actionable rules / gotchas for contributors
 ├── NOTES.md                             # Background & rationale ("why we did it this way")
 ├── requirements.txt                     # pip install -r requirements.txt
