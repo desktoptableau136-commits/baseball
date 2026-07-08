@@ -209,7 +209,7 @@ Five bands separated by `band_divider()` rules. The Triage divider renders only 
 - **MY ROSTER:** 2. Week at a Glance · 3. Category Pulse · 3b. Opponent This Week (`opponent_week_intel`/`opp_preview_section`, below Category Pulse; opponent start count, two-start pitchers, top-3 hot bats by recent OPS, season roto strengths/weaknesses via `category_ranks`, wire activity; logo via `fantasy_logo()`; renders only when opponent has starters or hot hitters) · 4. Current Matchup (category rankings; hidden on Monday when `_all_roto_tied`) · 4b. Week N Roto Rankings (all 12 teams, live; `_all_roto_tied` flag controls both 4 and 4b — both hidden Monday before stats accumulate, when all `Roto_Score` values are equal; #1/#12 ranks rendered as inline `<span>` badges, not `<td>` borders) · 5. Matchup (score banner + category table)
 - **MY ROSTER (holes first):** 1b. Lineup Watch (`build_bench_watch`, right after `alert_section`; current-week bench leakage / active-slot blowups; silent on a clean week) · 10. Positional Breakdown · 6. My Upcoming Starts · 7. My Relief Pitchers · 8. Pitcher Hot/Cold · 9. Roster Hot/Cold
 - **FREE AGENTS:** 11. FA — Starting Pitchers · 12. FA — Relief Pitchers · 13. FA — Hitters
-- **SEASON:** 14. My Season Category Rankings · 15. League Luck Standings
+- **SEASON:** 14. My Season Category Rankings · 15. League Luck Standings · 16. Season Trajectory (`build_season_trajectory` — W/L/T grid, teams×weeks, current streak in the final column; **ported from `weekly_recap.build_trajectory`** since the two scripts don't import each other; takes `my_team` so `--team` highlights the right row)
 
 **My Season Category Rankings subtitle** shows a pseudo-single-week roto score: `sum(n - rank + 1 for rank in cats.values())` (max = n × 12).
 

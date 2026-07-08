@@ -2,6 +2,10 @@
 
 Forensic detail and "why we did it this way" narrative moved out of `CLAUDE.md` to keep that file to actionable rules. Nothing here is required to follow the rules; consult it only when you need the history behind a decision. Rules live in `CLAUDE.md`; this is the "why".
 
+## Season Trajectory ported recap → digest (2026-07-08)
+
+User asked to carry the recap's Season Trajectory panel (W/L/T grid, teams×weeks, current streak in the final column) into the daily digest's SEASON band. `send_digest.py` and `weekly_recap.py` deliberately **don't import each other** (each copies the constants/helpers it needs), so `build_season_trajectory` is a near-verbatim copy of `weekly_recap.build_trajectory` — the only change is a `my_team` param (default `MY_TEAM`) so the `--team` view highlights the right row instead of always Guerrero Warfare. Both read the same snapshot `weekly_results` (`{week: {team: W/L/T}}`) + `standings`, so they stay in sync by construction. If the panel logic ever changes, update both copies. Placed as digest section 16, after Luck Standings.
+
 ## Week at a Glance pickups: from "best available hitter" to roster-context aware (2026-07-08)
 
 User caught the flaw: the pickup bullet kept telling him to grab an **OF** while his OF was so deep he was *benching* a masher (Riley Greene), and it never mentioned **catcher** where he ranked dead last, nor his **pitching** after two active-slot implosions. Root cause was one line — `add_candidate = sorted(fa_hit, by score)[0]` — the single best available hitter in the league, with zero roster context. OF is structurally the largest pool (4 OF slots + LF/CF/RF fold in), so the best FA hitter is *chronically* an OF. The bullet was also hard-locked to hitters (`focus_pit = False`), so it literally could not respond to a pitching crisis.

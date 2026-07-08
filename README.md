@@ -185,9 +185,10 @@ KPI row: **Record** · **Current Matchup** (W-L-T + win%) · **Roster** (whole-t
 **SEASON**
 16. **My Season Category Rankings**
 17. **League Luck Standings**
+18. **Season Trajectory** — W/L/T by week for every team, current streak in the final column
 
 **REFERENCE**
-18. **Glossary & Methodology** — collapsible in-digest reference for every score, metric, and data source
+19. **Glossary & Methodology** — collapsible in-digest reference for every score, metric, and data source
 
 On **Sundays** the digest shifts to a next-week lookahead (subtitle, subject, KPI, and Week-at-a-Glance all preview the coming week).
 
@@ -304,6 +305,9 @@ Sits just above the Matchup table (section 5b). All 12 teams ranked by current-w
 
 ### League Luck Standings
 All 12 teams sorted by record. Shows W-L-T · Win% · Roto rank · Cumulative roto points · Luck delta. **Luck** = roto rank minus record rank. Positive luck means your W-L-T is better than your underlying stats deserve; negative means you're underperforming your true quality.
+
+### Season Trajectory
+A W/L/T grid of the whole season — every team down the rows (in standings order), each completed week across the columns, and each team's **current streak** (e.g. W3, L2) in the final column. Wins are green, losses red, ties white. Your row is highlighted. Same panel as the Monday recap (ported so the two share the view); it scrolls horizontally on narrow screens as the season lengthens.
 
 ### Glossary & Methodology
 A collapsible in-digest reference at the very bottom (also linked from the header nav). Five expandable groups — **Scores**, **Pitching metrics**, **Hitting metrics**, **Projections & matchup**, **Data sources** — explaining how every score and metric is computed and where the data comes from. Kept in sync with the code as part of the save sequence.
