@@ -3255,8 +3255,12 @@ def build_season_trajectory(weekly_results, standings, my_team=MY_TEAM):
         streak_color = GREEN if streak.startswith("W") else (RED if streak.startswith("L") else MUTED)
         bg = f"background:{ACCENT}12;" if is_my else ""
 
+        # Frozen first column: sticky-left with an OPAQUE background (so scrolling week
+        # cells don't show through it) + a right border to separate it from the grid.
+        team_bg = "#13233f" if is_my else SURFACE
         team_cell = (
-            f'<td style="{TD_S}font-weight:{"800" if is_my else "600"};'
+            f'<td style="{TD_S}position:sticky;left:0;z-index:2;background:{team_bg};'
+            f'border-right:1px solid {BORDER};font-weight:{"800" if is_my else "600"};'
             f'color:{ACCENT if is_my else TEXT};white-space:nowrap;padding:4px 8px;">{team}</td>'
         )
         week_cells = ""
@@ -3282,14 +3286,20 @@ def build_season_trajectory(weekly_results, standings, my_team=MY_TEAM):
         rows_html += f'<tr style="{bg}">{team_cell}{week_cells}{streak_cell}</tr>'
 
     header_row = (
-        f'<th style="{TH_S}">Team</th>'
+        f'<th style="{TH_S}position:sticky;left:0;z-index:3;border-right:1px solid {BORDER};">Team</th>'
         + week_headers
         + f'<th style="{TH_S}text-align:center;">Streak</th>'
     )
 
+    # `direction:rtl` on the scroll container makes the horizontal scrollbar START at the
+    # far right (latest weeks + streak) on load; `direction:ltr` on the table keeps the
+    # columns reading week 1 → N normally. The first column is frozen via position:sticky
+    # (above), so team names stay visible while you scroll left into earlier weeks.
+    # border-collapse:separate (not collapse) because sticky cells + collapsed borders
+    # render buggily in some engines.
     table = (
-        f'<div style="overflow-x:auto;-webkit-overflow-scrolling:touch;">'
-        f'<table style="width:100%;border-collapse:collapse;">'
+        f'<div style="overflow-x:auto;-webkit-overflow-scrolling:touch;direction:rtl;">'
+        f'<table style="width:100%;border-collapse:separate;border-spacing:0;direction:ltr;">'
         f'<thead><tr>{header_row}</tr></thead>'
         f'<tbody>{rows_html}</tbody></table></div>'
     )
