@@ -31,7 +31,7 @@ fetch_data.py  →  data/snapshot.json  →  send_digest.py   →  daily email
 
 2. **`send_digest.py`** reads the snapshot, builds a single HTML email, and sends it via Gmail SMTP. The email includes both an inline HTML body and an attached `digest_YYYY-MM-DD.html` file — the attachment bypasses Gmail's 102 KB inline clip limit so the full digest is always accessible by opening the attachment in a browser. Alternatively saves `digest_preview.html` for local browser preview (no email).
 
-3. **`weekly_recap.py`** reads the same snapshot every Monday and emails a full-league recap: **Week N Highlights** (commissioner-style prose + stat sidebar — roto winner, hitter/pitcher/FA of the week with MLB team logos and named historical benchmarks), your matchup result, **Lineup Efficiency** (last week's start/sit opportunity cost — bench leakage + active-slot pitcher blowups), all 6 scoreboard matchups, Weekly Roto Rankings (all 12 categories, 5-tier heat-map coloring), Top Performers, Standings & Luck, and Season Trajectory. Saves `previews/recap_week_N.html` on dry runs. GitHub Actions: `.github/workflows/weekly-recap.yml` (Monday 15:30 UTC).
+3. **`weekly_recap.py`** reads the same snapshot every Monday and emails a full-league recap: **Matchup N Highlights** (commissioner-style prose + stat sidebar — roto winner, hitter/pitcher/FA of the matchup with MLB team logos and named historical benchmarks), your matchup result, **Lineup Efficiency** (last matchup's start/sit opportunity cost — bench leakage + active-slot pitcher blowups), all 6 scoreboard matchups, Matchup Roto Rankings (all 12 categories, 5-tier heat-map coloring), Top Performers, Standings & Luck, and Season Trajectory. Saves `previews/recap_week_N.html` on dry runs. GitHub Actions: `.github/workflows/weekly-recap.yml` (Monday 15:30 UTC).
 
 4. **GitHub Actions** runs both scripts automatically using credentials stored as repository secrets — no laptop needed.
 
@@ -157,16 +157,16 @@ Go to **Settings → Secrets and variables → Actions** to view or update:
 The digest is organized into labeled **bands**, with a **Jump to** nav in the header (My Roster · Free Agents · Season · Glossary) that anchors to each band.
 
 **Header** — date · team name + logo · KPI row · Jump-to nav pills
-KPI row: **Record** · **Current Matchup** (W-L-T + win%) · **Roster** (whole-team hot/cold count — hitters *and* pitchers) · **Starts This Week**
+KPI row: **Record** · **Current Matchup** (W-L-T + win%) · **Roster** (whole-team hot/cold count — hitters *and* pitchers) · **Starts This Matchup**
 
-**Weekly matchup overview** (top of the email)
-1. **Monday Recap** — *(Mondays only)* last week's final result (per-team via `all_prev_matchups`, so `--team` shows that team's prior week)
-2. **Week at a Glance**
+**Matchup overview** (top of the email)
+1. **Monday Recap** — *(Mondays only)* last matchup's final result (per-team via `all_prev_matchups`, so `--team` shows that team's prior matchup)
+2. **Matchup at a Glance**
 3. **Category Pulse**
-4. **Opponent This Week** — scouting block for this week's opponent
-5. **Current Matchup** — this week's category rankings grid *(hidden Monday before stats accumulate)*
-5b. **Week N Roto Rankings** — live all-12-team roto table for the current week *(hidden Monday before stats accumulate)*
-6. **Week N Matchup** — score banner + category-by-category table
+4. **Opponent This Matchup** — scouting block for this matchup's opponent
+5. **Current Matchup** — this matchup's category rankings grid *(hidden Monday before stats accumulate)*
+5b. **Matchup N Roto Rankings** — live all-12-team roto table for the current matchup *(hidden Monday before stats accumulate)*
+6. **Matchup N** — score banner + category-by-category table
 
 **⚑ MY ROSTER**
 7. **Roster Alerts** — *(only if you have injured players)*
@@ -185,7 +185,7 @@ KPI row: **Record** · **Current Matchup** (W-L-T + win%) · **Roster** (whole-t
 **SEASON**
 16. **My Season Category Rankings**
 17. **League Luck Standings**
-18. **Season Trajectory** — W/L/T by week for every team, current streak in the final column
+18. **Season Trajectory** — W/L/T by matchup for every team, current streak in the final column
 
 **REFERENCE**
 19. **Glossary & Methodology** — collapsible in-digest reference for every score, metric, and data source
@@ -203,10 +203,10 @@ Two-row panel at the top of every digest. Your team logo appears next to the tea
 - **Roto Rank** — Season-to-date cumulative roto rank (#N) with average weekly rank and average weekly roto points underneath.
 - **Luck** — Roto rank minus record rank. Positive = your W-L is better than your underlying stats deserve; negative = underperforming your true quality.
 
-### Week at a Glance
+### Matchup at a Glance
 Four-bullet summary placed directly above the category rankings grid:
 
-1. **Week record** — current W-L-T vs. this week's opponent through the current day, with the categories you're winning (green) and trailing (red) called out.
+1. **Matchup record** — current W-L-T vs. this matchup's opponent through the current day, with the categories you're winning (green) and trailing (red) called out.
 2. **Rotation coverage** — confirmed start count and days covered; flags thin days (< 2 my starts) by day-of-week so you know where to add from FA.
 3. **Top FA pickup** — best available FA starter by QS%, with their next start day and QS%. If the highest-score and highest-QS pitchers differ, both are mentioned.
 4. **Pickups (roster-context aware)** — up to two targeted add/drop bullets:
@@ -216,7 +216,7 @@ Four-bullet summary placed directly above the category rankings grid:
    Drops prefer a **surplus** player (a deep position or a bench-leaker), tagged `[surplus]`, and the two bullets never suggest dropping the same player. If you have an open roster spot the add shows as a free pickup instead. Drops never target an injured player in one of your **2 IL roster slots** (cutting them frees nothing), and always leave ≥ 1 healthy player at every position.
 
 ### Current Matchup (category rankings)
-Your roto rank (out of 12 teams) in each of the 12 scoring categories for the **current matchup week only**. Green = top 3, red = bottom half. The subtitle's total roto points is your stored `Roto_Score` — the same figure shown in the Week N Roto Rankings table, so the two panels agree (tied categories split points, so this can be a half-point below the sum of the ordinal rank chips shown in the grid).
+Your roto rank (out of 12 teams) in each of the 12 scoring categories for the **current matchup only**. Green = top 3, red = bottom half. The subtitle's total roto points is your stored `Roto_Score` — the same figure shown in the Matchup N Roto Rankings table, so the two panels agree (tied categories split points, so this can be a half-point below the sum of the ordinal rank chips shown in the grid).
 
 Scoring categories: **R · HR · RBI · SB · OPS · B/SO** (batter strikeouts, hitting) + **K · QS · W · ERA · WHIP · SV+H** (pitching)
 
@@ -234,8 +234,8 @@ A summary line above the cards shows your current record and projected end-of-we
 - **proj X.X vs Y.Y** = projected end-of-week (K/QS/W use your actual remaining starts × per-start rate; other cats use each team's weekly average)
 - **▲ / ▼ / ◆** (corner) = the **projected outcome** — ▲ green = projected win, ▼ red = loss, ◆ white = tie. Shown on every card; when it disagrees with the card's current color (WINNING/LOSING/TIED), that's a projected flip
 
-### Week N Matchup
-Score banner (team logos + overall W-L-T, with a projected final record) followed by a category-by-category table. Each row shows your value and the opponent's, colored by who's currently winning. Below each value is the **projected** end-of-week value, **colored by its projected outcome** (green = you're projected to win that category, red = lose) with a **▲/▼/◆ flip arrow** on your side when the projection differs from the current standing — so a category you're currently losing but projected to win shows a red current value and a green projection with a ▲.
+### Matchup N
+Score banner (team logos + overall W-L-T, with a projected final record) followed by a category-by-category table. Each row shows your value and the opponent's, colored by who's currently winning. Below each value is the **projected** end-of-matchup value, **colored by its projected outcome** (green = you're projected to win that category, red = lose) with a **▲/▼/◆ flip arrow** on your side when the projection differs from the current standing — so a category you're currently losing but projected to win shows a red current value and a green projection with a ▲.
 
 ### My Relief Pitchers
 Your rostered relievers, showing season SV+H / K / W (from ESPN) plus ERA/WHIP from the best available dataset, with a role-aware **Score** badge. RP scoring is **skill-weighted (punt-saves)** — see [Composite Scores](#composite-scores).
@@ -300,8 +300,8 @@ Badges next to the name: `2-START` (purple), `QS` (green — projected quality s
 ### My Season Category Rankings
 Season-to-date roto rank across all 12 categories. Same color coding as the weekly version at the top, but for the full season.
 
-### Week N Roto Rankings
-Sits just above the Matchup table (section 5b). All 12 teams ranked by current-week roto score, with all 12 category columns. Updates live throughout the week so you can watch standings shift — the roto table is ranked by each category's live **value** (not ESPN's per-category result, which stays unset until the period closes), so it populates as soon as the week's first games are played. Hidden only before any stats accumulate (when all teams share an equal roto score — same suppression logic as Current Matchup). Uses the same 5-tier heat-map coloring as the Monday recap: bright green = #1 in cat, light green = #2, amber = #11, red = #12, muted = middle pack. Your team is bold blue; category leaders get accent-colored pills. Row background tints top-3 green, bottom-3 red.
+### Matchup N Roto Rankings
+Sits just above the Matchup table (section 5b). All 12 teams ranked by current-matchup roto score, with all 12 category columns. Updates live throughout the matchup so you can watch standings shift — the roto table is ranked by each category's live **value** (not ESPN's per-category result, which stays unset until the period closes), so it populates as soon as the matchup's first games are played. Hidden only before any stats accumulate (when all teams share an equal roto score — same suppression logic as Current Matchup). Uses the same 5-tier heat-map coloring as the Monday recap: bright green = #1 in cat, light green = #2, amber = #11, red = #12, muted = middle pack. Your team is bold blue; category leaders get accent-colored pills. Row background tints top-3 green, bottom-3 red.
 
 ### League Luck Standings
 All 12 teams sorted by record. Shows W-L-T · Win% · Roto rank · Cumulative roto points · Luck delta. **Luck** = roto rank minus record rank. Positive luck means your W-L-T is better than your underlying stats deserve; negative means you're underperforming your true quality.

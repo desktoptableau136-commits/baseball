@@ -1787,7 +1787,7 @@ def build_matchup_section(matchup, logos=None, my_team=MY_TEAM,
     )
 
     return (
-        section_head(f"Week {week} Matchup", f"vs. {opp} · current standings") +
+        section_head(f"Matchup {week}", f"vs. {opp} · current standings") +
         score_banner +
         table
     )
@@ -2452,7 +2452,7 @@ def build_category_pulse(matchup, weekly_avgs=None, days_elapsed=None, remaining
         )
 
     return (
-        section_head(f"Category Pulse — Week {week}", f"vs. {opp} · {'Final stretch — week ends today' if is_sunday else '% = win odds · ⚡ = toss-up'}") +
+        section_head(f"Category Pulse — Matchup {week}", f"vs. {opp} · {'Final stretch — matchup ends today' if is_sunday else '% = win odds · ⚡ = toss-up'}") +
         f'<div style="margin-bottom:8px;font-size:12px;">{summary}</div>' +
         table
     )
@@ -2551,11 +2551,11 @@ def build_prev_matchup_recap(prev_matchup, team_logos=None):
         f'<div style="background:{SURFACE};border:1px solid {BORDER};border-radius:6px;'
         f'padding:12px 16px;margin-bottom:12px;">'
         f'<div style="color:{MUTED};font-size:10px;font-weight:700;text-transform:uppercase;'
-        f'letter-spacing:.7px;margin-bottom:9px;">Last Week — Final Result</div>'
+        f'letter-spacing:.7px;margin-bottom:9px;">Last Matchup — Final Result</div>'
         f'<div style="display:flex;align-items:baseline;gap:10px;">'
         f'<span style="color:{outcome_color};font-weight:800;font-size:15px;">{outcome_word}</span>'
         f'<span style="color:{TEXT};font-weight:700;">{score_str}</span>'
-        f'<span style="color:{MUTED};font-size:12px;">vs. {opp} &middot; Week {week}</span>'
+        f'<span style="color:{MUTED};font-size:12px;">vs. {opp} &middot; Matchup {week}</span>'
         f'</div>'
         f'{table}'
         f'</div>'
@@ -2892,12 +2892,12 @@ def build_week_overview(matchup, week_cats, week_n, fa_sp, starts, days_elapsed,
         nw_days = len(set(s["PSP_Date"] for s in next_confirmed))
         if next_confirmed:
             rot_str = (
-                f'Next week: <span style="color:{ACCENT};font-weight:700;">{len(next_confirmed)} starts</span>'
+                f'Next matchup: <span style="color:{ACCENT};font-weight:700;">{len(next_confirmed)} starts</span>'
                 f' already lined up across {nw_days} day{"s" if nw_days != 1 else ""} — check FA SP below to fill gaps.'
             )
         else:
             rot_str = (
-                f'<span style="color:{YELLOW};font-weight:700;">No confirmed starts next week yet</span>'
+                f'<span style="color:{YELLOW};font-weight:700;">No confirmed starts next matchup yet</span>'
                 f' — check FA SP section below and plan your pickups.'
             )
         bullets.append(rot_str)
@@ -2973,7 +2973,7 @@ def build_week_overview(matchup, week_cats, week_n, fa_sp, starts, days_elapsed,
                 s += f', K% <span style="color:{kc};">{kpct*100:.1f}%</span>'
             s += ')'
             if _two(best):
-                s += f' · <span style="color:{GREEN};font-weight:700;">×2 starts this week</span>'
+                s += f' · <span style="color:{GREEN};font-weight:700;">×2 starts this matchup</span>'
             if top.get("PlayerName") != best.get("PlayerName"):
                 s += (
                     f' · highest score: <span style="color:{TEXT};font-weight:600;">'
@@ -2985,9 +2985,9 @@ def build_week_overview(matchup, week_cats, week_n, fa_sp, starts, days_elapsed,
         if is_sunday:
             fa_next = [r for r in fa_sp if r.get("PSP_Date", "") > (week_end or "")]
             if fa_next:
-                fa_str = _best_fa_str(fa_next, label_prefix="Top FA pickup next week")
+                fa_str = _best_fa_str(fa_next, label_prefix="Top FA pickup next matchup")
             else:
-                fa_str = f'<span style="color:{MUTED};">No confirmed FA starts next week yet — check back Monday.</span>'
+                fa_str = f'<span style="color:{MUTED};">No confirmed FA starts next matchup yet — check back Monday.</span>'
             bullets.append(fa_str)
         else:
             fa_sp_this_week = [r for r in fa_sp if week_end is None or r.get("PSP_Date", "") <= week_end]
@@ -3007,8 +3007,8 @@ def build_week_overview(matchup, week_cats, week_n, fa_sp, starts, days_elapsed,
                             day_nw = "?"
                         qc_nw = GREEN if qsp_nw >= 60 else (YELLOW if qsp_nw >= 40 else MUTED)
                         fa_str = (
-                            f'<span style="color:{MUTED};">No FA starters this week</span>'
-                            f' — next week: <span style="color:{TEXT};font-weight:700;">{best_nw["PlayerName"]}</span>'
+                            f'<span style="color:{MUTED};">No FA starters this matchup</span>'
+                            f' — next matchup: <span style="color:{TEXT};font-weight:700;">{best_nw["PlayerName"]}</span>'
                             f' <span style="color:{MUTED};font-size:10px;">({_pos_label(best_nw)})</span>'
                             f' ({day_nw}'
                         )
@@ -3060,7 +3060,7 @@ def build_week_overview(matchup, week_cats, week_n, fa_sp, starts, days_elapsed,
         f'<div style="background:#080e1c;border:1px solid {BORDER};border-radius:6px;'
         f'padding:13px 16px;margin-bottom:20px;">'
         f'<div style="color:{MUTED};font-size:10px;font-weight:700;text-transform:uppercase;'
-        f'letter-spacing:.7px;margin-bottom:8px;">{"Next Week Preview" if is_sunday else "Week at a Glance"}</div>'
+        f'letter-spacing:.7px;margin-bottom:8px;">{"Next Matchup Preview" if is_sunday else "Matchup at a Glance"}</div>'
         f'{items}'
         f'</div>'
     )
@@ -3160,10 +3160,10 @@ def build_glossary_section():
                "Power (SLG − AVG, extra-base power)."),
     ])
     proj = _group("Projections & matchup", [
-        _entry("Category Pulse cards", "Per-category snapshot of the current week: your value vs the "
+        _entry("Category Pulse cards", "Per-category snapshot of the current matchup: your value vs the "
                "opponent, who's winning, and whether the odds are a toss-up (⚡ = win % near even)."),
-        _entry("Projected values & outcome markers", "“proj” is the end-of-week estimate — for K/QS/W it uses "
-               "your actual remaining starts × per-start rate; other cats use each team's weekly average. "
+        _entry("Projected values & outcome markers", "“proj” is the end-of-matchup estimate — for K/QS/W it uses "
+               "your actual remaining starts × per-start rate; other cats use each team's per-matchup average. "
                "The projection is colored by its <b>projected</b> outcome (green = projected win, red = loss). "
                "A marker on every card shows that projected result: ▲ green = projected win, ▼ red = loss, "
                "◆ white = tie. When it disagrees with the card's current WINNING/LOSING/TIED status, that's "
@@ -3171,14 +3171,14 @@ def build_glossary_section():
         _entry("Win % &amp; ⚡", "The <b>%</b> in each card corner is the odds you win that category, from "
                "a normal model of the final margin, colored to match the projected outcome (green = "
                "projected win, red = loss, white = tie). On a toss-up (odds near even, or a projected tie) "
-               "a <b>⚡</b> replaces the number instead. Uncertainty comes from each team's week-to-week "
-               "spread in that stat and shrinks for counting cats as the week ends; a category with no "
+               "a <b>⚡</b> replaces the number instead. Uncertainty comes from each team's matchup-to-matchup "
+               "spread in that stat and shrinks for counting cats as the matchup ends; a category with no "
                "history yet falls back to its close-threshold. The % always agrees in direction with the "
                "“proj” value on the same card."),
         _entry("Luck (standings)", "Roto rank minus record rank. Positive = your W-L is better than your "
                "category performance suggests (running lucky); negative = unlucky."),
-        _entry("Season Trajectory", "Every team's weekly matchup result (W/L/T) across the whole season, "
-               "teams in standings order down the rows, weeks across the columns, with each team's "
+        _entry("Season Trajectory", "Every team's matchup result (W/L/T) across the whole season, "
+               "teams in standings order down the rows, matchups across the columns, with each team's "
                "<b>current streak</b> (e.g. W3, L2) in the final column. Your row is highlighted."),
         _entry("Lineup Watch", "Reconstructs your <b>daily</b> lineup for the week so far (Mon→yesterday) "
                "from ESPN's historical slots. Flags (a) counting-stat production a hitter put up while "
@@ -3306,7 +3306,7 @@ def build_season_trajectory(weekly_results, standings, my_team=MY_TEAM):
 
     return (
         section_head("Season Trajectory",
-                     "W/L/T by week \xb7 current streak in final column") +
+                     "W/L/T by matchup \xb7 current streak in final column") +
         table
     )
 
@@ -3536,7 +3536,7 @@ def build_email(snap, override_team=None):
 
     my_row = next((r for r in luck if " ".join((r.get("team") or "").split()) == " ".join(my_team.split())), {})
     today  = datetime.now().strftime("%A, %B %d, %Y")
-    _digest_label = "Weekly Lookahead" if is_sunday else "Daily Fantasy Digest"
+    _digest_label = "Matchup Lookahead" if is_sunday else "Daily Fantasy Digest"
 
     # ── Derived KPI values ─────────────────────────────────────────────────────
     my_logo_url = team_logos.get(" ".join(my_team.split()), "")
@@ -3720,7 +3720,7 @@ def build_email(snap, override_team=None):
   {kpi_cell("Record", wl_val)}
   {kpi_cell("Current Matchup", f'<span style="color:{cat_wl_color};">{cat_wl}</span><div style="color:{MUTED};font-size:9px;margin-top:3px;">{cat_win_pct}</div>')}
   {kpi_cell("Roster", hc_str)}
-  {kpi_cell("Starts Next Week" if is_sunday else "Starts This Week", sum(1 for s in starts if s.get("PSP_Date","") > week_end_str) if is_sunday else sum(1 for s in starts if s.get("PSP_Date","") <= week_end_str))}
+  {kpi_cell("Starts Next Matchup" if is_sunday else "Starts This Matchup", sum(1 for s in starts if s.get("PSP_Date","") > week_end_str) if is_sunday else sum(1 for s in starts if s.get("PSP_Date","") <= week_end_str))}
 </tr>
 <tr style="border-top:1px solid {BORDER};">
   {kpi_cell_sm("Roto Trend", spark_cell_val, font_size="inherit", font_weight="normal")}
@@ -4312,7 +4312,7 @@ def build_email(snap, override_team=None):
             f'</td>'
         )
     week_cat_section = ("" if _all_roto_tied else
-        section_head("Current Matchup", f"Week {current_week_num} · {my_week_roto_pts} roto pts · vs. this week's matchup") +
+        section_head("Current Matchup", f"Matchup {current_week_num} · {my_week_roto_pts} roto pts") +
         f'<table style="width:100%;border-collapse:collapse;background:{SURFACE};border-radius:6px;margin-bottom:24px;overflow:hidden;">'
         f'<tr>{week_cat_cells}</tr></table>'
     )
@@ -4422,7 +4422,7 @@ def build_email(snap, override_team=None):
         )
         week_roto_rankings_section = (
             '<div style="margin-bottom:24px;">' +
-            section_head(f"Week {current_week_num} Roto Rankings",
+            section_head(f"Matchup {current_week_num} Roto Rankings",
                          f"Live standings \xb7 bright green = #1 \xb7 light green = #2 \xb7 amber = #11 \xb7 red = #12") +
             _wrt_table +
             '</div>'
@@ -4636,7 +4636,7 @@ def build_email(snap, override_team=None):
             f'<span style="color:{TEXT};">{_wire}</span></div>'
         )
         opp_preview_section = (
-            section_head("Opponent This Week", f"{_logo_html}Scouting {_opp_name} — starts, hot bats, roto strengths &amp; wire activity")
+            section_head("Opponent This Matchup", f"{_logo_html}Scouting {_opp_name} — starts, hot bats, roto strengths &amp; wire activity")
             + f'<div style="background:{SURFACE2};border:1px solid {BORDER};border-radius:8px;'
               f'padding:10px 14px;margin-bottom:24px;font-size:12px;">{"".join(_lines)}</div>'
         )
