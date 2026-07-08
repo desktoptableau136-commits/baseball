@@ -1,0 +1,50 @@
+name: PR Smoke Test
+
+# Gate on pull requests into main: compile every module, refresh a real snapshot,
+# then dry-run render both the digest and the recap (no email). Catches syntax errors,
+# import breakage, and render-time crashes before a change can merge — important because
+# the daily workflow deploys from main automatically on a schedule.
+
+on:
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Compile all modules
+        run: python -m py_compile fetch_data.py send_digest.py weekly_recap.py bench_leakage.py
+
+      - name: Refresh data snapshot
+        env:
+          ESPN_SWID: ${{ secrets.ESPN_SWID }}
+          ESPN_S2: ${{ secrets.ESPN_S2 }}
+        run: python fetch_data.py
+
+      - name: Render digest + recap (dry-run, no email)
+        run: |
+          python send_digest.py --dry-run --no-refresh
+          python weekly_recap.py --dry-run --no-refresh
+
+      - name: Upload rendered previews
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: previews
+          path: previews/
+          if-no-files-found: ignore
