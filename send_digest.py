@@ -3177,6 +3177,9 @@ def build_glossary_section():
                "“proj” value on the same card."),
         _entry("Luck (standings)", "Roto rank minus record rank. Positive = your W-L is better than your "
                "category performance suggests (running lucky); negative = unlucky."),
+        _entry("Season Trajectory", "Every team's weekly matchup result (W/L/T) across the whole season, "
+               "teams in standings order down the rows, weeks across the columns, with each team's "
+               "<b>current streak</b> (e.g. W3, L2) in the final column. Your row is highlighted."),
         _entry("Lineup Watch", "Reconstructs your <b>daily</b> lineup for the week so far (Mon→yesterday) "
                "from ESPN's historical slots. Flags (a) counting-stat production a hitter put up while "
                "sitting on your <b>bench</b> — shown <b>net</b> of the bat you'd have benched to start him "
@@ -3199,6 +3202,102 @@ def build_glossary_section():
         section_head("Glossary &amp; Methodology",
                      "How every score and metric is computed, and where the data comes from · tap a section to expand")
         + f'<div style="margin-bottom:24px;">{scores}{pitching}{hitting}{proj}{sources}</div>'
+    )
+
+
+def build_season_trajectory(weekly_results, standings, my_team=MY_TEAM):
+    """Season W/L/T grid — teams as rows (standings order), weeks as columns, current
+    streak in the final column. Ported from weekly_recap.build_trajectory (the two
+    scripts don't import each other) so the SEASON band of the daily digest carries the
+    same at-a-glance history. `weekly_results` = snapshot `{week: {team: W/L/T}}`."""
+    if not weekly_results or not standings:
+        return ""
+
+    teams = [s["team_name"] for s in sorted(standings, key=lambda s: s["standing"])]
+    weeks = sorted(weekly_results.keys(), key=lambda w: int(w))
+    if not weeks:
+        return ""
+
+    my_key = " ".join(my_team.split())
+
+    def _get_result(week_data, team):
+        r = week_data.get(team)
+        if r:
+            return r
+        nteam = " ".join(team.split())
+        for k, v in week_data.items():
+            if " ".join(k.split()) == nteam:
+                return v
+        return ""
+
+    def _streak(team):
+        results = [_get_result(weekly_results[w], team) for w in weeks]
+        results = [r for r in results if r]
+        if not results:
+            return ""
+        last, count = results[-1], 0
+        for r in reversed(results):
+            if r == last:
+                count += 1
+            else:
+                break
+        return f"{last}{count}"
+
+    week_headers = "".join(
+        f'<th style="{TH_S}text-align:center;padding:4px 6px;min-width:22px;">{w}</th>'
+        for w in weeks
+    )
+
+    rows_html = ""
+    for team in teams:
+        is_my  = " ".join(team.split()) == my_key
+        streak = _streak(team)
+        streak_color = GREEN if streak.startswith("W") else (RED if streak.startswith("L") else MUTED)
+        bg = f"background:{ACCENT}12;" if is_my else ""
+
+        team_cell = (
+            f'<td style="{TD_S}font-weight:{"800" if is_my else "600"};'
+            f'color:{ACCENT if is_my else TEXT};white-space:nowrap;padding:4px 8px;">{team}</td>'
+        )
+        week_cells = ""
+        for w in weeks:
+            result = _get_result(weekly_results[w], team)
+            if result == "W":
+                cell_c = f"color:{GREEN};background:rgba(34,197,94,0.15);"
+            elif result == "L":
+                cell_c = f"color:{RED};background:rgba(239,68,68,0.12);"
+            elif result == "T":
+                cell_c = f"color:{TEXT};"
+            else:
+                cell_c = f"color:{MUTED};"
+            week_cells += (
+                f'<td style="{TDC}{cell_c}font-weight:700;font-size:11px;padding:4px 6px;">'
+                f'{result or "\xb7"}</td>'
+            )
+
+        streak_cell = (
+            f'<td style="{TDC}font-weight:700;color:{streak_color};font-size:11px;">'
+            f'{streak}</td>'
+        )
+        rows_html += f'<tr style="{bg}">{team_cell}{week_cells}{streak_cell}</tr>'
+
+    header_row = (
+        f'<th style="{TH_S}">Team</th>'
+        + week_headers
+        + f'<th style="{TH_S}text-align:center;">Streak</th>'
+    )
+
+    table = (
+        f'<div style="overflow-x:auto;-webkit-overflow-scrolling:touch;">'
+        f'<table style="width:100%;border-collapse:collapse;">'
+        f'<thead><tr>{header_row}</tr></thead>'
+        f'<tbody>{rows_html}</tbody></table></div>'
+    )
+
+    return (
+        section_head("Season Trajectory",
+                     "W/L/T by week \xb7 current streak in final column") +
+        table
     )
 
 
@@ -4571,6 +4670,7 @@ def build_email(snap, override_team=None):
         band_divider("SEASON", anchor="band-season"),                                     # SEASON CONTEXT band header
         cat_section,                                                                      # 14
         luck_section,                                                                     # 15
+        build_season_trajectory(weekly_results, standings, my_team=my_team),              # 16 Season Trajectory (W/L/T by week + streak)
         band_divider("REFERENCE", anchor="band-glossary"),                                # REFERENCE band header
         build_glossary_section(),                                                         # 16 Glossary & Methodology
     ]
