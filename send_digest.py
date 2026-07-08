@@ -2579,40 +2579,43 @@ def _cat_score(r, cat):
     return 0
 
 
+_UPGRADE_MARGIN = 3.0   # min score-pt upgrade over my worst starter to bother flagging a bat pickup
+                        # (deliberately modest: at my WEAKEST position even a small bump is worth it —
+                        #  the point is to fill the hole, not chase the single biggest raw gap)
+
+
 def _roster_suggestion(matchup, pitchers, hitters, fa_sp, fa_rp, fa_hit,
                         my_team, best_recent_p, best_recent_h,
                         all_matchups, week_end_str, classification=None,
-                        league_total_roster_max=28):
-    """Return one add/drop or trade suggestion bullet HTML for Week at a Glance."""
+                        league_total_roster_max=28, pos_data=None, lineup_eff=None):
+    """Return a LIST of Week-at-a-Glance pickup bullets (HTML strings), roster-context
+    aware. (Was: a single 'best available hitter' bullet, blind to positional need -- it
+    chronically told you to add an OF, the deepest pool, even while you were benching a
+    masher there and near-last at catcher.)
+
+      - BAT bullet: upgrade my WEAKEST hitter position where a real FA upgrade exists
+        (positional_breakdown rank + score gap). NEVER a position I'm deep at or leaking
+        bench production from (that's surplus / trade capital, not a hole).
+      - PITCH bullet: when I'm in ratio trouble -- an active-slot implosion this week
+        (lineup_eff blowups) OR losing ERA/WHIP by a non-toss-up margin (classification) --
+        recommend a high-FLOOR stabilizer (low ERA/WHIP/xERA, real sample), not a volatile
+        streamer that would make ratios worse.
+
+    Drops prefer a SURPLUS player (deep position / bench-leaker), and the two bullets take
+    DISTINCT drops. Falls back to a trade idea only when neither pickup fires."""
     if not matchup:
-        return ""
+        return []
 
     classification = classification or {}
+    pos_data   = pos_data or []
+    lineup_eff = lineup_eff or {}
     cats        = matchup.get("categories", [])
     my_norm     = " ".join(my_team.split())
     opp         = matchup.get("opp_team", "")
-    losing      = [c for c in cats if c["result"] == "L"]
-    losing_cats = {c["cat"] for c in losing}
+    res_by_cat  = {c["cat"]: c["result"] for c in cats}
+    losing_cats = {c["cat"] for c in cats if c["result"] == "L"}
+    losing_hit  = losing_cats & _HIT_CATS
 
-    losing_pit = losing_cats & _PIT_CATS
-    losing_hit = losing_cats & _HIT_CATS
-    # Week-at-a-Glance bullet 4 is dedicated to a NON-PITCHER (hitter) pickup — pitcher
-    # streaming is already covered by My Upcoming Starts / FA Starting Pitchers, so this
-    # bullet always steers to the bats. (Was: focus_pit = len(losing_pit) >= len(losing_hit).)
-    focus_pit  = False
-
-    # ── ADD / DROP ────────────────────────────────────────────────────────────
-    add_candidate = drop_candidate = None
-    add_reason    = ""
-
-    # Always recommend the best available hitter — target our losing bat categories when
-    # any, else frame it as general bat depth (we may be losing only pitching cats).
-    fa_pool    = sorted(fa_hit, key=lambda r: _blend(r, hitter_score, best_recent_h), reverse=True)
-    add_reason = ("/".join(_CAT_DISPLAY.get(c, c) for c in sorted(losing_hit)) + " gap") if losing_hit else "bat depth"
-    add_candidate = fa_pool[0] if fa_pool else None
-
-    # Determine what to DROP: weakest rostered player who won't strand a position.
-    # Full roster (all positions, for coverage checking):
     full_pit = [r for r in pitchers
                 if " ".join((r.get("FantasyTeam") or "").split()) == my_norm
                 and int(r.get("Dataset", 0) or 0) == YEAR]
@@ -2635,20 +2638,38 @@ def _roster_suggestion(matchup, pitchers, hitters, fa_sp, fa_rp, fa_hit,
                  if p.strip() and p.strip().upper() != "P"]
         return ", ".join(parts) or str(r.get("Position") or "")
 
-    # Free pickup: if total roster < league cap, there's open space — no drop needed.
-    my_total_count = len(full_pit) + len(full_hit)
-    open_spots = max(0, league_total_roster_max - my_total_count)
-    if open_spots > 0 and add_candidate:
-        an = add_candidate.get("PlayerName", "")
-        if an:
-            return (
-                f'Free Pickup: Add <span style="color:{TEXT};font-weight:700;">{an}</span>'
-                f'<span style="color:{MUTED};"> ({_pos_disp(add_candidate)})</span>'
-                f'<span style="color:{MUTED};"> ({add_reason})</span>'
-                f'<span style="color:{GREEN};font-size:10px;margin-left:6px;">&#10003; roster spot open</span>'
-            )
+    # -- SURPLUS vs NEED from positional_breakdown + bench leakage --------------
+    # A hitter position is SURPLUS if I rank top-third there OR I'm leaving that
+    # position's production on my bench (lineup_eff). It's a NEED if I rank bottom-third
+    # AND a real FA upgrade exists over my weakest starter there.
+    hit_by_name = {r.get("PlayerName"): r for r in full_hit}
+    leak_groups = set()
+    for b in (lineup_eff.get("bench") or []):
+        r = hit_by_name.get(b.get("name"))
+        if r:
+            leak_groups |= _pos_groups_of(r)
 
-    # Droppable candidates: pitchers without an upcoming start this week + all hitters
+    surplus_groups = set()
+    need_positions = []   # (leverage, pos_entry, top_fa, worst)
+    for p in pos_data:
+        if p.get("ptype") != "hit":
+            continue
+        label = p.get("pos")
+        n     = p.get("n_teams") or 12
+        rank  = p.get("rank") or n
+        third = max(1, round(n / 3.0))
+        strong = rank <= third
+        weak   = rank >= n - third + 1
+        if strong or label in leak_groups:
+            surplus_groups.add(label)
+        top_fa = (p.get("top_fa") or [None])[0]
+        worst  = p.get("worst_player")
+        if top_fa is not None and weak and not strong and label not in leak_groups:
+            lever = _n(top_fa.get("_pscore")) - (_n(worst.get("_pscore")) if worst else 0)
+            if lever >= _UPGRADE_MARGIN:
+                need_positions.append((lever, p, top_fa, worst))
+
+    # -- droppable pool, surplus-first -----------------------------------------
     drop_pit = [r for r in full_pit
                 if r.get("PSP_Date", "1999-01-01") in ("1999-01-01", "")
                 or r.get("PSP_Date", "9999-99-99") > week_end_str]
@@ -2660,8 +2681,6 @@ def _roster_suggestion(matchup, pitchers, hitters, fa_sp, fa_rp, fa_hit,
 
     def _can_drop(cand):
         """True if dropping cand leaves at least one healthy player at every position it fills."""
-        # Never drop a player parked in a dedicated IL slot — those 2 slots don't take up
-        # active/bench room, so cutting them frees nothing usable.
         if _on_il(cand):
             return False
         cand_name = cand.get("PlayerName", "")
@@ -2679,57 +2698,108 @@ def _roster_suggestion(matchup, pitchers, hitters, fa_sp, fa_rp, fa_hit,
                 return False
         return True
 
-    # Prefer a like-for-like drop: same position group as the add first (so adding
-    # an OF drops the worst OF, not an infielder), then same player type, then any.
-    droppable = [(r, t) for r, _, t in scored_drop if _can_drop(r)]
-    add_groups = _pos_groups_of(add_candidate) if add_candidate else set()
-    add_type   = "pit" if focus_pit else "hit"
-    drop_candidate = (
-        next((r for r, _ in droppable if _pos_groups_of(r) & add_groups), None)
-        or next((r for r, t in droppable if t == add_type), None)
-        or (droppable[0][0] if droppable else None)
-    )
+    def _in_surplus(r):
+        return bool(_pos_groups_of(r) & surplus_groups)
 
-    # Ratio-stat risk: streaming a mediocre SP for K/W/QS can flip a thin ERA/WHIP lead.
-    ratio_warn = ""
-    if add_candidate and _is_sp(add_candidate):
-        res_by_cat = {c["cat"]: c["result"] for c in cats}
-        anchors = {"ERA": (_n(add_candidate.get("ERA")),  4.20, "ERA"),
-                   "WHIP": (_n(add_candidate.get("WHIP")), 1.30, "WHIP")}
-        at_risk = [
-            (lbl, val) for rc, (val, anchor, lbl) in anchors.items()
-            if res_by_cat.get(rc) == "W"
-            and classification.get(rc, (None, "leaning"))[1] == "tossup"   # only warn on a THIN lead
-            and val > anchor
-        ]
-        if at_risk:
-            lbl, val = at_risk[0]
-            _today = datetime.now().strftime("%Y-%m-%d")
-            ipg  = _n(add_candidate.get("IP_per_G"))
-            n_st = _starts_this_week(add_candidate, _today, week_end_str) or 1
-            ip_est = ipg * n_st
-            ip_txt = f'~{_fmt_ip(ip_est)} IP' if ip_est > 0 else 'his innings'
-            ratio_warn = (
-                f'<span style="color:{YELLOW};"> &#9888; boosts K/W/QS but his '
-                f'{val:.2f} {lbl} over {ip_txt} risks your thin {lbl} lead.</span>'
+    # worst first, but surplus positions ahead of everything (drop from strength)
+    drop_order = [r for r, _, _ in sorted(
+        [(r, s, t) for r, s, t in scored_drop if _can_drop(r)],
+        key=lambda x: (0 if _in_surplus(x[0]) else 1, x[1]))]
+    _used_drops = set()
+
+    def _take_drop():
+        for r in drop_order:
+            if r.get("PlayerName") not in _used_drops:
+                _used_drops.add(r.get("PlayerName"))
+                return r
+        return None
+
+    my_total_count = len(full_pit) + len(full_hit)
+    slots_left = max(0, league_total_roster_max - my_total_count)
+
+    def _move_tail(add_row):
+        """Free-pickup badge if an open roster spot remains, else ' . Drop <worst surplus>'."""
+        nonlocal slots_left
+        if slots_left > 0:
+            slots_left -= 1
+            return f'<span style="color:{GREEN};font-size:10px;margin-left:6px;">&#10003; roster spot open</span>'
+        d = _take_drop()
+        if d and d.get("PlayerName") != add_row.get("PlayerName"):
+            surplus_tag = f' <span style="color:{MUTED};font-size:10px;">[surplus]</span>' if _in_surplus(d) else ''
+            return (f' &middot; Drop <span style="color:{MUTED};">{d.get("PlayerName","")}'
+                    f' ({_pos_disp(d)})</span>{surplus_tag}')
+        return ''
+
+    bullets = []
+
+    # -- BAT bullet: fill my weakest hitter spot (never a surplus one) ----------
+    bat_add = bat_reason = None
+    if need_positions:
+        # weakest position first (that's the hole the user wants filled), then biggest upgrade
+        need_positions.sort(key=lambda x: ((x[1].get("rank") or 0), x[0]), reverse=True)
+        lever, p, top_fa, worst = need_positions[0]
+        bat_add = top_fa
+        bat_reason = f'weakest bat spot &mdash; {p.get("pos")} #{p.get("rank")}/{p.get("n_teams")}'
+    elif losing_hit:
+        # fallback: best FA hitter for a losing cat, but NOT at a position I'm already deep at
+        pool = sorted([r for r in fa_hit if not _in_surplus(r)],
+                      key=lambda r: _blend(r, hitter_score, best_recent_h), reverse=True)
+        if pool:
+            bat_add = pool[0]
+            bat_reason = "/".join(_CAT_DISPLAY.get(c, c) for c in sorted(losing_hit)) + " gap"
+    if bat_add and bat_add.get("PlayerName"):
+        bullets.append(
+            f'Pickup (bat): Add <span style="color:{TEXT};font-weight:700;">{bat_add["PlayerName"]}</span>'
+            f'<span style="color:{MUTED};"> ({_pos_disp(bat_add)})</span>'
+            f'<span style="color:{MUTED};"> &mdash; {bat_reason}</span>'
+            + _move_tail(bat_add)
+        )
+
+    # -- PITCH bullet: stabilize ratios after a blowup / a non-toss-up ratio loss --
+    blowups    = lineup_eff.get("blowups") or []
+    ratio_loss = [c for c in ("ERA", "WHIP")
+                  if res_by_cat.get(c) == "L"
+                  and classification.get(c, (None, "leaning"))[1] != "tossup"]
+    if blowups or ratio_loss:
+        def _stable(r):
+            era, whip = _n(r.get("ERA")), _n(r.get("WHIP"))
+            if era <= 0 or whip <= 0 or era > 4.00 or whip > 1.25:
+                return False
+            if _is_sp(r):
+                return _n(r.get("GS")) >= _pit_viable_min("SP", "GS")
+            return (_n(r.get("ESPN_GP")) >= _pit_viable_min("RP", "GP")
+                    or _n(r.get("IP")) >= _pit_viable_min("RP", "IP"))
+        pool = sorted([r for r in (fa_sp + fa_rp) if _stable(r)],
+                      key=lambda r: ((_n(r.get("xERA")) or _n(r.get("ERA"))), _n(r.get("WHIP"))))
+        if pool:
+            pa   = pool[0]
+            era, whip = _n(pa.get("ERA")), _n(pa.get("WHIP"))
+            role = "SP" if _is_sp(pa) else "RP"
+            ec = GREEN if era < 3.50 else (YELLOW if era < 4.00 else TEXT)
+            wc = GREEN if whip < 1.10 else (YELLOW if whip < 1.25 else TEXT)
+            rl_lbl = "/".join(ratio_loss)
+            if blowups and ratio_loss:
+                preason = f'shore up {rl_lbl} after {len(blowups)} blowup{"s" if len(blowups) != 1 else ""} this week'
+            elif blowups:
+                preason = f'stabilize ratios after {len(blowups)} blowup{"s" if len(blowups) != 1 else ""} this week'
+            else:
+                preason = f'you&rsquo;re losing {rl_lbl}'
+            bullets.append(
+                f'Pitching fix: Add <span style="color:{TEXT};font-weight:700;">{pa.get("PlayerName","")}</span>'
+                f'<span style="color:{MUTED};"> ({role}, </span>'
+                f'<span style="color:{ec};">{era:.2f} ERA</span>'
+                f'<span style="color:{MUTED};"> / </span><span style="color:{wc};">{whip:.2f} WHIP</span>'
+                f'<span style="color:{MUTED};">) &mdash; {preason}</span>'
+                + _move_tail(pa)
             )
 
-    if add_candidate and drop_candidate:
-        an = add_candidate.get("PlayerName", "")
-        dn = drop_candidate.get("PlayerName", "")
-        if an and dn and an != dn:
-            return (
-                f'Pickup: Add <span style="color:{TEXT};font-weight:700;">{an}</span>'
-                f'<span style="color:{MUTED};"> ({_pos_disp(add_candidate)})</span>'
-                f'<span style="color:{MUTED};"> ({add_reason})</span>'
-                f' &middot; Drop <span style="color:{MUTED};">{dn} ({_pos_disp(drop_candidate)})</span>'
-                f'{ratio_warn}'
-            )
+    if bullets:
+        return bullets
 
-    # ── TRADE ─────────────────────────────────────────────────────────────────
+    # -- TRADE fallback (only when neither pickup fired) ------------------------
     opp_matchup = all_matchups.get(" ".join(opp.split()), {}) if opp else {}
     if not opp_matchup:
-        return ""
+        return []
 
     opp_cats_map = {c["cat"]: c for c in opp_matchup.get("categories", [])}
     opp_winning  = {cat for cat, c in opp_cats_map.items() if c["result"] == "W"}
@@ -2738,7 +2808,7 @@ def _roster_suggestion(matchup, pitchers, hitters, fa_sp, fa_rp, fa_hit,
     i_offer      = my_winning   & {cat for cat, c in opp_cats_map.items() if c["result"] == "L"}
 
     if not they_offer or not i_offer:
-        return ""
+        return []
 
     # Pick primary categories: prefer pitching (more trade value stability)
     need_cat  = max(they_offer,  key=lambda c: (c in _PIT_CATS, _cat_score({}, c)))
@@ -2754,7 +2824,7 @@ def _roster_suggestion(matchup, pitchers, hitters, fa_sp, fa_rp, fa_hit,
                 and int(r.get("Dataset", 0) or 0) == YEAR]
         their_player = max(pool, key=lambda r: _cat_score(r, need_cat), default=None)
 
-    # Offer my 2nd-best in the offer category (skip ace — unrealistic to trade away)
+    # Offer my 2nd-best in the offer category (skip ace -- unrealistic to trade away)
     if offer_cat in _PIT_CATS:
         my_pool = sorted(
             [r for r in pitchers if " ".join((r.get("FantasyTeam") or "").split()) == my_norm
@@ -2773,13 +2843,13 @@ def _roster_suggestion(matchup, pitchers, hitters, fa_sp, fa_rp, fa_hit,
         nc = _CAT_DISPLAY.get(need_cat, need_cat)
         oc = _CAT_DISPLAY.get(offer_cat, offer_cat)
         if tn and mn:
-            return (
+            return [
                 f'Trade: Offer <span style="color:{TEXT};font-weight:700;">{mn}</span>'
                 f' to {opp} for <span style="color:{TEXT};font-weight:700;">{tn}</span>'
-                f'<span style="color:{MUTED};"> — fills {nc} gap, gives them {oc}</span>'
-            )
+                f'<span style="color:{MUTED};"> &mdash; fills {nc} gap, gives them {oc}</span>'
+            ]
 
-    return ""
+    return []
 
 
 def build_week_overview(matchup, week_cats, week_n, fa_sp, starts, days_elapsed, my_starts_by_day, week_end=None, is_sunday=False, roster_suggestion=""):
@@ -2970,8 +3040,12 @@ def build_week_overview(matchup, week_cats, week_n, fa_sp, starts, days_elapsed,
                     fa_str = f'<span style="color:{MUTED};">No upcoming FA starts found.</span>'
             bullets.append(fa_str)
 
+    # roster_suggestion is now a LIST of bullets (bat + pitch); tolerate a bare string too
     if roster_suggestion:
-        bullets.append(roster_suggestion)
+        if isinstance(roster_suggestion, str):
+            bullets.append(roster_suggestion)
+        else:
+            bullets.extend([b for b in roster_suggestion if b])
 
     if not bullets:
         return ""
@@ -4463,6 +4537,7 @@ def build_email(snap, override_team=None):
         my_team, best_recent_p, best_recent_h,
         all_matchups, week_end_str, classification=category_classification,
         league_total_roster_max=league_total_roster_max,
+        pos_data=pos_data, lineup_eff=(snap.get("lineup_efficiency_current") or {} if not override_team else {}),
     )
     week_overview = build_week_overview(
         matchup, week_cats, week_n, fa_sp, starts, days_elapsed, my_starts_by_day,

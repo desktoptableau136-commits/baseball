@@ -2,6 +2,19 @@
 
 Forensic detail and "why we did it this way" narrative moved out of `CLAUDE.md` to keep that file to actionable rules. Nothing here is required to follow the rules; consult it only when you need the history behind a decision. Rules live in `CLAUDE.md`; this is the "why".
 
+## Week at a Glance pickups: from "best available hitter" to roster-context aware (2026-07-08)
+
+User caught the flaw: the pickup bullet kept telling him to grab an **OF** while his OF was so deep he was *benching* a masher (Riley Greene), and it never mentioned **catcher** where he ranked dead last, nor his **pitching** after two active-slot implosions. Root cause was one line — `add_candidate = sorted(fa_hit, by score)[0]` — the single best available hitter in the league, with zero roster context. OF is structurally the largest pool (4 OF slots + LF/CF/RF fold in), so the best FA hitter is *chronically* an OF. The bullet was also hard-locked to hitters (`focus_pit = False`), so it literally could not respond to a pitching crisis.
+
+The fix reuses two signals the digest already computes but the bullet ignored: `positional_breakdown` (per-position league rank + my worst starter + best FA, all carrying `_pscore`) and the new `lineup_efficiency_current` (bench surplus + active-slot blowups). Redesigned per the user's two explicit asks — **two bullets** (positional-need bat + pitching-recovery), pitching-recovery triggered by **either** an implosion **or** a non-toss-up ratio loss:
+
+- **NEED vs SURPLUS.** A hitter position is a NEED if I rank bottom-third AND a real FA upgrade exists over my worst starter there; SURPLUS if top-third rank OR I'm leaking that position's production on my bench. Never recommend adding at a surplus position (kills the "add OF" nonsense); among needs, surface the **weakest** first.
+- **`_UPGRADE_MARGIN` calibration (6.0 → 3.0).** The first cut used a 6-pt minimum upgrade and picked the biggest raw gap. On live data that *hid catcher*: C ranked 12/12 but the best FA (Alvarez) was only +4 over my worst — real, but below 6. Wrong bar for the exact case the user cared about. Lowered to 3.0 and re-sorted to weakest-position-first: at your worst spot even a modest bump is worth flagging; the point is to fill the hole, not chase the largest gap (which lives at strong positions with a weak backup). Verified: bat bullet now says "Add Francisco Alvarez (C) — weakest bat spot — C #12/12".
+- **Pitching stabilizer, not a streamer.** Recovery picks a high-FLOOR arm (ERA ≤ 4.00, WHIP ≤ 1.25, real sample, ranked by xERA/ERA then WHIP) so it lowers ratios rather than trading them for K/W/QS. This made the old SP `ratio_warn` guardrail redundant — removed it (bat bullet is hitters-only; pitch bullet is a stabilizer by construction).
+- **Distinct surplus drops.** Both bullets drop from strength (surplus-first, then lowest score), take distinct players, and show a `[surplus]` tag — verified by forcing `league_total_roster_max=0`. With open roster spots (the common case) both render as free pickups.
+
+Returns a **list** now (was a string); `build_week_overview` `.extend`s it (still tolerates a bare string for safety). Team-specific: for The BIG Dumpers the bat bullet correctly recommends an OF because OF *is* their #11/12 weakest spot — it's need-driven, not a blanket rule.
+
 ## Lineup efficiency / bench leakage (2026-07-08)
 
 Answers a user question: *can we see which player stats actually counted toward the matchup, so we can catch (a) a bat that homered on my bench and (b) a starter I let implode in my active lineup then dropped?* Yes — but not through the obvious path.
