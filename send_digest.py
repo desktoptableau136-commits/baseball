@@ -4904,7 +4904,7 @@ def build_email(snap, override_team=None):
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>{my_team} Daily Digest</title>
+  <title>Daily Digest — {my_team}</title>
   <style>
     /* Tap-to-expand Score breakdown (v2): each breakdown <tr> carries inline
        display:none; tapping its badge sets the URL fragment and this :target rule

@@ -134,7 +134,7 @@ python dashboard.py --email
 
 Open the file maximized in a browser — it's tuned for a 1440×900 viewport and should show no scrollbars.
 
-The **My Pitching** tile lists each upcoming start with its projected `IP·ER·K` line, a purple `×2` marker for two-start pitchers, and green **QS** / yellow **5K+** badges after the matchup date (same projected-line rule as the digest's My Upcoming Starts — a quality-start projection of 6+ IP & ≤3 ER, or 5+ projected K).
+The **My Pitching** tile lists each upcoming start with its projected `IP·ER·K` line, a purple `×2` marker for two-start pitchers, and green **QS** / yellow **5K+** badges after the matchup date (same projected-line rule as the digest's My Upcoming Starts — a quality-start projection of 6+ IP & ≤3 ER, or 5+ projected K). **MLB team logos** appear next to player names throughout the dashboard (My Pitching, Hitting Hot/Cold, Opponent, Weakest Spots, Free-Agent Radar). The browser tab title reads **"Dashboard — {team}"** (and the daily digest reads **"Daily Digest — {team}"**) so the type is identifiable at a glance.
 
 It's also **responsive**: on a tablet (≤1100px) the tiles reflow into two height-balanced columns — Category Pulse → Recommended Moves → Free-Agent Radar → Season down the left, then My Pitching → Hitting Hot/Cold → Weakest Spots → Opponent down the right — and on a phone (≤700px) into a single column, un-pinning the fixed pane so the page scrolls normally with larger, readable text. The desktop no-scroll layout is unchanged above 1100px.
 
