@@ -73,8 +73,10 @@ TD_S = (f"padding:7px 10px;border-bottom:1px solid {BORDER};color:{TEXT};"
 TDC  = (f"padding:7px 10px;border-bottom:1px solid {BORDER};color:{TEXT};"
         f"font-size:13px;text-align:center;vertical-align:middle;")
 # Uniform performer-table row height so the side-by-side hitter/pitcher columns
-# in Top Performers line up row-for-row (fits the 2-line name+team cell).
-_PERF_ROW_H = "42px"
+# in Top Performers line up row-for-row. Rostered rows carry a 2-line name+team
+# cell (taller); FA rows are single-line (name only) so they get a tighter height.
+_PERF_ROW_H    = "38px"
+_PERF_ROW_H_FA = "26px"
 
 _TOP_LINK_DIV = (
     f'<div style="text-align:right;margin:6px 0 0;">'
@@ -852,14 +854,27 @@ def _performer_col(label, table_html, mt="12px"):
             f'letter-spacing:.7px;margin:{mt} 0 6px;">{label}</div>' + table_html)
 
 
-def _performer_table(players, stat_keys, stat_labels):
-    """Generic performer table — one row per player."""
+def _performer_table(players, stat_keys, stat_labels, row_h=_PERF_ROW_H):
+    """Generic performer table — one row per player. Compact padding/font so two
+    of these sit side-by-side in Top Performers without horizontal scroll."""
     if not players:
         return ""
 
+    # Tight local styles (padding + font shrunk) so the table fits a ~50% column.
+    _th  = TH_S.replace("padding:8px 10px", "padding:4px 5px").replace("font-size:10px", "font-size:9px")
+    _tds = TD_S.replace("padding:7px 10px", "padding:4px 6px").replace("font-size:13px", "font-size:11px")
+    _tdc = TDC.replace("padding:7px 10px", "padding:4px 3px").replace("font-size:13px", "font-size:11px")
+
+    # Fixed layout + colgroup: Player column gets the lion's share, stat columns
+    # split the rest evenly, so the table fills its ~50% parent exactly (no scroll).
+    n_stat  = len(stat_labels)
+    rest_w  = (100 - 38) / n_stat if n_stat else 62
+    colgroup = ('<colgroup><col style="width:38%;">'
+                + f'<col style="width:{rest_w:.2f}%;">' * n_stat + '</colgroup>')
+
     header = (
-        f'<th style="{TH_S}">Player</th>'
-        + "".join(f'<th style="{TH_S}text-align:center;">{lbl}</th>' for lbl in stat_labels)
+        f'<th style="{_th}">Player</th>'
+        + "".join(f'<th style="{_th}text-align:center;">{lbl}</th>' for lbl in stat_labels)
     )
     rows = ""
     for r in players:
@@ -871,26 +886,26 @@ def _performer_table(players, stat_keys, stat_labels):
         is_mine = " ".join(team.split()) == " ".join(MY_TEAM.split())
         name_color = ACCENT if is_mine else TEXT
         name_cell = (
-            f'<td style="{TD_S}height:{_PERF_ROW_H};white-space:nowrap;'
-            f'overflow:hidden;text-overflow:ellipsis;max-width:150px;">'
+            f'<td style="{_tds}height:{row_h};white-space:nowrap;'
+            f'overflow:hidden;text-overflow:ellipsis;max-width:120px;">'
             f'{logo}'
             f'<span style="font-weight:600;color:{name_color};">{name}</span>'
-            + (f'<span style="color:{MUTED};font-size:10px;margin-left:4px;">{pos}</span>' if pos else "")
-            + (f'<br><span style="color:{MUTED};font-size:10px;">{team}</span>' if team else "")
+            + (f'<span style="color:{MUTED};font-size:9px;margin-left:3px;">{pos}</span>' if pos else "")
+            + (f'<br><span style="color:{MUTED};font-size:9px;">{team}</span>' if team else "")
             + f'</td>'
         )
         stat_cells = ""
         for key in stat_keys:
             display_str, color = _fmt_stat(key, r.get(key))
-            stat_cells += f'<td style="{TDC}height:{_PERF_ROW_H};"><span style="color:{color};">{display_str}</span></td>'
+            stat_cells += f'<td style="{_tdc}height:{row_h};"><span style="color:{color};">{display_str}</span></td>'
 
-        rows += f'<tr style="height:{_PERF_ROW_H};">{name_cell}{stat_cells}</tr>'
+        rows += f'<tr style="height:{row_h};">{name_cell}{stat_cells}</tr>'
 
     return (
-        f'<div style="overflow-x:auto;-webkit-overflow-scrolling:touch;">'
-        f'<table style="width:100%;border-collapse:collapse;">'
+        f'<table style="width:100%;border-collapse:collapse;table-layout:fixed;">'
+        f'{colgroup}'
         f'<thead><tr>{header}</tr></thead>'
-        f'<tbody>{rows}</tbody></table></div>'
+        f'<tbody>{rows}</tbody></table>'
     )
 
 
@@ -973,8 +988,8 @@ def build_top_performers(recent_hitting, recent_pitching, hitters, pitchers, log
         out += _two_col(ros_left, ros_right)
 
     if fa_h or fa_p:
-        fa_left  = _performer_col("Hitters", _performer_table(fa_h, HIT_KEYS, HIT_LABELS), mt="0")
-        fa_right = _performer_col("Pitchers", _performer_table(fa_p, PIT_KEYS, PIT_LABELS), mt="0")
+        fa_left  = _performer_col("Hitters",  _performer_table(fa_h, HIT_KEYS, HIT_LABELS, row_h=_PERF_ROW_H_FA), mt="0")
+        fa_right = _performer_col("Pitchers", _performer_table(fa_p, PIT_KEYS, PIT_LABELS, row_h=_PERF_ROW_H_FA), mt="0")
         out += (
             f'<div style="margin:22px 0 10px;padding:10px 14px;background:{SURFACE};'
             f'border:1px solid {YELLOW}44;border-radius:6px;">'
