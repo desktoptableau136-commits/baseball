@@ -696,6 +696,159 @@ def build_weekly_roto_rankings(roto, prev_week, logos):
     )
 
 
+# Rate cats are averaged across matchups; everything else is a season sum.
+_RATE_CATS = {"OPS", "ERA", "WHIP"}
+
+def build_season_roto_rankings(roto, logos):
+    """Season-long twin of the roto rankings grid: aggregate EVERY matchup into
+    season category totals (counting cats summed, rate cats averaged) and rank
+    teams by cumulative roto score. Same compact heat-mapped 12-cat layout as the
+    per-matchup version, but season-to-date rather than a single matchup."""
+    if not roto:
+        return ""
+
+    agg: dict[str, dict] = {}
+    for r in roto:
+        team = r.get("Team", "")
+        if not team:
+            continue
+        t = agg.setdefault(team, {
+            "pts":  {c: 0.0 for c in _CAT_ORDER},   # summed roto points → ranking
+            "vsum": {c: 0.0 for c in _CAT_ORDER},   # summed raw value
+            "vcnt": {c: 0   for c in _CAT_ORDER},   # weeks with a value (for rate avg)
+            "roto": 0.0,
+        })
+        t["roto"] += float(r.get("Roto_Score") or 0)
+        for c in _CAT_ORDER:
+            t["pts"][c] += float(r.get(f"{c}_Points") or 0)
+            v = r.get(c)
+            if v not in (None, ""):
+                try:
+                    t["vsum"][c] += float(v)
+                    t["vcnt"][c] += 1
+                except (TypeError, ValueError):
+                    pass
+
+    if not agg:
+        return ""
+
+    # Per-cat coloring tiers from the DISTINCT summed-point values (tie-safe, mirrors
+    # the weekly grid's value-based tiers rather than ordinal ranks).
+    tiers = {}
+    for c in _CAT_ORDER:
+        vals = sorted({t["pts"][c] for t in agg.values()}, reverse=True)
+        tiers[c] = {
+            "best":  vals[0] if vals else None,
+            "2nd":   vals[1] if len(vals) > 1 else None,
+            "worst": vals[-1] if vals else None,
+            "2last": vals[-2] if len(vals) > 1 else None,
+        }
+
+    ranked = sorted(agg.items(), key=lambda kv: -kv[1]["roto"])
+    n      = len(ranked)
+    my_key = " ".join(MY_TEAM.split())
+
+    _th  = TH_S.replace("padding:8px 10px", "padding:3px 5px").replace("font-size:10px", "font-size:9px")
+    _tdc = TDC.replace("padding:7px 10px", "padding:3px 5px").replace("font-size:13px", "font-size:10px")
+    _tds = TD_S.replace("padding:7px 10px", "padding:3px 5px").replace("font-size:13px", "font-size:10px")
+
+    rows_html = ""
+    for rank, (team, t) in enumerate(ranked, 1):
+        is_my = " ".join(team.split()) == my_key
+        if rank <= 3:
+            row_bg = "background:rgba(34,197,94,0.07);"
+        elif rank >= n - 2:
+            row_bg = "background:rgba(239,68,68,0.07);"
+        else:
+            row_bg = ""
+
+        logo = fantasy_logo(logos.get(" ".join(team.split()), ""), 16, team)
+        rank_color = GREEN if rank <= 3 else (RED if rank >= n - 2 else MUTED)
+
+        stat_cells = ""
+        for c in _CAT_ORDER:
+            pts = t["pts"][c]
+            if c in _RATE_CATS:
+                val = t["vsum"][c] / t["vcnt"][c] if t["vcnt"][c] else 0.0
+            else:
+                val = t["vsum"][c]
+            val_str = _fmt_cat(val, c)
+            ti = tiers[c]
+            if val_str == "—":
+                color, badge = MUTED, False
+            elif ti["best"] is not None and pts == ti["best"]:
+                color, badge = GREEN, True
+            elif ti["2nd"] is not None and pts == ti["2nd"]:
+                color, badge = "#86efac", False
+            elif ti["worst"] is not None and pts == ti["worst"]:
+                color, badge = RED, True
+            elif ti["2last"] is not None and pts == ti["2last"]:
+                color, badge = YELLOW, False
+            else:
+                color, badge = MUTED, False
+            inner = (
+                f'<span style="border:1px solid {color};border-radius:3px;padding:2px 6px;">{val_str}</span>'
+                if badge else val_str
+            )
+            stat_cells += f'<td style="{_tdc}color:{color};">{inner}</td>'
+
+        rows_html += (
+            f'<tr style="{row_bg}">'
+            f'<td style="{_tdc}color:{rank_color};font-weight:700;width:24px;">{rank}</td>'
+            f'<td style="{_tds}font-weight:{"800" if is_my else "600"};'
+            f'color:{ACCENT if is_my else TEXT};white-space:nowrap;">{logo}{team}</td>'
+            f'<td style="{_tdc}font-weight:700;">{t["roto"]:.1f}</td>'
+            + stat_cells +
+            f'</tr>'
+        )
+
+    stat_headers = "".join(
+        f'<th style="{_th}text-align:center;">{_CAT_DISPLAY.get(c, c)}</th>'
+        for c in _CAT_ORDER
+    )
+    header_row = (
+        f'<th style="{_th}text-align:center;width:24px;">#</th>'
+        f'<th style="{_th}">Team</th>'
+        f'<th style="{_th}text-align:center;">Pts</th>'
+        + stat_headers
+    )
+
+    table = (
+        f'<div style="overflow-x:auto;-webkit-overflow-scrolling:touch;">'
+        f'<table style="width:100%;border-collapse:collapse;font-size:10px;">'
+        f'<thead><tr>{header_row}</tr></thead>'
+        f'<tbody>{rows_html}</tbody></table></div>'
+    )
+
+    return (
+        section_head("Season Roto Rankings",
+                     "Every matchup combined \xb7 counting cats summed, rate cats averaged \xb7 "
+                     "bright green = #1 \xb7 light green = #2 \xb7 amber = 2nd-last \xb7 red = last") +
+        table
+    )
+
+
+def _two_col(left, right):
+    """Lay two blocks side-by-side (email-safe table). Falls back to a single
+    column when only one side has content."""
+    if left and right:
+        return (
+            f'<table style="width:100%;border-collapse:collapse;table-layout:fixed;"><tr>'
+            f'<td style="width:50%;vertical-align:top;padding-right:9px;">{left}</td>'
+            f'<td style="width:50%;vertical-align:top;padding-left:9px;">{right}</td>'
+            f'</tr></table>'
+        )
+    return left or right or ""
+
+
+def _performer_col(label, table_html, mt="12px"):
+    """A performer sub-column: little uppercase label + its table."""
+    if not table_html:
+        return ""
+    return (f'<div style="font-size:10px;font-weight:700;color:{MUTED};text-transform:uppercase;'
+            f'letter-spacing:.7px;margin:{mt} 0 6px;">{label}</div>' + table_html)
+
+
 def _performer_table(players, stat_keys, stat_labels):
     """Generic performer table — one row per player."""
     if not players:
@@ -807,32 +960,25 @@ def build_top_performers(recent_hitting, recent_pitching, hitters, pitchers, log
     out = section_head("Top Performers",
                        f"{_window}Hitting: min 10 AB \xb7 Pitching: min 8 IP")
 
-    if rostered_h:
-        out += (f'<div style="font-size:10px;font-weight:700;color:{MUTED};text-transform:uppercase;'
-                f'letter-spacing:.7px;margin:12px 0 6px;">Rostered Hitters — by OPS</div>'
-                + _performer_table(rostered_h, HIT_KEYS, HIT_LABELS))
-
-    if rostered_p:
-        out += (f'<div style="font-size:10px;font-weight:700;color:{MUTED};text-transform:uppercase;'
-                f'letter-spacing:.7px;margin:18px 0 6px;">Rostered Pitchers — by ERA</div>'
-                + _performer_table(rostered_p, PIT_KEYS, PIT_LABELS))
+    # Rostered — hitters and pitchers side by side to cut scrolling.
+    ros_left  = _performer_col("Rostered Hitters — by OPS",
+                               _performer_table(rostered_h, HIT_KEYS, HIT_LABELS))
+    ros_right = _performer_col("Rostered Pitchers — by ERA",
+                               _performer_table(rostered_p, PIT_KEYS, PIT_LABELS))
+    if ros_left or ros_right:
+        out += _two_col(ros_left, ros_right)
 
     if fa_h or fa_p:
+        fa_left  = _performer_col("Hitters", _performer_table(fa_h, HIT_KEYS, HIT_LABELS), mt="0")
+        fa_right = _performer_col("Pitchers", _performer_table(fa_p, PIT_KEYS, PIT_LABELS), mt="0")
         out += (
             f'<div style="margin:22px 0 10px;padding:10px 14px;background:{SURFACE};'
             f'border:1px solid {YELLOW}44;border-radius:6px;">'
             f'<div style="color:{YELLOW};font-size:10px;font-weight:700;text-transform:uppercase;'
             f'letter-spacing:.7px;margin-bottom:10px;">Hot Free Agents — worth picking up</div>'
+            + _two_col(fa_left, fa_right)
+            + '</div>'
         )
-        if fa_h:
-            out += (f'<div style="font-size:10px;font-weight:700;color:{MUTED};text-transform:uppercase;'
-                    f'letter-spacing:.7px;margin-bottom:4px;">Hitters</div>'
-                    + _performer_table(fa_h, HIT_KEYS, HIT_LABELS))
-        if fa_p:
-            out += (f'<div style="font-size:10px;font-weight:700;color:{MUTED};text-transform:uppercase;'
-                    f'letter-spacing:.7px;margin:12px 0 4px;">Pitchers</div>'
-                    + _performer_table(fa_p, PIT_KEYS, PIT_LABELS))
-        out += '</div>'
 
     return out
 
@@ -1547,6 +1693,8 @@ def build_recap(snap):
         f'<div style="margin-top:28px;"></div>',
         _traj_anchor,
         build_trajectory(weekly_results, standings, logos),
+        f'<div style="margin-top:28px;"></div>',
+        build_season_roto_rankings(roto, logos),
         _TOP_LINK_DIV,
     ]
     body = "\n".join(p for p in body_parts if p)
