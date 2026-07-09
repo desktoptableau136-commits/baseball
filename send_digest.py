@@ -4878,6 +4878,7 @@ def build_email(snap, override_team=None):
         cat_section,                                                                      # 14
         luck_section,                                                                     # 15
         build_season_trajectory(weekly_results, standings, my_team=my_team),              # 16 Season Trajectory (W/L/T by week + streak)
+        '<div style="margin-top:28px;"></div>',                                            # breathing room before Season Roto Rankings
         build_season_roto_rankings(roto, my_team=my_team, team_logos=team_logos),         # 17 Season Roto Rankings (all matchups aggregated)
         band_divider("REFERENCE", anchor="band-glossary"),                                # REFERENCE band header
         build_glossary_section(),                                                         # 16 Glossary & Methodology
