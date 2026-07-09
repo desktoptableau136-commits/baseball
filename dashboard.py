@@ -443,7 +443,7 @@ def render_category_pulse(ctx):
     close = sum(1 for (r, tier) in cls.values() if tier == "tossup")
     sub = (f'{cw}W&middot;{cl}L&middot;{ct}T &rarr; proj {pw}-{pl}-{pt}'
            + (f' &middot; &#9889;{close}' if close else ''))
-    return _tile(f"Category Pulse", grid, flex=1.7, sub=sub)
+    return _tile(f"Category Pulse", grid, flex=1.45, sub=sub)
 
 
 def render_opponent(ctx):
@@ -604,7 +604,7 @@ def render_holes(ctx):
     if watch:
         # tighten the reused callout for the compact tile
         watch = f'<div style="margin-top:5px;font-size:10.5px;">{watch}</div>'
-    return _tile("Weakest Spots &middot; Lineup Watch", holes + watch, flex=1.15, sub="rank / worst &rarr; best FA")
+    return _tile("Weakest Spots &middot; Lineup Watch", holes + watch, flex=1.25, sub="rank / worst &rarr; best FA")
 
 
 # ── Column 3: Moves, FA Radar, Season ───────────────────────────────────────────
@@ -624,7 +624,7 @@ def render_moves(ctx):
     if srw:
         rows.append(f'<div style="margin-top:6px;font-size:10.5px;color:{MUTED};">'
                     f'<span style="text-transform:uppercase;letter-spacing:.4px;">Save-role watch:</span><br>' + " &middot; ".join(srw) + '</div>')
-    return _tile("Recommended Moves", "".join(rows), flex=1.15)
+    return _tile("Recommended Moves", "".join(rows), flex=0.85)
 
 
 def render_fa_radar(ctx):
@@ -645,7 +645,7 @@ def render_fa_radar(ctx):
     parts.append(hdr("Hitters"))
     for r in ctx["fa_hit"][:3]:
         parts.append(spline(r, r.get("_score", 0), f'{_fv(_n(r.get("OPS")),3)} OPS'))
-    return _tile("Free-Agent Radar", "".join(parts), sub="top available by score")
+    return _tile("Free-Agent Radar", "".join(parts), flex=1.5, sub="top available by score")
 
 
 def render_season(ctx):
@@ -669,12 +669,15 @@ def render_season(ctx):
     spark_sub = (f'<div style="color:{MUTED};font-size:10px;">roto by matchup &middot; avg finish #{avg_rank} &middot; '
                  f'{ctx["peak_label"].replace("<div", "<span").replace("</div>", "</span>")}</div>')
 
-    # Trajectory strip — my weekly H2H finishes (last up to 10 completed)
+    # Trajectory strip — my weekly H2H finishes. Show the SAME completed-week set the
+    # sparkline plots (weeks < current_week) so the pill count lines up with the line's
+    # data points instead of confusingly showing fewer.
     my_key = " ".join(ctx["my_team"].split())
     wr = ctx["weekly_results"] or {}
-    weeks = sorted((int(w) for w in wr.keys()))
+    cur = ctx["current_week_num"] or 0
+    weeks = sorted(w for w in (int(k) for k in wr.keys()) if not cur or w < cur)
     cells = []
-    for w in weeks[-10:]:
+    for w in weeks:
         res = (wr.get(str(w)) or wr.get(w) or {}).get(my_key) or (wr.get(str(w)) or wr.get(w) or {}).get(ctx["my_team"])
         c = GREEN if res == "W" else (RED if res == "L" else (MUTED if res else BORDER))
         lab = res or "&middot;"
@@ -705,8 +708,10 @@ STYLE = """
 def build_dashboard(snap, my_team):
     ctx = build_context(snap, my_team)
     topbar = render_topbar(ctx)
-    col1 = f'<div class="col">{render_category_pulse(ctx)}{render_opponent(ctx)}</div>'
-    col2 = f'<div class="col">{render_pitching(ctx)}{render_hitting(ctx)}{render_holes(ctx)}</div>'
+    # Weakest Spots/Lineup Watch is content-heavy → give it the roomy col-1 bottom slot
+    # (only 2 tiles share col 1). Opponent is lighter → it fits col 2's 3-tile stack.
+    col1 = f'<div class="col">{render_category_pulse(ctx)}{render_holes(ctx)}</div>'
+    col2 = f'<div class="col">{render_pitching(ctx)}{render_hitting(ctx)}{render_opponent(ctx)}</div>'
     col3 = f'<div class="col">{render_moves(ctx)}{render_fa_radar(ctx)}{render_season(ctx)}</div>'
     return (
         f'<!DOCTYPE html><html><head><meta charset="utf-8">'
