@@ -1,15 +1,16 @@
-name: Daily Fantasy Baseball Digest
+name: Daily Fantasy Baseball Dashboard
 
 on:
   schedule:
-    # Once daily, firing at 4 AM EDT (08:00 UTC) — past ESPN's overnight stat/
-    # standings refresh, so the fetch always sees the completed prior day. GH's
-    # scheduler delays runs 1-4h+, so actual delivery lands mid-morning (~5-8 AM ET).
-    - cron: '0 8 * * *'
+    # Once each morning, firing at 5 AM EDT (09:00 UTC) — just after the daily
+    # digest (4 AM EDT) and safely past ESPN's overnight stat/standings refresh,
+    # so the --refresh fetch always sees the completed prior day. GitHub's
+    # scheduler delays runs 1-4h+, so actual delivery lands mid-morning.
+    - cron: '0 9 * * *'
   workflow_dispatch:       # allows manual trigger from the GitHub Actions UI
 
 jobs:
-  send-digest:
+  send-dashboard:
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -26,9 +27,9 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Send digest
+      - name: Refresh data and email dashboard
         env:
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
           ESPN_SWID: ${{ secrets.ESPN_SWID }}
           ESPN_S2: ${{ secrets.ESPN_S2 }}
-        run: python send_digest.py
+        run: python dashboard.py --refresh --email

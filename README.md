@@ -1,6 +1,6 @@
 # Fantasy Baseball — Daily Digest
 
-Automated email digest for ESPN fantasy league 277836 (Guerrero Warfare). Runs twice daily via GitHub Actions (06:00 & 15:00 UTC; GitHub's scheduler is unreliable so delivery lands roughly 4–6 AM / 1–3 PM EDT) — no laptop required.
+Automated email digest for ESPN fantasy league 277836 (Guerrero Warfare). Runs once each morning via GitHub Actions (digest 08:00 UTC / 4 AM EDT, single-viewport dashboard 09:00 UTC / 5 AM EDT; GitHub's scheduler is unreliable so delivery lands mid-morning ~5–8 AM ET) — no laptop required.
 
 ---
 
@@ -147,7 +147,15 @@ $env:PATH = [System.Environment]::GetEnvironmentVariable("PATH","Machine") + ";"
 
 ## Automation
 
-GitHub Actions runs `.github/workflows/daily-digest.yml` twice daily at **06:00 and 15:00 UTC** (2 AM / 11 AM EDT). Cron is always UTC. GitHub's scheduler is unreliable — actual delays run 1–4 hours, so expect delivery roughly 4–6 AM / 1–3 PM EDT. It uses Python on Ubuntu.
+Three scheduled workflows run on GitHub Actions (Python on Ubuntu; cron is always UTC):
+
+| Workflow | Cron (UTC) | Clock (EDT) | What it runs |
+|---|---|---|---|
+| `daily-digest.yml` | `0 8 * * *` | 4 AM | `python send_digest.py` |
+| `daily-dashboard.yml` | `0 9 * * *` | 5 AM | `python dashboard.py --refresh --email` |
+| `weekly-recap.yml` | `30 15 * * 1` | Mon 11:30 AM | `python weekly_recap.py` |
+
+Both morning jobs fetch fresh data at run time, so they fire **after ESPN's overnight stat/standings rollover** (done well before 4 AM ET) — firing earlier risks reading a half-updated day. GitHub's scheduler is unreliable — delays run 1–4 hours (often more) and only ever push runs *later*, so a post-4 AM cron stays fresh and **actual delivery lands mid-morning (~5–8 AM ET)**, the digest arriving ahead of the dashboard. (The digest's former afternoon run at 15:00 UTC was removed — it's once daily now.)
 
 ### Trigger a manual run
 
@@ -540,6 +548,7 @@ Contributor docs are split in two: **`CLAUDE.md`** holds the actionable rules an
 baseball/
 ├── fetch_data.py                        # Data pipeline — runs first (~60s)
 ├── send_digest.py                       # Email builder + sender
+├── dashboard.py                         # Single-viewport command dashboard (--refresh/--team/--email)
 ├── weekly_recap.py                      # Monday full-league recap email builder
 ├── bench_leakage.py                     # Standalone daily-lineup audit (my team + opponent → console)
 ├── CLAUDE.md                            # Actionable rules / gotchas for contributors
@@ -549,7 +558,10 @@ baseball/
 ├── .env.example                         # Safe template to share
 ├── .github/
 │   └── workflows/
-│       └── daily-digest.yml            # GitHub Actions schedule (7 AM EDT daily)
+│       ├── daily-digest.yml            # Digest — fires 08:00 UTC (4 AM EDT) daily
+│       ├── daily-dashboard.yml         # Dashboard — fires 09:00 UTC (5 AM EDT) daily
+│       ├── weekly-recap.yml            # Recap — fires Mon 15:30 UTC
+│       └── pr-check.yml                # CI: compile + dry-run render on PRs into main
 ├── data/
 │   └── snapshot.json                    # ~1.7 MB — rebuilt every run, gitignored
 ├── logs/
