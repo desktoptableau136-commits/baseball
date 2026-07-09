@@ -17,6 +17,7 @@ in every section" rule in CLAUDE.md). It does not modify send_digest and never e
 import argparse
 import json
 import math
+import re
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -233,13 +234,13 @@ def _fv(v, dec=0):
 
 
 def _tile(title, body, flex=1.0, accent=ACCENT, sub=""):
-    sub_html = f'<span style="color:{MUTED};font-weight:400;text-transform:none;letter-spacing:0;font-size:9px;margin-left:6px;">{sub}</span>' if sub else ""
+    sub_html = f'<span style="color:{MUTED};font-weight:400;text-transform:none;letter-spacing:0;font-size:10px;margin-left:6px;">{sub}</span>' if sub else ""
     return (
         f'<div style="flex:{flex} 1 0;min-height:0;background:{SURFACE};border:1px solid {BORDER};'
-        f'border-top:2px solid {accent};border-radius:6px;padding:7px 9px;display:flex;flex-direction:column;overflow:hidden;">'
-        f'<div style="color:{TEXT};font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.6px;'
-        f'margin-bottom:5px;flex:0 0 auto;">{title}{sub_html}</div>'
-        f'<div style="flex:1 1 0;min-height:0;overflow:hidden;font-size:11px;color:{TEXT};line-height:1.35;">{body}</div>'
+        f'border-top:2px solid {accent};border-radius:6px;padding:8px 11px;display:flex;flex-direction:column;overflow:hidden;">'
+        f'<div style="color:{TEXT};font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.6px;'
+        f'margin-bottom:6px;flex:0 0 auto;">{title}{sub_html}</div>'
+        f'<div style="flex:1 1 0;min-height:0;overflow:hidden;font-size:12.5px;color:{TEXT};line-height:1.5;">{body}</div>'
         f'</div>'
     )
 
@@ -255,6 +256,23 @@ def _mini_badge(score):
 
 def _pos(r):
     return str(r.get("Position", "")).split(",")[0].strip()
+
+
+def _stretch_spark(svg, height=58):
+    """Make make_sparkline's fixed-width SVG fill the tile width (it's authored at
+    ~14px/week so it never reaches the tile edge). Add a viewBox + width:100% and
+    stretch to the given pixel height with preserveAspectRatio=none so it lines up
+    with the full-width Weekly Finishes pills below it."""
+    m = re.search(r'<svg width="(\d+)" height="(\d+)"', svg)
+    if not m:
+        return svg
+    w, h = m.group(1), m.group(2)
+    return svg.replace(
+        f'<svg width="{w}" height="{h}" style="display:inline-block;vertical-align:middle;"',
+        f'<svg viewBox="0 0 {w} {h}" width="100%" height="{height}" preserveAspectRatio="none" '
+        f'style="display:block;width:100%;height:{height}px;"',
+        1,
+    )
 
 
 # ── KPI top bar ────────────────────────────────────────────────────────────────
@@ -376,14 +394,20 @@ def _pulse_cell(c, ctx, my_avgs, opp_avgs, my_std, opp_std, elapsed_frac, remain
         pct = 50
     pct = max(6, min(94, pct))
 
+    proj_line = ""
+    if pm is not None:
+        proj_line = (f'<div style="color:{MUTED};font-size:10px;">proj '
+                     f'<span style="color:{TEXT};">{_fv(pm,dec)}</span> / {_fv(po,dec)}</div>')
+
     return (
-        f'<div style="position:relative;background:{SURFACE2};border:1px solid {BORDER};border-left:2px solid {bar_c};'
-        f'border-radius:4px;padding:4px 5px;">'
-        f'<div style="position:absolute;top:3px;right:4px;display:flex;gap:2px;align-items:center;line-height:1;">{corner}{mark}</div>'
-        f'<div style="color:{MUTED};font-size:8px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;">{label}</div>'
-        f'<div style="margin-top:1px;"><span style="color:{bar_c};font-size:13px;font-weight:800;">{_fv(my_v,dec)}</span>'
-        f'<span style="color:{MUTED};font-size:10px;"> / {_fv(opp_v,dec)}</span></div>'
-        f'<div style="height:2px;background:{BORDER};border-radius:2px;margin-top:3px;">'
+        f'<div style="position:relative;background:{SURFACE2};border:1px solid {BORDER};border-left:3px solid {bar_c};'
+        f'border-radius:4px;padding:6px 8px;display:flex;flex-direction:column;justify-content:space-between;min-height:0;">'
+        f'<div style="position:absolute;top:5px;right:6px;display:flex;gap:3px;align-items:center;line-height:1;">{corner}{mark}</div>'
+        f'<div style="color:{MUTED};font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;">{label}</div>'
+        f'<div style="margin:3px 0;line-height:1.1;"><span style="color:{bar_c};font-size:22px;font-weight:800;">{_fv(my_v,dec)}</span>'
+        f'<span style="color:{MUTED};font-size:13px;"> / {_fv(opp_v,dec)}</span></div>'
+        f'{proj_line}'
+        f'<div style="height:3px;background:{BORDER};border-radius:2px;margin-top:5px;">'
         f'<div style="width:{pct:.0f}%;height:100%;background:{bar_c};border-radius:2px;"></div></div>'
         f'</div>'
     )
@@ -448,7 +472,7 @@ def render_opponent(ctx):
                 f'<span style="color:{GREEN};font-weight:700;">{_fv(ops,3)}</span></div>'
                 for r, ops in hot
             )
-            parts.append(f'<div style="color:{MUTED};font-size:9px;text-transform:uppercase;margin:3px 0 1px;">Hot bats (recent OPS)</div>{rows}')
+            parts.append(f'<div style="color:{MUTED};font-size:10px;text-transform:uppercase;letter-spacing:.4px;margin:5px 0 2px;">Hot bats (recent OPS)</div>{rows}')
 
     # Opponent roto strengths / weaknesses (season category ranks)
     ocats, on = sd.category_ranks(ctx["roto"], opp)
@@ -469,7 +493,7 @@ def render_opponent(ctx):
 
 def render_pitching(ctx):
     rows = []
-    for r in ctx["starts"][:4]:
+    for r in ctx["starts"][:6]:
         d = r.get("PSP_Date", "")
         try:
             dlabel = datetime.strptime(d, "%Y-%m-%d").strftime("%a %-m/%-d")
@@ -481,13 +505,14 @@ def render_pitching(ctx):
         vals = sd._proj_line_vals(r)
         line = f'{_fmt_ip(vals[0])} IP&middot;{vals[1]}ER&middot;{vals[2]}K' if vals else "—"
         qs = sd.qs_probability(r)
+        hva = str(r.get("PSP_HomeVAway") or "")
         two = ' <span style="color:%s;font-weight:700;">&#215;2</span>' % PURPLE if _starts_this_week(r, datetime.now().strftime("%Y-%m-%d"), ctx["week_end_str"]) >= 2 else ""
         rows.append(
-            f'<div style="display:flex;justify-content:space-between;gap:5px;padding:1px 0;white-space:nowrap;">'
+            f'<div style="display:flex;justify-content:space-between;gap:6px;padding:2px 0;white-space:nowrap;border-bottom:1px solid {BORDER};">'
             f'<span style="overflow:hidden;text-overflow:ellipsis;"><span style="color:{TEXT};font-weight:600;">{r.get("PlayerName")}</span>{two} '
-            f'<span style="color:{MUTED};font-size:9px;">{dlabel}</span></span>'
-            f'<span style="flex:0 0 auto;"><span style="color:{MUTED};font-size:9px;">{line}</span> '
-            f'<span style="color:{ACCENT};font-size:9px;">QS{qs}%</span> {_mini_badge(sd._score_p(r, ctx["best_recent_p"]))}</span></div>'
+            f'<span style="color:{MUTED};font-size:10px;">{dlabel} {hva}</span></span>'
+            f'<span style="flex:0 0 auto;"><span style="color:{MUTED};font-size:10px;">{line}</span> '
+            f'<span style="color:{ACCENT};font-size:10px;">QS{qs}%</span> {_mini_badge(sd._score_p(r, ctx["best_recent_p"]))}</span></div>'
         )
     if not rows:
         rows.append(f'<div style="color:{MUTED};">No upcoming starts this matchup.</div>')
@@ -521,7 +546,7 @@ def _arm_movers(ctx):
         bits.append(f'<span style="color:{ACCENT};">&#10052; {cold[1]} {cold[2]:.2f}</span>')
     if not bits:
         return ""
-    return f'<div style="border-top:1px solid {BORDER};margin-top:3px;padding-top:3px;font-size:9px;">L15 ERA: {" &middot; ".join(bits)}</div>'
+    return f'<div style="margin-top:5px;padding-top:4px;font-size:11px;color:{MUTED};">L15 ERA &nbsp;{" &nbsp;&middot;&nbsp; ".join(bits)}</div>'
 
 
 def render_hitting(ctx):
@@ -569,16 +594,16 @@ def render_holes(ctx):
             gain = fsc - wsc
             fa_s = (f' &rarr; <span style="color:{GREEN if gain>0 else MUTED};">{fa.get("PlayerName")}</span> {_mini_badge(fsc)}')
         rows.append(
-            f'<div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:1px 0;">'
+            f'<div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:2px 0;border-bottom:1px solid {BORDER};">'
             f'<span style="color:{YELLOW};font-weight:700;">{p["pos"]}</span> '
-            f'<span style="color:{MUTED};font-size:9px;">#{p["rank"]}/{p["n_teams"]}</span> '
+            f'<span style="color:{MUTED};font-size:10px;">#{p["rank"]}/{p["n_teams"]}</span> '
             f'<span style="color:{TEXT};">{wname}</span> {_mini_badge(wsc)}{fa_s}</div>'
         )
     holes = "".join(rows) if rows else f'<div style="color:{MUTED};">Balanced roster.</div>'
     watch = sd.build_bench_watch(ctx["lineup_eff_current"]) if ctx["lineup_eff_current"] else ""
     if watch:
         # tighten the reused callout for the compact tile
-        watch = f'<div style="margin-top:4px;font-size:9px;">{watch}</div>'
+        watch = f'<div style="margin-top:5px;font-size:10.5px;">{watch}</div>'
     return _tile("Weakest Spots &middot; Lineup Watch", holes + watch, flex=1.15, sub="rank / worst &rarr; best FA")
 
 
@@ -587,7 +612,7 @@ def render_holes(ctx):
 def render_moves(ctx):
     rows = []
     for b in (ctx["roster_sugg"] or [])[:3]:
-        rows.append(f'<div style="padding:2px 0;border-bottom:1px solid {BORDER};font-size:10px;line-height:1.35;">{b}</div>')
+        rows.append(f'<div style="padding:4px 0;border-bottom:1px solid {BORDER};font-size:11.5px;line-height:1.45;">{b}</div>')
     if not rows:
         rows.append(f'<div style="color:{MUTED};">No pressing moves — roster is set.</div>')
     # Save-role watch
@@ -597,27 +622,28 @@ def render_moves(ctx):
     for f in ctx["fading"][:2]:
         srw.append(f'<span style="color:{RED};">&#9660; {f["name"]}</span> (cold, {int(f["season"])} SV+H)')
     if srw:
-        rows.append(f'<div style="margin-top:4px;font-size:9px;color:{MUTED};">'
-                    f'<span style="text-transform:uppercase;">Save-role watch:</span> ' + " &middot; ".join(srw) + '</div>')
+        rows.append(f'<div style="margin-top:6px;font-size:10.5px;color:{MUTED};">'
+                    f'<span style="text-transform:uppercase;letter-spacing:.4px;">Save-role watch:</span><br>' + " &middot; ".join(srw) + '</div>')
     return _tile("Recommended Moves", "".join(rows), flex=1.15)
 
 
 def render_fa_radar(ctx):
     def spline(r, sc, extra):
-        return (f'<div style="display:flex;justify-content:space-between;gap:5px;white-space:nowrap;padding:1px 0;">'
+        return (f'<div style="display:flex;justify-content:space-between;gap:6px;white-space:nowrap;padding:2px 0;border-bottom:1px solid {BORDER};">'
                 f'<span style="overflow:hidden;text-overflow:ellipsis;color:{TEXT};">{r.get("PlayerName")} '
-                f'<span style="color:{MUTED};font-size:9px;">{_pos(r)}</span></span>'
-                f'<span style="flex:0 0 auto;"><span style="color:{MUTED};font-size:9px;">{extra}</span> {_mini_badge(sc)}</span></div>')
-    parts = []
-    parts.append(f'<div style="color:{MUTED};font-size:8px;text-transform:uppercase;letter-spacing:.4px;">Starters</div>')
-    for r in ctx["fa_sp"][:2]:
+                f'<span style="color:{MUTED};font-size:10px;">{_pos(r)}</span></span>'
+                f'<span style="flex:0 0 auto;"><span style="color:{MUTED};font-size:10px;">{extra}</span> {_mini_badge(sc)}</span></div>')
+    def hdr(t):
+        return f'<div style="color:{ACCENT};font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-top:4px;">{t}</div>'
+    parts = [hdr("Starters")]
+    for r in ctx["fa_sp"][:3]:
         qs = sd.qs_probability(r)
         parts.append(spline(r, r.get("_score", 0), f'{_n(r.get("ERA")):.2f} ERA &middot; QS{qs}%'))
-    parts.append(f'<div style="color:{MUTED};font-size:8px;text-transform:uppercase;letter-spacing:.4px;margin-top:3px;">Relievers</div>')
-    for r in ctx["fa_rp"][:2]:
+    parts.append(hdr("Relievers"))
+    for r in ctx["fa_rp"][:3]:
         parts.append(spline(r, r.get("_rp_score", 0), f'{int(_n(r.get("ESPN_SVHD")) or _n(r.get("SVHD")))} SV+H &middot; {_n(r.get("ERA")):.2f}'))
-    parts.append(f'<div style="color:{MUTED};font-size:8px;text-transform:uppercase;letter-spacing:.4px;margin-top:3px;">Hitters</div>')
-    for r in ctx["fa_hit"][:2]:
+    parts.append(hdr("Hitters"))
+    for r in ctx["fa_hit"][:3]:
         parts.append(spline(r, r.get("_score", 0), f'{_fv(_n(r.get("OPS")),3)} OPS'))
     return _tile("Free-Agent Radar", "".join(parts), sub="top available by score")
 
@@ -625,17 +651,22 @@ def render_fa_radar(ctx):
 def render_season(ctx):
     my_row = ctx["my_row"]
     # Standings / roto / luck mini line
+    def stat(lbl, val):
+        return (f'<div style="text-align:center;"><div style="color:{MUTED};font-size:10px;text-transform:uppercase;'
+                f'letter-spacing:.5px;">{lbl}</div><div style="color:{TEXT};font-size:18px;font-weight:800;">{val}</div></div>')
+    _std = my_row.get("standing", "—")
+    _rr  = my_row.get("roto_rank", "—")
+    _pts = my_row.get("roto_pts", "—")
+    _rec = f'{my_row.get("wins",0)}-{my_row.get("losses",0)}-{my_row.get("ties",0)}'
     top = (
-        f'<div style="display:flex;justify-content:space-between;font-size:10px;margin-bottom:3px;">'
-        f'<span><span style="color:{MUTED};">Std</span> <span style="color:{TEXT};font-weight:700;">#{my_row.get("standing","—")}</span></span>'
-        f'<span><span style="color:{MUTED};">Roto</span> <span style="color:{TEXT};font-weight:700;">#{my_row.get("roto_rank","—")}</span> '
-        f'<span style="color:{MUTED};">{my_row.get("roto_pts","")}pts</span></span>'
-        f'<span><span style="color:{MUTED};">Record</span> <span style="color:{TEXT};font-weight:700;">'
-        f'{my_row.get("wins",0)}-{my_row.get("losses",0)}-{my_row.get("ties",0)}</span></span></div>'
+        f'<div style="display:flex;justify-content:space-around;margin-bottom:4px;">'
+        f'{stat("Standing", f"#{_std}")}{stat("Roto", f"#{_rr}")}'
+        f'{stat("Pts", _pts)}{stat("Record", _rec)}'
+        f'</div>'
     )
     avg_rank = f"{sum(ctx['wk_ranks'])/len(ctx['wk_ranks']):.1f}" if ctx["wk_ranks"] else "—"
-    spark = f'<div style="margin:2px 0;">{ctx["sparkline"]}</div>'
-    spark_sub = (f'<div style="color:{MUTED};font-size:9px;">roto by matchup &middot; avg finish #{avg_rank} &middot; '
+    spark = f'<div style="margin:4px 0 2px;">{_stretch_spark(ctx["sparkline"])}</div>' if ctx["sparkline"] else ""
+    spark_sub = (f'<div style="color:{MUTED};font-size:10px;">roto by matchup &middot; avg finish #{avg_rank} &middot; '
                  f'{ctx["peak_label"].replace("<div", "<span").replace("</div>", "</span>")}</div>')
 
     # Trajectory strip — my weekly H2H finishes (last up to 10 completed)
@@ -648,9 +679,10 @@ def render_season(ctx):
         c = GREEN if res == "W" else (RED if res == "L" else (MUTED if res else BORDER))
         lab = res or "&middot;"
         cells.append(f'<div style="flex:1;text-align:center;background:{c}22;border:1px solid {c};border-radius:3px;'
-                     f'padding:2px 0;color:{c};font-size:9px;font-weight:700;">{lab}</div>')
-    strip = (f'<div style="margin-top:4px;"><div style="color:{MUTED};font-size:8px;text-transform:uppercase;'
-             f'margin-bottom:2px;">Weekly finishes</div><div style="display:flex;gap:2px;">{"".join(cells)}</div></div>') if cells else ""
+                     f'padding:4px 0;color:{c};font-size:11px;font-weight:700;">{lab}</div>')
+    strip = (f'<div style="margin-top:6px;"><div style="color:{MUTED};font-size:10px;text-transform:uppercase;'
+             f'letter-spacing:.5px;margin-bottom:3px;">Weekly finishes</div>'
+             f'<div style="display:flex;gap:3px;">{"".join(cells)}</div></div>') if cells else ""
     return _tile("Season", top + spark + spark_sub + strip, flex=1.15)
 
 
