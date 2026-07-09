@@ -3362,6 +3362,151 @@ def build_season_trajectory(weekly_results, standings, my_team=MY_TEAM):
     )
 
 
+# Cats whose season value is an average, not a sum (rate stats).
+_SEASON_RATE_CATS = {"OPS", "ERA", "WHIP"}
+
+def build_season_roto_rankings(roto, my_team=MY_TEAM, team_logos=None):
+    """Season-long roto rankings grid: aggregate EVERY matchup into season category
+    totals (counting cats summed, rate cats averaged) and rank teams by cumulative
+    roto score. Same compact heat-mapped 12-cat layout as the live Matchup N Roto
+    Rankings panel, but season-to-date. Ported from weekly_recap.build_season_roto_rankings
+    (the two scripts don't import each other)."""
+    if not roto:
+        return ""
+
+    team_logos = team_logos or {}
+    _order = ["R", "HR", "RBI", "SB", "OPS", "B_SO", "K", "QS", "W", "ERA", "WHIP", "SVHD"]
+
+    agg: dict = {}
+    for r in roto:
+        team = r.get("Team", "")
+        if not team:
+            continue
+        t = agg.setdefault(team, {
+            "pts":  {c: 0.0 for c in _order},   # summed roto points → ranking + coloring
+            "vsum": {c: 0.0 for c in _order},   # summed raw value
+            "vcnt": {c: 0   for c in _order},   # weeks with a value (for rate averages)
+            "roto": 0.0,
+        })
+        t["roto"] += float(r.get("Roto_Score") or 0)
+        for c in _order:
+            t["pts"][c] += float(r.get(f"{c}_Points") or 0)
+            v = r.get(c)
+            if v not in (None, ""):
+                try:
+                    t["vsum"][c] += float(v)
+                    t["vcnt"][c] += 1
+                except (TypeError, ValueError):
+                    pass
+
+    if not agg:
+        return ""
+
+    # Per-cat coloring tiers from the DISTINCT summed-point values (tie-safe, mirrors
+    # the live grid's value-based tiers rather than ordinal ranks).
+    tiers = {}
+    for c in _order:
+        vals = sorted({t["pts"][c] for t in agg.values()}, reverse=True)
+        tiers[c] = {
+            "best":  vals[0] if vals else None,
+            "2nd":   vals[1] if len(vals) > 1 else None,
+            "worst": vals[-1] if vals else None,
+            "2last": vals[-2] if len(vals) > 1 else None,
+        }
+
+    def _fmt(val, cat):
+        dec = 3 if cat == "OPS" else (2 if cat in {"ERA", "WHIP"} else 0)
+        try:
+            f = f"{float(val):.{dec}f}"
+            if dec > 0 and float(val) < 1.0:
+                f = f.lstrip("0") or "0"
+            return f
+        except (TypeError, ValueError):
+            return "—"
+
+    ranked = sorted(agg.items(), key=lambda kv: -kv[1]["roto"])
+    n      = len(ranked)
+    my_key = " ".join(my_team.split())
+
+    _th  = TH_S.replace("padding:8px 10px", "padding:3px 5px").replace("font-size:10px", "font-size:9px")
+    _tdc = TDC.replace("padding:7px 10px", "padding:3px 5px").replace("font-size:13px", "font-size:10px")
+    _tds = TD_S.replace("padding:7px 10px", "padding:3px 5px").replace("font-size:13px", "font-size:10px")
+
+    rows_html = ""
+    for rank, (team, t) in enumerate(ranked, 1):
+        is_my = " ".join(team.split()) == my_key
+        if rank <= 3:
+            row_bg = "background:rgba(34,197,94,0.07);"
+        elif rank >= n - 2:
+            row_bg = "background:rgba(239,68,68,0.07);"
+        else:
+            row_bg = ""
+
+        logo = fantasy_logo(team_logos.get(" ".join(team.split()), ""), 16, team)
+        rank_color = GREEN if rank <= 3 else (RED if rank >= n - 2 else MUTED)
+
+        stat_cells = ""
+        for c in _order:
+            pts = t["pts"][c]
+            if c in _SEASON_RATE_CATS:
+                val = t["vsum"][c] / t["vcnt"][c] if t["vcnt"][c] else 0.0
+            else:
+                val = t["vsum"][c]
+            val_str = _fmt(val, c)
+            ti = tiers[c]
+            if val_str == "—":
+                color, badge = MUTED, False
+            elif ti["best"] is not None and pts == ti["best"]:
+                color, badge = GREEN, True
+            elif ti["2nd"] is not None and pts == ti["2nd"]:
+                color, badge = "#86efac", False
+            elif ti["worst"] is not None and pts == ti["worst"]:
+                color, badge = RED, True
+            elif ti["2last"] is not None and pts == ti["2last"]:
+                color, badge = YELLOW, False
+            else:
+                color, badge = MUTED, False
+            inner = (
+                f'<span style="border:1px solid {color};border-radius:3px;padding:2px 6px;">{val_str}</span>'
+                if badge else val_str
+            )
+            stat_cells += f'<td style="{_tdc}color:{color};">{inner}</td>'
+
+        rows_html += (
+            f'<tr style="{row_bg}">'
+            f'<td style="{_tdc}color:{rank_color};font-weight:700;width:24px;">{rank}</td>'
+            f'<td style="{_tds}font-weight:{"800" if is_my else "600"};'
+            f'color:{ACCENT if is_my else TEXT};white-space:nowrap;">{logo}{team}</td>'
+            f'<td style="{_tdc}font-weight:700;">{t["roto"]:.1f}</td>'
+            + stat_cells +
+            f'</tr>'
+        )
+
+    stat_headers = "".join(
+        f'<th style="{_th}text-align:center;">{_CAT_DISPLAY.get(c, c)}</th>'
+        for c in _order
+    )
+    header_row = (
+        f'<th style="{_th}text-align:center;width:24px;">#</th>'
+        f'<th style="{_th}">Team</th>'
+        f'<th style="{_th}text-align:center;">Pts</th>'
+        + stat_headers
+    )
+    table = (
+        f'<div style="overflow-x:auto;-webkit-overflow-scrolling:touch;">'
+        f'<table style="width:100%;border-collapse:collapse;font-size:10px;">'
+        f'<thead><tr>{header_row}</tr></thead>'
+        f'<tbody>{rows_html}</tbody></table></div>'
+    )
+
+    return (
+        section_head("Season Roto Rankings",
+                     "Every matchup combined \xb7 counting cats summed, rate cats averaged \xb7 "
+                     "bright green = #1 \xb7 light green = #2 \xb7 amber = 2nd-last \xb7 red = last") +
+        table
+    )
+
+
 def build_bench_watch(eff):
     """Compact current-week 'Lineup Watch' callout for the daily digest: batter
     production you've stranded on the bench so far this week (net of the bat you'd have
@@ -4733,6 +4878,8 @@ def build_email(snap, override_team=None):
         cat_section,                                                                      # 14
         luck_section,                                                                     # 15
         build_season_trajectory(weekly_results, standings, my_team=my_team),              # 16 Season Trajectory (W/L/T by week + streak)
+        '<div style="margin-top:28px;"></div>',                                            # breathing room before Season Roto Rankings
+        build_season_roto_rankings(roto, my_team=my_team, team_logos=team_logos),         # 17 Season Roto Rankings (all matchups aggregated)
         band_divider("REFERENCE", anchor="band-glossary"),                                # REFERENCE band header
         build_glossary_section(),                                                         # 16 Glossary & Methodology
     ]
