@@ -1,6 +1,6 @@
 # Fantasy Baseball — Daily Digest
 
-Automated email digest for ESPN fantasy league 277836 (Guerrero Warfare). Runs once each morning via GitHub Actions (digest 08:00 UTC / 4 AM EDT, single-viewport dashboard 09:00 UTC / 5 AM EDT; GitHub's scheduler is unreliable so delivery lands mid-morning ~5–8 AM ET) — no laptop required.
+Automated email digest for ESPN fantasy league 277836 (Guerrero Warfare). Runs once each morning via GitHub Actions (digest fires 06:00 UTC / 2 AM EDT, single-viewport dashboard 07:00 UTC / 3 AM EDT; GitHub's scheduler typically adds ~6h, so they land ~8 AM / ~9 AM ET) — no laptop required.
 
 ---
 
@@ -149,13 +149,13 @@ $env:PATH = [System.Environment]::GetEnvironmentVariable("PATH","Machine") + ";"
 
 Three scheduled workflows run on GitHub Actions (Python on Ubuntu; cron is always UTC):
 
-| Workflow | Cron (UTC) | Clock (EDT) | What it runs |
-|---|---|---|---|
-| `daily-digest.yml` | `0 8 * * *` | 4 AM | `python send_digest.py` |
-| `daily-dashboard.yml` | `0 9 * * *` | 5 AM | `python dashboard.py --refresh --email` |
-| `weekly-recap.yml` | `30 15 * * 1` | Mon 11:30 AM | `python weekly_recap.py` |
+| Workflow | Cron (UTC) | Fires (EDT) | Lands (ET) | What it runs |
+|---|---|---|---|---|
+| `daily-digest.yml` | `0 6 * * *` | 2 AM | ~8 AM | `python send_digest.py` |
+| `daily-dashboard.yml` | `0 7 * * *` | 3 AM | ~9 AM | `python dashboard.py --refresh --email` |
+| `weekly-recap.yml` | `30 15 * * 1` | Mon 11:30 AM | — | `python weekly_recap.py` |
 
-Both morning jobs fetch fresh data at run time, so they fire **after ESPN's overnight stat/standings rollover** (done well before 4 AM ET) — firing earlier risks reading a half-updated day. GitHub's scheduler is unreliable — delays run 1–4 hours (often more) and only ever push runs *later*, so a post-4 AM cron stays fresh and **actual delivery lands mid-morning (~5–8 AM ET)**, the digest arriving ahead of the dashboard. (The digest's former afternoon run at 15:00 UTC was removed — it's once daily now.)
+**The cron is when the job *fires*, not when the email *arrives*.** GitHub's scheduler is unreliable — delays run 1–4 hours and in practice **~6 hours** (the 06:00 UTC digest lands ~8 AM ET), and only ever push runs *later*. So arrival ≈ cron + ~6h, and the dashboard cron is kept 1h behind the digest so it lands right after it. That same lag keeps the data fresh: the 2–3 AM crons actually *execute* ~8–9 AM, well past ESPN's overnight refresh. (Firing later — e.g. 4 AM EDT — would guard against the rare fast-scheduler day but push everyday arrival ~2h later, so we don't. The digest's former afternoon run at 15:00 UTC was removed — it's once daily now.)
 
 ### Trigger a manual run
 
@@ -558,8 +558,8 @@ baseball/
 ├── .env.example                         # Safe template to share
 ├── .github/
 │   └── workflows/
-│       ├── daily-digest.yml            # Digest — fires 08:00 UTC (4 AM EDT) daily
-│       ├── daily-dashboard.yml         # Dashboard — fires 09:00 UTC (5 AM EDT) daily
+│       ├── daily-digest.yml            # Digest — fires 06:00 UTC (2 AM EDT), lands ~8 AM ET
+│       ├── daily-dashboard.yml         # Dashboard — fires 07:00 UTC (3 AM EDT), lands ~9 AM ET
 │       ├── weekly-recap.yml            # Recap — fires Mon 15:30 UTC
 │       └── pr-check.yml                # CI: compile + dry-run render on PRs into main
 ├── data/
