@@ -16,10 +16,10 @@ jobs:
 
     steps:
       - name: Check out repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.12'
           cache: 'pip'
@@ -28,7 +28,7 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Compile all modules
-        run: python -m py_compile fetch_data.py send_digest.py weekly_recap.py bench_leakage.py
+        run: python -m py_compile fetch_data.py send_digest.py dashboard.py weekly_recap.py bench_leakage.py
 
       - name: Refresh data snapshot
         env:
@@ -36,9 +36,10 @@ jobs:
           ESPN_S2: ${{ secrets.ESPN_S2 }}
         run: python fetch_data.py
 
-      - name: Render digest + recap (dry-run, no email)
+      - name: Render digest + dashboard + recap (dry-run, no email)
         run: |
           python send_digest.py --dry-run --no-refresh
+          python dashboard.py
           python weekly_recap.py --dry-run --no-refresh
 
       - name: Upload rendered previews
