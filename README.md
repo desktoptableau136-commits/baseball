@@ -186,6 +186,7 @@ KPI row: **Record** · **Current Matchup** (W-L-T + win%) · **Roster** (whole-t
 16. **My Season Category Rankings**
 17. **League Luck Standings**
 18. **Season Trajectory** — W/L/T by matchup for every team, current streak in the final column
+19. **Season Roto Rankings** — all 12 teams ranked by cumulative roto score, every category aggregated over the whole season (counting cats summed, rate cats averaged)
 
 **REFERENCE**
 19. **Glossary & Methodology** — collapsible in-digest reference for every score, metric, and data source
@@ -308,6 +309,9 @@ All 12 teams sorted by record. Shows W-L-T · Win% · Roto rank · Cumulative ro
 
 ### Season Trajectory
 A W/L/T grid of the whole season — every team down the rows (in standings order), each completed week across the columns, and each team's **current streak** (e.g. W3, L2) in the final column. Wins are green, losses red, ties white. Your row is highlighted. Same panel as the Monday recap (ported so the two share the view); it scrolls horizontally on narrow screens as the season lengthens.
+
+### Season Roto Rankings
+The same 12-category roto grid as the live **Matchup N Roto Rankings** panel, but aggregated over the **entire season to date** rather than one matchup. All 12 teams are ranked by cumulative roto score; each category cell shows the season figure (counting cats like R/HR/K summed, rate cats OPS/ERA/WHIP averaged across matchups), colored with the same 5-tier heat-map (bright green = best in cat, light green = 2nd, amber = 2nd-last, red = last, muted = middle). Your team is bold blue; top-3 rows tint green, bottom-3 red. Same panel as the Monday recap (ported so the two share the view).
 
 ### Glossary & Methodology
 A collapsible in-digest reference at the very bottom (also linked from the header nav). Five expandable groups — **Scores**, **Pitching metrics**, **Hitting metrics**, **Projections & matchup**, **Data sources** — explaining how every score and metric is computed and where the data comes from. Kept in sync with the code as part of the save sequence.
