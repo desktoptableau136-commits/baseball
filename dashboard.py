@@ -636,16 +636,16 @@ def render_fa_radar(ctx):
     def hdr(t):
         return f'<div style="color:{ACCENT};font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-top:4px;">{t}</div>'
     parts = [hdr("Starters")]
-    for r in ctx["fa_sp"][:3]:
+    for r in ctx["fa_sp"][:2]:
         qs = sd.qs_probability(r)
         parts.append(spline(r, r.get("_score", 0), f'{_n(r.get("ERA")):.2f} ERA &middot; QS{qs}%'))
     parts.append(hdr("Relievers"))
-    for r in ctx["fa_rp"][:3]:
+    for r in ctx["fa_rp"][:2]:
         parts.append(spline(r, r.get("_rp_score", 0), f'{int(_n(r.get("ESPN_SVHD")) or _n(r.get("SVHD")))} SV+H &middot; {_n(r.get("ERA")):.2f}'))
     parts.append(hdr("Hitters"))
-    for r in ctx["fa_hit"][:3]:
+    for r in ctx["fa_hit"][:2]:
         parts.append(spline(r, r.get("_score", 0), f'{_fv(_n(r.get("OPS")),3)} OPS'))
-    return _tile("Free-Agent Radar", "".join(parts), flex=1.5, sub="top available by score")
+    return _tile("Free-Agent Radar", "".join(parts), flex=1.0, sub="top available by score")
 
 
 def render_season(ctx):
@@ -686,7 +686,7 @@ def render_season(ctx):
     strip = (f'<div style="margin-top:6px;"><div style="color:{MUTED};font-size:10px;text-transform:uppercase;'
              f'letter-spacing:.5px;margin-bottom:3px;">Weekly finishes</div>'
              f'<div style="display:flex;gap:3px;">{"".join(cells)}</div></div>') if cells else ""
-    return _tile("Season", top + spark + spark_sub + strip, flex=1.15)
+    return _tile("Season", top + spark + spark_sub + strip, flex=1.3)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
