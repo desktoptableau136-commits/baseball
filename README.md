@@ -127,11 +127,16 @@ python dashboard.py --refresh
 
 # Another team's dashboard (needs all_matchups in the snapshot)
 python dashboard.py --team "Houck Tuah"
+
+# Also email it to yourself as an attachment (reuses the digest's Gmail setup)
+python dashboard.py --email
 ```
 
 Open the file maximized in a browser — it's tuned for a 1440×900 viewport and should show no scrollbars.
 
-It's also **responsive**: on a tablet (≤1100px) it drops to two columns and on a phone (≤700px) to a single column, un-pinning the fixed pane so the page scrolls normally with larger, readable text. The desktop no-scroll layout is unchanged above 1100px.
+It's also **responsive**: on a tablet (≤1100px) the tiles reflow into two height-balanced columns and on a phone (≤700px) into a single column, un-pinning the fixed pane so the page scrolls normally with larger, readable text. The desktop no-scroll layout is unchanged above 1100px.
+
+**Viewing on a phone/tablet:** use `--email` (or attach `previews/dashboard_{team}.html` to an email yourself) and open the **attachment** in your device browser — email apps strip the `<style>` block that holds the layout, so the attached file works but a pasted-in body won't.
 
 **On Windows PowerShell**, if `git` isn't found, run this first to restore it:
 ```powershell
