@@ -709,9 +709,13 @@ STYLE = """
   @media (max-width:1100px) {
     html, body { overflow-y:auto !important; overflow-x:hidden !important; height:auto !important; }
     #wrap { position:static !important; inset:auto !important; height:auto !important; min-height:100vh; }
-    #grid { grid-template-columns:1fr 1fr !important; grid-template-rows:none !important; }
-    .col  { height:auto !important; }
-    .tile { flex:0 0 auto !important; min-height:0 !important; overflow:visible !important; }
+    /* Flatten the 3 desktop columns (display:contents) and reflow EVERY tile into
+       two height-balanced columns via CSS multicol, so the left side isn't much
+       taller than the right (the 3-into-2 grid wrap piled col-3 under col-1). */
+    #grid { display:block !important; column-count:2 !important; column-gap:6px !important; }
+    .col  { display:contents !important; }
+    .tile { flex:0 0 auto !important; min-height:0 !important; overflow:visible !important;
+            break-inside:avoid; -webkit-column-break-inside:avoid; margin:0 0 6px !important; }
     .tile-body { flex:0 0 auto !important; overflow:visible !important; font-size:13.5px !important; }
     .pulse-grid { height:auto !important; grid-auto-rows:auto !important; grid-template-columns:repeat(3,1fr) !important; }
     .topbar { flex-wrap:wrap !important; gap:8px !important; }
@@ -721,7 +725,7 @@ STYLE = """
   /* ---- Phone (<=700px): single column, bigger text, 2-wide category grid
      (roomier for the OPS/ERA/WHIP rate values than 3-wide). ---- */
   @media (max-width:700px) {
-    #grid { grid-template-columns:1fr !important; }
+    #grid { column-count:1 !important; }
     .tile-body { font-size:14.5px !important; }
     .pulse-grid { grid-template-columns:repeat(2,1fr) !important; }
     .chip { padding:0 6px !important; }
@@ -746,10 +750,57 @@ def build_dashboard(snap, my_team):
     )
 
 
+def send_dashboard_email(html, my_team):
+    """Email the dashboard to yourself as an ATTACHMENT (reuses send_digest's Gmail
+    SMTP creds). The whole layout lives in a <style> block that Gmail strips from an
+    inline body, so the message body is just a pointer — the working dashboard is the
+    attached .html, which the reader opens in their phone/tablet browser."""
+    import smtplib
+    from email.mime.multipart import MIMEMultipart
+    from email.mime.text import MIMEText
+
+    if not sd.GMAIL_APP_PASSWORD:
+        print("ERROR: GMAIL_APP_PASSWORD not set — add it to .env (same one the digest uses).")
+        return False
+
+    date_str = datetime.now().strftime("%Y-%m-%d")
+    slug  = my_team.strip().replace(" ", "_")
+    fname = f"dashboard_{slug}_{date_str}.html"
+    subject = f"⚾ {my_team} Dashboard — {datetime.now().strftime('%b %d')}"
+    body = (
+        '<div style="font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',Roboto,sans-serif;'
+        'padding:16px;color:#111;">'
+        '<h2 style="margin:0 0 8px;">Your command dashboard is attached.</h2>'
+        f'<p style="color:#444;line-height:1.5;">Tap <b>{fname}</b> below &rarr; '
+        '<b>Open in browser</b> to view it. It’s responsive — one column on a phone, '
+        'two on a tablet, and the full three-column no-scroll pane on a laptop.</p>'
+        '<p style="color:#888;font-size:12px;">(The dashboard’s styling lives in the file, '
+        'which email apps can’t render inline — so open the attachment, not this message.)</p>'
+        '</div>'
+    )
+
+    msg = MIMEMultipart("mixed")
+    msg["Subject"] = subject
+    msg["From"] = sd.FROM_EMAIL
+    msg["To"]   = sd.TO_EMAIL
+    msg["Cc"]   = sd.CC_EMAIL
+    msg.attach(MIMEText(body, "html"))
+    att = MIMEText(html, "html", "utf-8")
+    att.add_header("Content-Disposition", "attachment", filename=fname)
+    msg.attach(att)
+
+    with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
+        smtp.login(sd.FROM_EMAIL, sd.GMAIL_APP_PASSWORD)
+        smtp.sendmail(sd.FROM_EMAIL, [sd.TO_EMAIL, sd.CC_EMAIL], msg.as_string())
+    print(f"Emailed dashboard to {sd.TO_EMAIL} (attachment: {fname})")
+    return True
+
+
 def main():
     ap = argparse.ArgumentParser(description="Single-viewport fantasy dashboard")
     ap.add_argument("--refresh", action="store_true", help="Refresh snapshot data first (~60s)")
     ap.add_argument("--team", default=None, help="Render another team's dashboard (needs all_matchups)")
+    ap.add_argument("--email", action="store_true", help="Also email the dashboard to yourself as an attachment")
     args = ap.parse_args()
 
     if args.refresh:
@@ -767,6 +818,9 @@ def main():
     out = PREVIEWS / f"dashboard_{slug}.html"
     out.write_text(html, encoding="utf-8")
     print(f"Wrote {out}")
+
+    if args.email:
+        send_dashboard_email(html, my_team)
 
 
 if __name__ == "__main__":
