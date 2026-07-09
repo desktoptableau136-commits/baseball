@@ -523,6 +523,8 @@ def fetch_injury_notes():
         return {}
 
 
+_FA_SP_MIN_SCORE = 30   # hide streamer-tier FA starters below this SP score (not worth the risk)
+
 def fa_starters(pitchers, claimed=None, week_end=None, idx_recent=None):
     claimed = claimed or set()
     today_str = datetime.now().strftime("%Y-%m-%d")
@@ -539,6 +541,7 @@ def fa_starters(pitchers, claimed=None, week_end=None, idx_recent=None):
     ]
     for r in fa:
         r["_score"] = _score_p(r, idx_recent)
+    fa = [r for r in fa if r["_score"] >= _FA_SP_MIN_SCORE]
     return sorted(fa, key=lambda r: -r["_score"])[:12]
 
 
@@ -4327,9 +4330,9 @@ def build_email(snap, override_team=None):
             f'</div>'
         )
     else:
-        table = f'<p style="color:{MUTED};font-style:italic;margin-bottom:24px;">No FA starters with confirmed upcoming starts.</p>'
+        table = f'<p style="color:{MUTED};font-style:italic;margin-bottom:24px;">No FA starters (score {_FA_SP_MIN_SCORE}+) with upcoming starts.</p>'
 
-    fa_sp_section = section_head("FA Pickup — Starting Pitchers", "Free agents with confirmed upcoming starts · sorted by SP score") + table
+    fa_sp_section = section_head("FA Pickup — Starting Pitchers", f"Free agents with upcoming starts · score {_FA_SP_MIN_SCORE}+ only · sorted by SP score") + table
 
     # ── FA: Relief Pitchers ────────────────────────────────────────────────────
     if fa_rp:

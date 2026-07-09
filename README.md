@@ -298,7 +298,7 @@ A compact callout that audits your **daily** lineup for the week so far (Monday 
 Only still-actionable, net-positive misses appear — it's silent on a clean week. The Monday recap carries the fuller completed-week version (**Lineup Efficiency**). Deep-dive / opponent comparison: run `python bench_leakage.py`.
 
 ### FA Pickup — Starting Pitchers
-Free agent starters with a confirmed upcoming start, grouped by date with day headers. Sorted by composite SP score within each day. Starts past Sunday get a `NEXT WK` badge; a pitcher with ≥ 2 starts in the matchup week gets a purple `2-START` chip.
+Free agent starters with a confirmed or projected upcoming start, grouped by date with day headers. Sorted by composite SP score within each day. Starts past Sunday get a `NEXT WK` badge; a pitcher with ≥ 2 starts in the matchup week gets a purple `2-START` chip. **Only starters with an SP score of 30 or higher are shown** — streamer-tier arms below that are filtered out (tunable via `_FA_SP_MIN_SCORE`).
 
 **Columns:** Pitcher · **Proj. Line** · Matchup (with opponent OPS on a second line) · QS% · ERA · **L15 ERA** (hot/cold colored) · K% · Score
 
@@ -437,7 +437,7 @@ GitHub Actions automatically uses whatever is on `main`. The next scheduled run 
 | Recent hitter stats (last 7d) | Baseball Reference via `pybaseball.batting_stats_range` | No |
 | Recent pitcher stats (last 15d) | Baseball Reference via `pybaseball.pitching_stats_range` | No |
 | Roster, FA, transactions, roto scores, team logos, **season counting stats** (SV/K/W/IP/GS/GP) | ESPN Fantasy API (`espn_api` library) | Yes — `swid` + `espn_s2` cookies |
-| Probable starters (+6-day rotation projection) | MLB Stats API | No |
+| Probable starters (rotation-order projection) | MLB Stats API | No |
 | Opponent team **OPS and K rate** | MLB Stats API | No |
 | Barrel%/hard-hit% allowed, **xERA, xwOBA-against, whiff percentile, raw whiff%** (pitchers) | Baseball Savant via `pybaseball` | No |
 | xwOBA, xBA, xSLG, Barrel%, hard-hit%, sprint speed (hitters) | Baseball Savant via `pybaseball` | No |
@@ -447,8 +447,8 @@ GitHub Actions automatically uses whatever is on `main`. The next scheduled run 
 ### How probable starters are fetched (3-phase logic)
 
 1. **Range schedule call** — one request gets all game IDs for the next 7 days
-2. **Batch hydrate** — one request gets confirmed probable pitchers for all those games (`PSP_Projected = False`)
-3. **Rotation projection** — for unannounced slots, finds each pitcher's last start and adds 6 days ±1 (`PSP_Projected = True`)
+2. **Batch hydrate** — one request gets confirmed probable pitchers for all those games (`PSP_Projected = False`); these are published only ~1–2 days out
+3. **Rotation-order projection** — for unannounced slots, each team's rotation is advanced through its *actual upcoming games*, one pitcher per game (`PSP_Projected = True`). Each team's recent confirmed starts reconstruct its rotation order; the longest-rested arm is "due" next, and confirmed starts re-sync the cycle. Because slots are filled game-by-game, two projected pitchers can never land on the same team/day, and turns counted by games (not calendar days) handle off-days and two-start weeks correctly. (This replaced an older `last start + 6 calendar days` guess that could double-list two projected starters on one team/day.)
 
 Projected starts show `(proj.)` in the digest. If the batch call returns nothing, falls back to per-game live-feed calls.
 
