@@ -2,11 +2,11 @@ name: Daily Fantasy Baseball Dashboard
 
 on:
   schedule:
-    # Once each morning, firing at 5 AM EDT (09:00 UTC) — just after the daily
-    # digest (4 AM EDT) and safely past ESPN's overnight stat/standings refresh,
-    # so the --refresh fetch always sees the completed prior day. GitHub's
-    # scheduler delays runs 1-4h+, so actual delivery lands mid-morning.
-    - cron: '0 9 * * *'
+    # Once each morning, firing at 3 AM EDT (07:00 UTC) -- 1h behind the digest
+    # (2 AM EDT), so it lands ~1h after it. GitHub's scheduler typically adds ~6h,
+    # so it actually EXECUTES (--refresh fetch + email) ~9 AM ET, past ESPN's
+    # overnight refresh. Kept in step with the digest cron -- move both together.
+    - cron: '0 7 * * *'
   workflow_dispatch:       # allows manual trigger from the GitHub Actions UI
 
 jobs:
