@@ -72,6 +72,9 @@ TD_S = (f"padding:7px 10px;border-bottom:1px solid {BORDER};color:{TEXT};"
         f"font-size:13px;vertical-align:middle;")
 TDC  = (f"padding:7px 10px;border-bottom:1px solid {BORDER};color:{TEXT};"
         f"font-size:13px;text-align:center;vertical-align:middle;")
+# Uniform performer-table row height so the side-by-side hitter/pitcher columns
+# in Top Performers line up row-for-row (fits the 2-line name+team cell).
+_PERF_ROW_H = "42px"
 
 _TOP_LINK_DIV = (
     f'<div style="text-align:right;margin:6px 0 0;">'
@@ -868,7 +871,8 @@ def _performer_table(players, stat_keys, stat_labels):
         is_mine = " ".join(team.split()) == " ".join(MY_TEAM.split())
         name_color = ACCENT if is_mine else TEXT
         name_cell = (
-            f'<td style="{TD_S}">'
+            f'<td style="{TD_S}height:{_PERF_ROW_H};white-space:nowrap;'
+            f'overflow:hidden;text-overflow:ellipsis;max-width:150px;">'
             f'{logo}'
             f'<span style="font-weight:600;color:{name_color};">{name}</span>'
             + (f'<span style="color:{MUTED};font-size:10px;margin-left:4px;">{pos}</span>' if pos else "")
@@ -878,9 +882,9 @@ def _performer_table(players, stat_keys, stat_labels):
         stat_cells = ""
         for key in stat_keys:
             display_str, color = _fmt_stat(key, r.get(key))
-            stat_cells += f'<td style="{TDC}"><span style="color:{color};">{display_str}</span></td>'
+            stat_cells += f'<td style="{TDC}height:{_PERF_ROW_H};"><span style="color:{color};">{display_str}</span></td>'
 
-        rows += f"<tr>{name_cell}{stat_cells}</tr>"
+        rows += f'<tr style="height:{_PERF_ROW_H};">{name_cell}{stat_cells}</tr>'
 
     return (
         f'<div style="overflow-x:auto;-webkit-overflow-scrolling:touch;">'
