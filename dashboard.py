@@ -702,6 +702,9 @@ STYLE = """
   #grid { flex:1 1 auto; min-height:0; display:grid; grid-template-columns:1fr 1fr 1fr;
           grid-template-rows:minmax(0,1fr); gap:6px; }
   .col { display:flex; flex-direction:column; gap:6px; min-height:0; height:100%; }
+  /* Tablet/phone grid — hidden on desktop, swapped in below 1100px. */
+  #gridt { display:none; }
+  .colt { display:flex; flex-direction:column; gap:6px; min-width:0; }
 
   /* ---- Tablet (<=1100px): 2 columns, un-pin the page and allow normal scrolling.
      Tiles size to their content (no clipping) since the single no-scroll pane only
@@ -709,34 +712,29 @@ STYLE = """
   @media (max-width:1100px) {
     html, body { overflow-y:auto !important; overflow-x:hidden !important; height:auto !important; }
     #wrap { position:static !important; inset:auto !important; height:auto !important; min-height:100vh; }
-    /* Flatten the 3 desktop columns (display:contents) so every tile becomes a direct
-       grid item, then lay them out in an EXPLICIT user-chosen order (1,6,7,2,3,4,8,5)
-       via `order` + a 2-col grid. `grid-auto-flow:column` fills column-major, so the
-       order reads DOWN the left column (1,6,7,2) then DOWN the right (3,4,8,5).
-       Multicol can't be used here: it auto-balances but ignores `order`. Row heights
-       align per-row, so a short tile paired with a tall one leaves some slack below —
-       the accepted cost of an exact order. `align-items:start` keeps tiles their
-       natural height (no stretch). */
-    #grid { display:grid !important; grid-template-columns:1fr 1fr !important;
-            grid-template-rows:repeat(4,auto) !important; grid-auto-flow:column !important;
-            align-items:start !important; column-gap:6px !important; row-gap:6px !important; }
-    .col  { display:contents !important; }
+    /* Swap the desktop 3-col grid for the tablet grid: two INDEPENDENT-PACKING flex
+       columns holding the tiles in the user's order (left = 1,6,7,2; right = 3,4,8,5).
+       Because each column is its own flex-column, tiles pack tight top-to-bottom with
+       NO cross-column row alignment — so a short tile never leaves whitespace beneath
+       it (the failure mode of the earlier order-aware single grid). `align-items:
+       flex-start` keeps the two columns their natural heights (a ragged bottom, but no
+       internal gaps). */
+    #grid  { display:none !important; }
+    #gridt { display:flex !important; gap:6px !important; align-items:flex-start !important; }
+    .colt  { flex:1 1 0 !important; min-width:0 !important; }
     .tile { flex:0 0 auto !important; min-height:0 !important; overflow:visible !important; margin:0 !important; }
     .tile-body { flex:0 0 auto !important; overflow:visible !important; font-size:13.5px !important; }
     .pulse-grid { height:auto !important; grid-auto-rows:auto !important; grid-template-columns:repeat(3,1fr) !important; }
     .topbar { flex-wrap:wrap !important; gap:8px !important; }
     .topbar-chips { flex-wrap:wrap !important; justify-content:flex-start !important; row-gap:6px; }
-    /* User-chosen panel order: 1, 6, 7, 2, 3, 4, 8, 5 (Opponent last). */
-    .t1 { order:1 !important; } .t6 { order:2 !important; } .t7 { order:3 !important; }
-    .t2 { order:4 !important; } .t3 { order:5 !important; } .t4 { order:6 !important; }
-    .t8 { order:7 !important; } .t5 { order:8 !important; }
   }
 
-  /* ---- Phone (<=700px): single column (straight down in the same order), bigger
-     text, 2-wide category grid (roomier for OPS/ERA/WHIP than 3-wide). ---- */
+  /* ---- Phone (<=700px): stack the two tablet columns into one (straight down in the
+     order 1,6,7,2,3,4,8,5), bigger text, 2-wide category grid (roomier for OPS/ERA/
+     WHIP than 3-wide). ---- */
   @media (max-width:700px) {
-    #grid { grid-template-columns:1fr !important; grid-template-rows:none !important;
-            grid-auto-flow:row !important; }
+    #gridt { flex-direction:column !important; }
+    .colt  { flex:0 0 auto !important; width:100% !important; }
     .tile-body { font-size:14.5px !important; }
     .pulse-grid { grid-template-columns:repeat(2,1fr) !important; }
     .chip { padding:0 6px !important; }
@@ -748,16 +746,47 @@ STYLE = """
 def build_dashboard(snap, my_team):
     ctx = build_context(snap, my_team)
     topbar = render_topbar(ctx)
-    # Weakest Spots/Lineup Watch is content-heavy → give it the roomy col-1 bottom slot
-    # (only 2 tiles share col 1). Opponent is lighter → it fits col 2's 3-tile stack.
-    col1 = f'<div class="col">{render_category_pulse(ctx)}{render_holes(ctx)}</div>'
-    col2 = f'<div class="col">{render_pitching(ctx)}{render_hitting(ctx)}{render_opponent(ctx)}</div>'
-    col3 = f'<div class="col">{render_moves(ctx)}{render_fa_radar(ctx)}{render_season(ctx)}</div>'
+
+    # Render each tile ONCE, then place the IDENTICAL markup in two independent
+    # layout containers (tiles carry no ids/anchors, so duplication is safe — only
+    # one container is ever displayed at a breakpoint):
+    #   #grid  — desktop 3-col fixed no-scroll pane (>1100px)
+    #   #gridt — tablet/phone: two INDEPENDENT-PACKING flex columns in the user's
+    #            order. Each column packs tight (like the desktop columns), so there
+    #            is NO row-alignment whitespace (which an order-aware single grid,
+    #            the previous approach, left below short tiles).
+    t_pulse  = render_category_pulse(ctx)
+    t_holes  = render_holes(ctx)
+    t_pitch  = render_pitching(ctx)
+    t_hit    = render_hitting(ctx)
+    t_opp    = render_opponent(ctx)
+    t_moves  = render_moves(ctx)
+    t_fa     = render_fa_radar(ctx)
+    t_season = render_season(ctx)
+
+    # Desktop 3-col (unchanged): col1 = Pulse + Weakest Spots/Lineup (heavy tile
+    # shares height with only one other), col2 = Pitching·Hitting·Opponent,
+    # col3 = Moves·FA·Season.
+    col1 = f'<div class="col">{t_pulse}{t_holes}</div>'
+    col2 = f'<div class="col">{t_pitch}{t_hit}{t_opp}</div>'
+    col3 = f'<div class="col">{t_moves}{t_fa}{t_season}</div>'
+    grid_desktop = f'<div id="grid">{col1}{col2}{col3}</div>'
+
+    # Tablet 2-col, user-chosen order, HEIGHT-BALANCED: DOWN the left column =
+    # Category Pulse (1), Recommended Moves (6), FA Radar (7), Season (8); DOWN the
+    # right = My Pitching (3), Hitting (4), Weakest Spots (2), Opponent (5). The two
+    # tall tiles (Pulse + Weakest Spots) are split one-per-column so the columns end
+    # at roughly the same height (Weakest<->Season swapped vs the raw 1,6,7,2/3,4,8,5
+    # order for balance). On a phone the two columns stack top-to-bottom.
+    colt_l = f'<div class="colt">{t_pulse}{t_moves}{t_fa}{t_season}</div>'
+    colt_r = f'<div class="colt">{t_pitch}{t_hit}{t_holes}{t_opp}</div>'
+    grid_tablet = f'<div id="gridt">{colt_l}{colt_r}</div>'
+
     return (
         f'<!DOCTYPE html><html><head><meta charset="utf-8">'
         f'<meta name="viewport" content="width=device-width,initial-scale=1">'
         f'<title>{my_team} — Dashboard</title><style>{STYLE}</style></head>'
-        f'<body><div id="wrap">{topbar}<div id="grid">{col1}{col2}{col3}</div></div></body></html>'
+        f'<body><div id="wrap">{topbar}{grid_desktop}{grid_tablet}</div></body></html>'
     )
 
 
