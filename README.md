@@ -134,7 +134,7 @@ python dashboard.py --email
 
 Open the file maximized in a browser — it's tuned for a 1440×900 viewport and should show no scrollbars.
 
-It's also **responsive**: on a tablet (≤1100px) the tiles reflow into two height-balanced columns and on a phone (≤700px) into a single column, un-pinning the fixed pane so the page scrolls normally with larger, readable text. The desktop no-scroll layout is unchanged above 1100px.
+It's also **responsive**: on a tablet (≤1100px) the tiles reflow into two columns in a fixed reading order — Category Pulse → Recommended Moves → Free-Agent Radar → Weakest Spots down the left, then My Pitching → Hitting Hot/Cold → Season → Opponent down the right — and on a phone (≤700px) into a single column in that same order, un-pinning the fixed pane so the page scrolls normally with larger, readable text. The desktop no-scroll layout is unchanged above 1100px.
 
 **Viewing on a phone/tablet:** use `--email` (or attach `previews/dashboard_{team}.html` to an email yourself) and open the **attachment** in your device browser — email apps strip the `<style>` block that holds the layout, so the attached file works but a pasted-in body won't.
 
