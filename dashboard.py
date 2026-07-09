@@ -233,10 +233,10 @@ def _fv(v, dec=0):
     return s[1:] if (dec >= 2 and 0 <= v < 1) else s
 
 
-def _tile(title, body, flex=1.0, accent=ACCENT, sub=""):
+def _tile(title, body, flex=1.0, accent=ACCENT, sub="", cls=""):
     sub_html = f'<span style="color:{MUTED};font-weight:400;text-transform:none;letter-spacing:0;font-size:10px;margin-left:6px;">{sub}</span>' if sub else ""
     return (
-        f'<div class="tile" style="flex:{flex} 1 0;min-height:0;background:{SURFACE};border:1px solid {BORDER};'
+        f'<div class="tile {cls}" style="flex:{flex} 1 0;min-height:0;background:{SURFACE};border:1px solid {BORDER};'
         f'border-top:2px solid {accent};border-radius:6px;padding:6px 10px;display:flex;flex-direction:column;overflow:hidden;">'
         f'<div style="color:{TEXT};font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.6px;'
         f'margin-bottom:4px;flex:0 0 auto;">{title}{sub_html}</div>'
@@ -416,7 +416,7 @@ def _pulse_cell(c, ctx, my_avgs, opp_avgs, my_std, opp_std, elapsed_frac, remain
 def render_category_pulse(ctx):
     matchup = ctx["matchup"]
     if not matchup or not matchup.get("categories"):
-        return _tile("Category Pulse", f'<div style="color:{MUTED};">No live matchup yet.</div>', flex=1.7)
+        return _tile("Category Pulse", f'<div style="color:{MUTED};">No live matchup yet.</div>', flex=1.7, cls="t1")
     mk = " ".join(matchup.get("my_team", "").split()); ok = " ".join(matchup.get("opp_team", "").split())
     my_avgs = ctx["weekly_avgs"].get(mk, {}); opp_avgs = ctx["weekly_avgs"].get(ok, {})
     my_std = ctx["weekly_std"].get(mk, {}); opp_std = ctx["weekly_std"].get(ok, {})
@@ -443,14 +443,14 @@ def render_category_pulse(ctx):
     close = sum(1 for (r, tier) in cls.values() if tier == "tossup")
     sub = (f'{cw}W&middot;{cl}L&middot;{ct}T &rarr; proj {pw}-{pl}-{pt}'
            + (f' &middot; &#9889;{close}' if close else ''))
-    return _tile(f"Category Pulse", grid, flex=1.45, sub=sub)
+    return _tile(f"Category Pulse", grid, flex=1.45, sub=sub, cls="t1")
 
 
 def render_opponent(ctx):
     oi = ctx["opp_intel"]; matchup = ctx["matchup"]
     opp = matchup.get("opp_team", "") if matchup else ""
     if not opp:
-        return _tile("Opponent", f'<div style="color:{MUTED};">No opponent set.</div>')
+        return _tile("Opponent", f'<div style="color:{MUTED};">No opponent set.</div>', cls="t5")
     logo = sd.fantasy_logo(ctx["team_logos"].get(" ".join(opp.split()), ""), size=18, team_name=opp)
     parts = [f'<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;">{logo}'
              f'<span style="color:{TEXT};font-weight:700;font-size:12px;">{opp}</span></div>']
@@ -486,7 +486,7 @@ def render_opponent(ctx):
             f'<span style="color:{MUTED};">strong</span> {b}<br>'
             f'<span style="color:{MUTED};">weak</span> {w}</div>'
         )
-    return _tile("Opponent This Matchup", "".join(parts))
+    return _tile("Opponent This Matchup", "".join(parts), cls="t5")
 
 
 # ── Column 2: Pitching, Hitting, Holes ──────────────────────────────────────────
@@ -521,7 +521,7 @@ def render_pitching(ctx):
     cold = _arm_movers(ctx)
     body = "".join(rows) + cold
     starts_wk = sum(1 for s in ctx["starts"] if s.get("PSP_Date", "") <= ctx["week_end_str"])
-    return _tile("My Pitching", body, flex=1.15, sub=f'{starts_wk} starts this matchup')
+    return _tile("My Pitching", body, flex=1.15, sub=f'{starts_wk} starts this matchup', cls="t3")
 
 
 def _arm_movers(ctx):
@@ -578,7 +578,7 @@ def render_hitting(ctx):
         rows += [line(d, r, ro, "&#10052;", ACCENT) for d, r, ro in cold]
     if not rows:
         rows = [f'<div style="color:{MUTED};">No hitter data.</div>']
-    return _tile("Hitting Hot / Cold", "".join(rows), sub="7-day OPS vs season")
+    return _tile("Hitting Hot / Cold", "".join(rows), sub="7-day OPS vs season", cls="t4")
 
 
 def render_holes(ctx):
@@ -604,7 +604,7 @@ def render_holes(ctx):
     if watch:
         # tighten the reused callout for the compact tile
         watch = f'<div style="margin-top:5px;font-size:10.5px;">{watch}</div>'
-    return _tile("Weakest Spots &middot; Lineup Watch", holes + watch, flex=1.25, sub="rank / worst &rarr; best FA")
+    return _tile("Weakest Spots &middot; Lineup Watch", holes + watch, flex=1.25, sub="rank / worst &rarr; best FA", cls="t2")
 
 
 # ── Column 3: Moves, FA Radar, Season ───────────────────────────────────────────
@@ -624,7 +624,7 @@ def render_moves(ctx):
     if srw:
         rows.append(f'<div style="margin-top:6px;font-size:10.5px;color:{MUTED};">'
                     f'<span style="text-transform:uppercase;letter-spacing:.4px;">Save-role watch:</span><br>' + " &middot; ".join(srw) + '</div>')
-    return _tile("Recommended Moves", "".join(rows), flex=0.85)
+    return _tile("Recommended Moves", "".join(rows), flex=0.85, cls="t6")
 
 
 def render_fa_radar(ctx):
@@ -645,7 +645,7 @@ def render_fa_radar(ctx):
     parts.append(hdr("Hitters"))
     for r in ctx["fa_hit"][:2]:
         parts.append(spline(r, r.get("_score", 0), f'{_fv(_n(r.get("OPS")),3)} OPS'))
-    return _tile("Free-Agent Radar", "".join(parts), flex=1.2, sub="top available by score")
+    return _tile("Free-Agent Radar", "".join(parts), flex=1.2, sub="top available by score", cls="t7")
 
 
 def render_season(ctx):
@@ -686,7 +686,7 @@ def render_season(ctx):
     strip = (f'<div style="margin-top:6px;"><div style="color:{MUTED};font-size:10px;text-transform:uppercase;'
              f'letter-spacing:.5px;margin-bottom:3px;">Weekly finishes</div>'
              f'<div style="display:flex;gap:3px;">{"".join(cells)}</div></div>') if cells else ""
-    return _tile("Season", top + spark + spark_sub + strip, flex=1.15)
+    return _tile("Season", top + spark + spark_sub + strip, flex=1.15, cls="t8")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -709,23 +709,34 @@ STYLE = """
   @media (max-width:1100px) {
     html, body { overflow-y:auto !important; overflow-x:hidden !important; height:auto !important; }
     #wrap { position:static !important; inset:auto !important; height:auto !important; min-height:100vh; }
-    /* Flatten the 3 desktop columns (display:contents) and reflow EVERY tile into
-       two height-balanced columns via CSS multicol, so the left side isn't much
-       taller than the right (the 3-into-2 grid wrap piled col-3 under col-1). */
-    #grid { display:block !important; column-count:2 !important; column-gap:6px !important; }
+    /* Flatten the 3 desktop columns (display:contents) so every tile becomes a direct
+       grid item, then lay them out in an EXPLICIT user-chosen order (1,6,7,2,3,4,8,5)
+       via `order` + a 2-col grid. `grid-auto-flow:column` fills column-major, so the
+       order reads DOWN the left column (1,6,7,2) then DOWN the right (3,4,8,5).
+       Multicol can't be used here: it auto-balances but ignores `order`. Row heights
+       align per-row, so a short tile paired with a tall one leaves some slack below —
+       the accepted cost of an exact order. `align-items:start` keeps tiles their
+       natural height (no stretch). */
+    #grid { display:grid !important; grid-template-columns:1fr 1fr !important;
+            grid-template-rows:repeat(4,auto) !important; grid-auto-flow:column !important;
+            align-items:start !important; column-gap:6px !important; row-gap:6px !important; }
     .col  { display:contents !important; }
-    .tile { flex:0 0 auto !important; min-height:0 !important; overflow:visible !important;
-            break-inside:avoid; -webkit-column-break-inside:avoid; margin:0 0 6px !important; }
+    .tile { flex:0 0 auto !important; min-height:0 !important; overflow:visible !important; margin:0 !important; }
     .tile-body { flex:0 0 auto !important; overflow:visible !important; font-size:13.5px !important; }
     .pulse-grid { height:auto !important; grid-auto-rows:auto !important; grid-template-columns:repeat(3,1fr) !important; }
     .topbar { flex-wrap:wrap !important; gap:8px !important; }
     .topbar-chips { flex-wrap:wrap !important; justify-content:flex-start !important; row-gap:6px; }
+    /* User-chosen panel order: 1, 6, 7, 2, 3, 4, 8, 5 (Opponent last). */
+    .t1 { order:1 !important; } .t6 { order:2 !important; } .t7 { order:3 !important; }
+    .t2 { order:4 !important; } .t3 { order:5 !important; } .t4 { order:6 !important; }
+    .t8 { order:7 !important; } .t5 { order:8 !important; }
   }
 
-  /* ---- Phone (<=700px): single column, bigger text, 2-wide category grid
-     (roomier for the OPS/ERA/WHIP rate values than 3-wide). ---- */
+  /* ---- Phone (<=700px): single column (straight down in the same order), bigger
+     text, 2-wide category grid (roomier for OPS/ERA/WHIP than 3-wide). ---- */
   @media (max-width:700px) {
-    #grid { column-count:1 !important; }
+    #grid { grid-template-columns:1fr !important; grid-template-rows:none !important;
+            grid-auto-flow:row !important; }
     .tile-body { font-size:14.5px !important; }
     .pulse-grid { grid-template-columns:repeat(2,1fr) !important; }
     .chip { padding:0 6px !important; }
