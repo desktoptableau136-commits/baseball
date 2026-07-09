@@ -114,6 +114,23 @@ python weekly_recap.py --dry-run --no-refresh
 
 After `--dry-run`, open `previews/recap_week_N.html` in any browser.
 
+### Single-Viewport Dashboard
+
+A glance-able "command dashboard" that condenses the entire digest onto **one 1440×900 laptop screen with zero scrolling** — even coverage of every topic (matchup, category pulse, opponent, pitching, hitting hot/cold, weakest spots, moves, free agents, season). It reuses the digest's exact scoring so every number matches.
+
+```bash
+# Write previews/dashboard_{team}.html from the existing snapshot (fast, no email)
+python dashboard.py
+
+# Refresh data first, then write
+python dashboard.py --refresh
+
+# Another team's dashboard (needs all_matchups in the snapshot)
+python dashboard.py --team "Houck Tuah"
+```
+
+Open the file maximized in a browser — it's tuned for a 1440×900 viewport and should show no scrollbars.
+
 **On Windows PowerShell**, if `git` isn't found, run this first to restore it:
 ```powershell
 $env:PATH = [System.Environment]::GetEnvironmentVariable("PATH","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("PATH","User")
