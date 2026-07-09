@@ -332,10 +332,13 @@ def _strip_accents(name: str) -> str:
     )
 
 
-def _get_last_starts(days_back: int = 12) -> dict:
+def _get_team_recent_starts(days_back: int = 14) -> dict:
     """
-    Returns {pitcher_name: (date_str, team_name)} â€” most recent confirmed start per pitcher
-    over the past `days_back` days.  Used to project rotation turns for unannounced slots.
+    Returns {team_name: [(date_str, pitcher_name), ...]} â€” every confirmed start
+    over the past `days_back` days, sorted chronologically per team.  Used to
+    reconstruct each team's rotation ORDER so unannounced slots can be projected
+    by advancing the rotation through the team's actual upcoming games (rather
+    than a crude last_start + 6 calendar days guess).
     """
     end_str   = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
     start_str = (datetime.now() - timedelta(days=days_back)).strftime("%Y-%m-%d")
@@ -355,7 +358,7 @@ def _get_last_starts(days_back: int = 12) -> dict:
             game_meta[pk] = (d["date"], g["teams"]["home"]["team"]["name"],
                              g["teams"]["away"]["team"]["name"])
 
-    last_starts = {}  # pitcher_name -> (date_str, team_name)
+    team_starts = {}  # team_name -> list of (date_str, pitcher_name)
     all_pks = list(game_meta)
     for i in range(0, len(all_pks), 30):
         chunk = all_pks[i : i + 30]
@@ -380,9 +383,11 @@ def _get_last_starts(days_back: int = 12) -> dict:
                         continue
                     cleaned = _strip_accents(name)
                     team    = g["teams"][side]["team"]["name"]
-                    if cleaned not in last_starts or date_str > last_starts[cleaned][0]:
-                        last_starts[cleaned] = (date_str, team)
-    return last_starts
+                    team_starts.setdefault(team, []).append((date_str, cleaned))
+
+    for team in team_starts:
+        team_starts[team].sort()  # chronological
+    return team_starts
 
 
 def get_probable_starters(days: int = SP_DAYS_OUT) -> pd.DataFrame:
@@ -465,42 +470,85 @@ def get_probable_starters(days: int = SP_DAYS_OUT) -> pd.DataFrame:
         log("  Batch probable starters returned nothing â€” falling back to live-feed method")
         return _probable_starters_live_feed(days)
 
-    # Step 3 â€” rotation projection: last_start + 6 per pitcher (Â±1 day tolerance)
-    # Superseded by any confirmed MLB API entry (those are already in frames).
-    last_starts = _get_last_starts()
+    # Step 3 â€” rotation projection: advance each team's rotation ORDER through its
+    # actual upcoming games (one pitcher per game), rather than a crude
+    # last_start + 6 calendar days guess. Walking real games (a) makes each game
+    # slot exclusive, so two projected SPs can never land on the same team/day,
+    # and (b) counts turns by games (honoring off-days/doubleheaders), which also
+    # surfaces legitimate two-start weeks. Confirmed MLB entries (already in
+    # frames) act as anchors that re-sync the cycle.
+    _ROT_RECENCY   = 11  # a rotation member must have started within this many days
+    _PROJ_MIN_DAYS = 4   # only surface projections >= this many days out (near-term
+                         # slots are usually confirmed by MLB soon, so an early
+                         # projection there is noise). The walk still advances the
+                         # rotation through near-term games to keep phase; it just
+                         # doesn't EMIT a projected row until the date is far enough.
+    team_recent  = _get_team_recent_starts()
+    today        = datetime.now().date()
 
-    # Fold confirmed upcoming starts in so pitchers with a confirmed slot
-    # don't also get a projected entry via the +6 rule.
+    # confirmed upcoming start date per (team, pitcher) so we never project a
+    # pitcher onto an open game earlier than a start the MLB API already confirmed
+    confirmed_date = {}  # (team, pitcher) -> date_str
     for pitcher, (date_str, team) in confirmed_upcoming.items():
-        if pitcher not in last_starts or date_str > last_starts[pitcher][0]:
-            last_starts[pitcher] = (date_str, team)
+        confirmed_date[(team, pitcher)] = date_str
 
-    team_rotation = {}  # team_name -> [(pitcher_name, last_date_str)]
-    for pitcher, (last_date_str, team) in last_starts.items():
-        team_rotation.setdefault(team, []).append((pitcher, last_date_str))
+    # confirmed pitcher per (team, date) slot, to anchor/re-sync the walk
+    confirmed_pitcher = {}  # (team, date_str) -> pitcher_name
+    for pitcher, (date_str, team) in confirmed_upcoming.items():
+        confirmed_pitcher[(team, date_str)] = pitcher
 
-    # For each pitcher find their best-matching unconfirmed game slot (min |date - (last+6)|)
-    pitcher_best = {}  # pitcher_name -> (date_str, ha, delta)
+    # upcoming games grouped per team, chronological
+    team_games = {}  # team_name -> list of (date_str, ha)
     for pk, (date_str, home, away) in game_meta.items():
-        game_date = datetime.strptime(date_str, "%Y-%m-%d").date()
         for team, opp, side in [(home, away, "home"), (away, home, "away")]:
-            if (team, date_str) in confirmed_slots:
-                continue
             ha = f"vs {opp}" if side == "home" else f"@ {home}"
-            for pitcher, last_date_str in team_rotation.get(team, []):
-                last_date = datetime.strptime(last_date_str, "%Y-%m-%d").date()
-                delta     = abs((game_date - (last_date + timedelta(days=6))).days)
-                if delta <= 1 and (pitcher not in pitcher_best or delta < pitcher_best[pitcher][2]):
-                    pitcher_best[pitcher] = (date_str, ha, delta)
+            team_games.setdefault(team, []).append((date_str, ha))
 
-    proj_count = len(pitcher_best)
-    for pitcher, (date_str, ha, _) in pitcher_best.items():
-        frames.append({
-            "PlayerName":    pitcher,
-            "PSP_HomeVAway": ha,
-            "PSP_Date":      date_str,
-            "PSP_Projected": True,
-        })
+    proj_count = 0
+    for team, games in team_games.items():
+        games.sort(key=lambda g: g[0])
+
+        # rotation queue: members who started within the recency guard, ordered
+        # by last start date ascending (longest-rested / most "due" at the front)
+        last_by_pitcher = {}
+        for d, p in team_recent.get(team, []):
+            last_by_pitcher[p] = d  # chronological input -> keeps latest
+        members = sorted(
+            ((d, p) for p, d in last_by_pitcher.items()
+             if (today - datetime.strptime(d, "%Y-%m-%d").date()).days <= _ROT_RECENCY),
+        )
+        queue = [p for _, p in members]
+
+        for date_str, ha in games:
+            conf = confirmed_pitcher.get((team, date_str))
+            if conf is not None:
+                # confirmed slot (already in frames) â€” rotate the anchor to the back
+                if conf in queue:
+                    queue.remove(conf)
+                    queue.append(conf)
+                continue
+            # next due pitcher who isn't already spoken for by a later confirmed start
+            chosen_idx = None
+            for i, p in enumerate(queue):
+                cd = confirmed_date.get((team, p))
+                if cd and cd > date_str:
+                    continue
+                chosen_idx = i
+                break
+            if chosen_idx is None:
+                continue
+            pitcher = queue.pop(chosen_idx)
+            queue.append(pitcher)  # just started -> back of the rotation
+            days_out = (datetime.strptime(date_str, "%Y-%m-%d").date() - today).days
+            if days_out < _PROJ_MIN_DAYS:
+                continue  # phase kept, but too near to surface as a projection
+            frames.append({
+                "PlayerName":    pitcher,
+                "PSP_HomeVAway": ha,
+                "PSP_Date":      date_str,
+                "PSP_Projected": True,
+            })
+            proj_count += 1
 
     n_confirmed = len(frames) - proj_count
     # Sort confirmed before projected so dedup keeps confirmed when pitcher appears in both
