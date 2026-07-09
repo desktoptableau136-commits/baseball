@@ -704,13 +704,19 @@ def build_weekly_roto_rankings(roto, prev_week, logos):
 # Rate cats are averaged across matchups; everything else is a season sum.
 _RATE_CATS = {"OPS", "ERA", "WHIP"}
 
-def build_season_roto_rankings(roto, logos):
-    """Season-long twin of the roto rankings grid: aggregate EVERY matchup into
-    season category totals (counting cats summed, rate cats averaged) and rank
-    teams by cumulative roto score. Same compact heat-mapped 12-cat layout as the
-    per-matchup version, but season-to-date rather than a single matchup."""
+def build_season_roto_rankings(roto, logos, season_totals=None):
+    """Season-long twin of the roto rankings grid: rank teams by cumulative roto score
+    (summed weekly roto points) but DISPLAY each category's true season-to-date value
+    from ESPN's cumulative `mTeam` view (`season_totals`, snapshot `season_cat_totals`).
+    Ranking/coloring and the displayed value are independent: points reflect who won each
+    category week by week; the value is ESPN's innings/AB-weighted season stat (rate cats
+    like ERA can't be recovered by averaging weekly values). Falls back to the old
+    summed/averaged weekly value only when a season total is missing."""
     if not roto:
         return ""
+
+    season_totals = season_totals or {}
+    _st_lookup = {" ".join(k.split()): v for k, v in season_totals.items()}
 
     agg: dict[str, dict] = {}
     for r in roto:
@@ -770,10 +776,15 @@ def build_season_roto_rankings(roto, logos):
         logo = fantasy_logo(logos.get(" ".join(team.split()), ""), 16, team)
         rank_color = GREEN if rank <= 3 else (RED if rank >= n - 2 else MUTED)
 
+        st_row = _st_lookup.get(" ".join(team.split()), {})
         stat_cells = ""
         for c in _CAT_ORDER:
             pts = t["pts"][c]
-            if c in _RATE_CATS:
+            # Prefer ESPN's true cumulative season value; fall back to the old
+            # summed/averaged weekly value only when a season total is missing.
+            if c in st_row and st_row[c] is not None:
+                val = st_row[c]
+            elif c in _RATE_CATS:
                 val = t["vsum"][c] / t["vcnt"][c] if t["vcnt"][c] else 0.0
             else:
                 val = t["vsum"][c]
@@ -827,7 +838,7 @@ def build_season_roto_rankings(roto, logos):
 
     return (
         section_head("Season Roto Rankings",
-                     "Every matchup combined \xb7 counting cats summed, rate cats averaged \xb7 "
+                     "Ranked by cumulative roto points \xb7 category values are true season-to-date (ESPN) \xb7 "
                      "bright green = #1 \xb7 light green = #2 \xb7 amber = 2nd-last \xb7 red = last") +
         table
     )
@@ -1713,7 +1724,7 @@ def build_recap(snap):
         _traj_anchor,
         build_trajectory(weekly_results, standings, logos),
         f'<div style="margin-top:28px;"></div>',
-        build_season_roto_rankings(roto, logos),
+        build_season_roto_rankings(roto, logos, snap.get("season_cat_totals")),
         _TOP_LINK_DIV,
     ]
     body = "\n".join(p for p in body_parts if p)

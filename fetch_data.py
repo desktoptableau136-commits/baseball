@@ -860,6 +860,42 @@ def get_weekly_matchup_results(league) -> dict:
     return weekly
 
 
+def get_season_cat_totals(league) -> dict:
+    """True season-to-date category totals per team, straight from ESPN's cumulative
+    `mTeam` view (`valuesByStat`). Returns {team_name: {CAT: value}} for the 12 ROTO_CATS.
+
+    These are the ONLY correct season rate stats (ERA/WHIP/OPS): summing or averaging
+    each matchup's weekly rate value is mathematically wrong (a 5-IP week can't weigh the
+    same as a 40-IP week). ESPN's cumulative value is innings/AB-weighted and reconciles
+    with the site to the digit. The season roto grids DISPLAY these values but still RANK
+    by summed weekly roto points, so the two columns stay independent by design."""
+    try:
+        from espn_api.baseball.constant import STATS_MAP
+        cat_to_id = {}
+        for sid, name in STATS_MAP.items():
+            if name in ROTO_CATS and name not in cat_to_id:
+                cat_to_id[name] = str(sid)
+        data = league.espn_request.league_get(params={"view": "mTeam"})
+        id2name = {t.team_id: t.team_name for t in league.teams}
+        totals = {}
+        for t in data.get("teams", []):
+            name = id2name.get(t.get("id")) or t.get("name") or ""
+            if not name:
+                continue
+            vbs = t.get("valuesByStat") or {}
+            row = {}
+            for cat, sid in cat_to_id.items():
+                v = vbs.get(sid)
+                if v is not None:
+                    row[cat] = v
+            totals[name] = row
+        log(f"  Season category totals: {len(totals)} teams")
+        return totals
+    except Exception as e:
+        log(f"  Season category totals FAILED: {e}")
+        return {}
+
+
 def get_all_roto(league) -> list:
     results = []
     current_week = getattr(league, 'currentMatchupPeriod', 25)
@@ -1724,7 +1760,8 @@ def main():
     print("\n[4/10] Pulling roto scores...")
     roto = get_all_roto(league)
     weekly_results = get_weekly_matchup_results(league)
-    print(f"       {len(roto)} roto rows, {len(weekly_results)} weeks of matchup results")
+    season_cat_totals = get_season_cat_totals(league)
+    print(f"       {len(roto)} roto rows, {len(weekly_results)} weeks of matchup results, {len(season_cat_totals)} season-total teams")
 
     print("\n[5/10] Pulling transactions...")
     transactions = get_transactions(league)
@@ -1807,6 +1844,7 @@ def main():
         "pitchers":        pitchers,
         "hitters":         hitters,
         "roto":            roto,
+        "season_cat_totals": season_cat_totals,
         "weekly_results":  {str(k): v for k, v in weekly_results.items()},
         "transactions":    transactions,
         "current_matchup": current_matchup,

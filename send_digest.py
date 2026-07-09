@@ -3365,16 +3365,21 @@ def build_season_trajectory(weekly_results, standings, my_team=MY_TEAM):
 # Cats whose season value is an average, not a sum (rate stats).
 _SEASON_RATE_CATS = {"OPS", "ERA", "WHIP"}
 
-def build_season_roto_rankings(roto, my_team=MY_TEAM, team_logos=None):
-    """Season-long roto rankings grid: aggregate EVERY matchup into season category
-    totals (counting cats summed, rate cats averaged) and rank teams by cumulative
-    roto score. Same compact heat-mapped 12-cat layout as the live Matchup N Roto
-    Rankings panel, but season-to-date. Ported from weekly_recap.build_season_roto_rankings
-    (the two scripts don't import each other)."""
+def build_season_roto_rankings(roto, my_team=MY_TEAM, team_logos=None, season_totals=None):
+    """Season-long roto rankings grid: rank teams by cumulative roto score (summed weekly
+    roto points) but DISPLAY each category's true season-to-date value from ESPN's
+    cumulative `mTeam` view (`season_totals`, snapshot `season_cat_totals`). Ranking/coloring
+    and the displayed value are independent by design: points reflect who won each category
+    week by week; the value is ESPN's innings/AB-weighted season stat (rate cats like ERA
+    can't be recovered by averaging weekly values). Falls back to the old summed/averaged
+    weekly value only when a season total is missing. Ported from
+    weekly_recap.build_season_roto_rankings (the two scripts don't import each other)."""
     if not roto:
         return ""
 
     team_logos = team_logos or {}
+    season_totals = season_totals or {}
+    _st_lookup = {" ".join(k.split()): v for k, v in season_totals.items()}
     _order = ["R", "HR", "RBI", "SB", "OPS", "B_SO", "K", "QS", "W", "ERA", "WHIP", "SVHD"]
 
     agg: dict = {}
@@ -3445,10 +3450,15 @@ def build_season_roto_rankings(roto, my_team=MY_TEAM, team_logos=None):
         logo = fantasy_logo(team_logos.get(" ".join(team.split()), ""), 16, team)
         rank_color = GREEN if rank <= 3 else (RED if rank >= n - 2 else MUTED)
 
+        st_row = _st_lookup.get(" ".join(team.split()), {})
         stat_cells = ""
         for c in _order:
             pts = t["pts"][c]
-            if c in _SEASON_RATE_CATS:
+            # Prefer ESPN's true cumulative season value; fall back to the old
+            # summed/averaged weekly value only when a season total is missing.
+            if c in st_row and st_row[c] is not None:
+                val = st_row[c]
+            elif c in _SEASON_RATE_CATS:
                 val = t["vsum"][c] / t["vcnt"][c] if t["vcnt"][c] else 0.0
             else:
                 val = t["vsum"][c]
@@ -3501,7 +3511,7 @@ def build_season_roto_rankings(roto, my_team=MY_TEAM, team_logos=None):
 
     return (
         section_head("Season Roto Rankings",
-                     "Every matchup combined \xb7 counting cats summed, rate cats averaged \xb7 "
+                     "Ranked by cumulative roto points \xb7 category values are true season-to-date (ESPN) \xb7 "
                      "bright green = #1 \xb7 light green = #2 \xb7 amber = 2nd-last \xb7 red = last") +
         table
     )
@@ -4879,7 +4889,8 @@ def build_email(snap, override_team=None):
         luck_section,                                                                     # 15
         build_season_trajectory(weekly_results, standings, my_team=my_team),              # 16 Season Trajectory (W/L/T by week + streak)
         '<div style="margin-top:28px;"></div>',                                            # breathing room before Season Roto Rankings
-        build_season_roto_rankings(roto, my_team=my_team, team_logos=team_logos),         # 17 Season Roto Rankings (all matchups aggregated)
+        build_season_roto_rankings(roto, my_team=my_team, team_logos=team_logos,
+                                   season_totals=snap.get("season_cat_totals")),          # 17 Season Roto Rankings (all matchups aggregated)
         band_divider("REFERENCE", anchor="band-glossary"),                                # REFERENCE band header
         build_glossary_section(),                                                         # 16 Glossary & Methodology
     ]
