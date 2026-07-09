@@ -237,10 +237,10 @@ def _tile(title, body, flex=1.0, accent=ACCENT, sub=""):
     sub_html = f'<span style="color:{MUTED};font-weight:400;text-transform:none;letter-spacing:0;font-size:10px;margin-left:6px;">{sub}</span>' if sub else ""
     return (
         f'<div style="flex:{flex} 1 0;min-height:0;background:{SURFACE};border:1px solid {BORDER};'
-        f'border-top:2px solid {accent};border-radius:6px;padding:8px 11px;display:flex;flex-direction:column;overflow:hidden;">'
+        f'border-top:2px solid {accent};border-radius:6px;padding:6px 10px;display:flex;flex-direction:column;overflow:hidden;">'
         f'<div style="color:{TEXT};font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.6px;'
-        f'margin-bottom:6px;flex:0 0 auto;">{title}{sub_html}</div>'
-        f'<div style="flex:1 1 0;min-height:0;overflow:hidden;font-size:12.5px;color:{TEXT};line-height:1.5;">{body}</div>'
+        f'margin-bottom:4px;flex:0 0 auto;">{title}{sub_html}</div>'
+        f'<div style="flex:1 1 0;min-height:0;overflow:hidden;font-size:12.5px;color:{TEXT};line-height:1.4;">{body}</div>'
         f'</div>'
     )
 
@@ -566,15 +566,15 @@ def render_hitting(ctx):
         hrp = _n(r.get("HR_Probability"))
         hr_s = f' <span style="color:{MUTED};font-size:9px;">HR{hrp*100:.0f}%</span>' if hrp > 0 else ""
         return (
-            f'<div style="display:flex;justify-content:space-between;gap:5px;white-space:nowrap;padding:1px 0;">'
+            f'<div style="display:flex;justify-content:space-between;gap:5px;white-space:nowrap;padding:3.5px 0;border-bottom:1px solid {BORDER};">'
             f'<span style="overflow:hidden;text-overflow:ellipsis;color:{TEXT};">{icon} {r.get("PlayerName")} '
-            f'<span style="color:{MUTED};font-size:9px;">{_pos(r)}</span></span>'
+            f'<span style="color:{MUTED};font-size:10px;">{_pos(r)}</span></span>'
             f'<span style="flex:0 0 auto;"><span style="color:{col};font-weight:700;">{_fv(r_ops,3)}</span>'
-            f'<span style="color:{MUTED};font-size:9px;"> ({d:+.3f})</span>{hr_s} {_mini_badge(sd._blend(r, sd.hitter_score, ctx["best_recent_h"]))}</span></div>'
+            f'<span style="color:{MUTED};font-size:10px;"> ({d:+.3f})</span>{hr_s} {_mini_badge(sd._blend(r, sd.hitter_score, ctx["best_recent_h"]))}</span></div>'
         )
     rows = [line(d, r, ro, "&#128293;", GREEN) for d, r, ro in hot]
     if cold:
-        rows.append(f'<div style="border-top:1px solid {BORDER};margin:2px 0;"></div>')
+        rows.append(f'<div style="border-top:1px solid {BORDER};margin:4px 0;"></div>')
         rows += [line(d, r, ro, "&#10052;", ACCENT) for d, r, ro in cold]
     if not rows:
         rows = [f'<div style="color:{MUTED};">No hitter data.</div>']
@@ -645,7 +645,7 @@ def render_fa_radar(ctx):
     parts.append(hdr("Hitters"))
     for r in ctx["fa_hit"][:2]:
         parts.append(spline(r, r.get("_score", 0), f'{_fv(_n(r.get("OPS")),3)} OPS'))
-    return _tile("Free-Agent Radar", "".join(parts), flex=1.0, sub="top available by score")
+    return _tile("Free-Agent Radar", "".join(parts), flex=1.2, sub="top available by score")
 
 
 def render_season(ctx):
@@ -686,7 +686,7 @@ def render_season(ctx):
     strip = (f'<div style="margin-top:6px;"><div style="color:{MUTED};font-size:10px;text-transform:uppercase;'
              f'letter-spacing:.5px;margin-bottom:3px;">Weekly finishes</div>'
              f'<div style="display:flex;gap:3px;">{"".join(cells)}</div></div>') if cells else ""
-    return _tile("Season", top + spark + spark_sub + strip, flex=1.3)
+    return _tile("Season", top + spark + spark_sub + strip, flex=1.15)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -698,10 +698,10 @@ STYLE = """
   html,body { margin:0; padding:0; height:100%; }
   body { background:#060b18; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
          color:#e2e8f0; overflow:hidden; }
-  #wrap { position:fixed; inset:0; display:flex; flex-direction:column; gap:7px; padding:8px; }
+  #wrap { position:fixed; inset:0; display:flex; flex-direction:column; gap:6px; padding:6px; }
   #grid { flex:1 1 auto; min-height:0; display:grid; grid-template-columns:1fr 1fr 1fr;
-          grid-template-rows:minmax(0,1fr); gap:7px; }
-  .col { display:flex; flex-direction:column; gap:7px; min-height:0; height:100%; }
+          grid-template-rows:minmax(0,1fr); gap:6px; }
+  .col { display:flex; flex-direction:column; gap:6px; min-height:0; height:100%; }
 """
 
 
