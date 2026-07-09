@@ -462,7 +462,7 @@ def render_opponent(ctx):
 
     if oi:
         two = oi.get("two_start", [])
-        two_s = ("".join(f'<span style="color:{PURPLE};font-weight:700;">{r.get("PlayerName")}</span>&#215;2 ' for r in two)) if two else ""
+        two_s = ("".join(f'{sd.team_logo(r.get("Team"), 12)}<span style="color:{PURPLE};font-weight:700;">{r.get("PlayerName")}</span>&#215;2 ' for r in two)) if two else ""
         left.append(
             f'<div style="color:{MUTED};font-size:10px;margin-bottom:3px;">'
             f'<span style="color:{TEXT};font-weight:700;">{oi.get("n_starts",0)}</span> starts / '
@@ -472,7 +472,7 @@ def render_opponent(ctx):
         if hot:
             rows = "".join(
                 f'<div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'
-                f'<span style="color:{TEXT};">{r.get("PlayerName")}</span> '
+                f'{sd.team_logo(r.get("Team"), 13)}<span style="color:{TEXT};">{r.get("PlayerName")}</span> '
                 f'<span style="color:{MUTED};">{_pos(r)}</span> '
                 f'<span style="color:{GREEN};font-weight:700;">{_fv(ops,3)}</span></div>'
                 for r, ops in hot
@@ -523,10 +523,22 @@ def render_pitching(ctx):
         qs = sd.qs_probability(r)
         hva = str(r.get("PSP_HomeVAway") or "")
         two = ' <span style="color:%s;font-weight:700;">&#215;2</span>' % PURPLE if _starts_this_week(r, datetime.now().strftime("%Y-%m-%d"), ctx["week_end_str"]) >= 2 else ""
+        # QS / 5K+ badges annotate the projected line (same rule as the digest's My
+        # Upcoming Starts, so they never contradict the Proj. Line shown here).
+        _pip, _per, _pk = vals if vals else (0, 0, 0)
+        badges = ""
+        if vals and sd._proj_is_qs(_pip, _per):
+            badges += (f' <span style="font-size:8px;font-weight:700;color:{GREEN};'
+                       f'background:rgba(34,197,94,0.12);border:1px solid rgba(34,197,94,0.35);'
+                       f'border-radius:3px;padding:0 3px;vertical-align:middle;">QS</span>')
+        if vals and _pk >= 5:
+            badges += (f' <span style="font-size:8px;font-weight:700;color:{YELLOW};'
+                       f'background:rgba(245,158,11,0.12);border:1px solid rgba(245,158,11,0.35);'
+                       f'border-radius:3px;padding:0 3px;vertical-align:middle;">5K+</span>')
         rows.append(
             f'<div style="display:flex;justify-content:space-between;gap:6px;padding:2px 0;white-space:nowrap;border-bottom:1px solid {BORDER};">'
-            f'<span style="overflow:hidden;text-overflow:ellipsis;"><span style="color:{TEXT};font-weight:600;">{r.get("PlayerName")}</span>{two} '
-            f'<span style="color:{MUTED};font-size:10px;">{dlabel} {hva}</span></span>'
+            f'<span style="overflow:hidden;text-overflow:ellipsis;">{sd.team_logo(r.get("Team"), 14)}<span style="color:{TEXT};font-weight:600;">{r.get("PlayerName")}</span>{two} '
+            f'<span style="color:{MUTED};font-size:10px;">{dlabel} {hva}</span>{badges}</span>'
             f'<span style="flex:0 0 auto;"><span style="color:{MUTED};font-size:10px;">{line}</span> '
             f'<span style="color:{ACCENT};font-size:10px;">QS{qs}%</span> {_mini_badge(sd._score_p(r, ctx["best_recent_p"]))}</span></div>'
         )
@@ -583,7 +595,7 @@ def render_hitting(ctx):
         hr_s = f' <span style="color:{MUTED};font-size:9px;">HR{hrp*100:.0f}%</span>' if hrp > 0 else ""
         return (
             f'<div style="display:flex;justify-content:space-between;gap:5px;white-space:nowrap;padding:3.5px 0;border-bottom:1px solid {BORDER};">'
-            f'<span style="overflow:hidden;text-overflow:ellipsis;color:{TEXT};">{icon} {r.get("PlayerName")} '
+            f'<span style="overflow:hidden;text-overflow:ellipsis;color:{TEXT};">{icon} {sd.team_logo(r.get("Team"), 14)}{r.get("PlayerName")} '
             f'<span style="color:{MUTED};font-size:10px;">{_pos(r)}</span></span>'
             f'<span style="flex:0 0 auto;"><span style="color:{col};font-weight:700;">{_fv(r_ops,3)}</span>'
             f'<span style="color:{MUTED};font-size:10px;"> ({d:+.3f})</span>{hr_s} {_mini_badge(sd._blend(r, sd.hitter_score, ctx["best_recent_h"]))}</span></div>'
@@ -603,17 +615,18 @@ def render_holes(ctx):
     for p in ranked[:3]:
         worst = p.get("worst_player"); fa = (p.get("top_fa") or [None])[0]
         wname = worst.get("PlayerName", "—") if worst else "—"
+        wlogo = sd.team_logo(worst.get("Team"), 13) if worst else ""
         wsc = int(worst.get("_pscore", 0)) if worst else 0
         fa_s = ""
         if fa:
             fsc = int(fa.get("_pscore", 0))
             gain = fsc - wsc
-            fa_s = (f' &rarr; <span style="color:{GREEN if gain>0 else MUTED};">{fa.get("PlayerName")}</span> {_mini_badge(fsc)}')
+            fa_s = (f' &rarr; {sd.team_logo(fa.get("Team"), 13)}<span style="color:{GREEN if gain>0 else MUTED};">{fa.get("PlayerName")}</span> {_mini_badge(fsc)}')
         rows.append(
             f'<div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:2px 0;border-bottom:1px solid {BORDER};">'
             f'<span style="color:{YELLOW};font-weight:700;">{p["pos"]}</span> '
             f'<span style="color:{MUTED};font-size:10px;">#{p["rank"]}/{p["n_teams"]}</span> '
-            f'<span style="color:{TEXT};">{wname}</span> {_mini_badge(wsc)}{fa_s}</div>'
+            f'{wlogo}<span style="color:{TEXT};">{wname}</span> {_mini_badge(wsc)}{fa_s}</div>'
         )
     holes = "".join(rows) if rows else f'<div style="color:{MUTED};">Balanced roster.</div>'
     watch = sd.build_bench_watch(ctx["lineup_eff_current"]) if ctx["lineup_eff_current"] else ""
@@ -646,7 +659,7 @@ def render_moves(ctx):
 def render_fa_radar(ctx):
     def spline(r, sc, extra):
         return (f'<div style="display:flex;justify-content:space-between;gap:6px;white-space:nowrap;padding:2px 0;border-bottom:1px solid {BORDER};">'
-                f'<span style="overflow:hidden;text-overflow:ellipsis;color:{TEXT};">{r.get("PlayerName")} '
+                f'<span style="overflow:hidden;text-overflow:ellipsis;color:{TEXT};">{sd.team_logo(r.get("Team"), 13)}{r.get("PlayerName")} '
                 f'<span style="color:{MUTED};font-size:10px;">{_pos(r)}</span></span>'
                 f'<span style="flex:0 0 auto;"><span style="color:{MUTED};font-size:10px;">{extra}</span> {_mini_badge(sc)}</span></div>')
     def hdr(t):
@@ -801,7 +814,7 @@ def build_dashboard(snap, my_team):
     return (
         f'<!DOCTYPE html><html><head><meta charset="utf-8">'
         f'<meta name="viewport" content="width=device-width,initial-scale=1">'
-        f'<title>{my_team} — Dashboard</title><style>{STYLE}</style></head>'
+        f'<title>Dashboard — {my_team}</title><style>{STYLE}</style></head>'
         f'<body><div id="wrap">{topbar}{grid_desktop}{grid_tablet}</div></body></html>'
     )
 
