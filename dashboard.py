@@ -236,11 +236,11 @@ def _fv(v, dec=0):
 def _tile(title, body, flex=1.0, accent=ACCENT, sub=""):
     sub_html = f'<span style="color:{MUTED};font-weight:400;text-transform:none;letter-spacing:0;font-size:10px;margin-left:6px;">{sub}</span>' if sub else ""
     return (
-        f'<div style="flex:{flex} 1 0;min-height:0;background:{SURFACE};border:1px solid {BORDER};'
+        f'<div class="tile" style="flex:{flex} 1 0;min-height:0;background:{SURFACE};border:1px solid {BORDER};'
         f'border-top:2px solid {accent};border-radius:6px;padding:6px 10px;display:flex;flex-direction:column;overflow:hidden;">'
         f'<div style="color:{TEXT};font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.6px;'
         f'margin-bottom:4px;flex:0 0 auto;">{title}{sub_html}</div>'
-        f'<div style="flex:1 1 0;min-height:0;overflow:hidden;font-size:12.5px;color:{TEXT};line-height:1.4;">{body}</div>'
+        f'<div class="tile-body" style="flex:1 1 0;min-height:0;overflow:hidden;font-size:12.5px;color:{TEXT};line-height:1.4;">{body}</div>'
         f'</div>'
     )
 
@@ -315,7 +315,7 @@ def render_topbar(ctx):
 
     def chip(label, value, vcolor=TEXT):
         return (
-            f'<div style="text-align:center;padding:0 12px;border-left:1px solid {BORDER};">'
+            f'<div class="chip" style="text-align:center;padding:0 12px;border-left:1px solid {BORDER};">'
             f'<div style="color:{MUTED};font-size:8px;text-transform:uppercase;letter-spacing:.6px;">{label}</div>'
             f'<div style="color:{vcolor};font-size:16px;font-weight:800;margin-top:1px;white-space:nowrap;">{value}</div>'
             f'</div>'
@@ -334,14 +334,14 @@ def render_topbar(ctx):
 
     opp = matchup.get("opp_team", "") if matchup else ""
     return (
-        f'<div style="flex:0 0 auto;background:linear-gradient(135deg,#0b1a38,#0f172a);border:1px solid {BORDER};'
+        f'<div class="topbar" style="flex:0 0 auto;background:linear-gradient(135deg,#0b1a38,#0f172a);border:1px solid {BORDER};'
         f'border-radius:6px;padding:8px 12px;display:flex;align-items:center;justify-content:space-between;gap:10px;">'
         f'<div style="display:flex;align-items:center;gap:8px;min-width:0;">{logo}'
         f'<div style="min-width:0;"><div style="color:{TEXT};font-size:17px;font-weight:900;letter-spacing:-.5px;'
         f'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{my_team}</div>'
         f'<div style="color:#4b7bc4;font-size:9px;text-transform:uppercase;letter-spacing:.6px;">'
         f'Command Dashboard{" &middot; vs " + opp if opp else ""} &middot; {fresh}</div></div></div>'
-        f'<div style="display:flex;align-items:center;">{chips}</div>'
+        f'<div class="topbar-chips" style="display:flex;align-items:center;">{chips}</div>'
         f'</div>'
     )
 
@@ -432,7 +432,7 @@ def render_category_pulse(ctx):
         for c in matchup["categories"]
     )
     grid = (
-        f'<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:4px;height:100%;'
+        f'<div class="pulse-grid" style="display:grid;grid-template-columns:repeat(4,1fr);gap:4px;height:100%;'
         f'grid-auto-rows:1fr;">{cells}</div>'
     )
     cw = sum(1 for c in matchup["categories"] if c["result"] == "W")
@@ -702,6 +702,31 @@ STYLE = """
   #grid { flex:1 1 auto; min-height:0; display:grid; grid-template-columns:1fr 1fr 1fr;
           grid-template-rows:minmax(0,1fr); gap:6px; }
   .col { display:flex; flex-direction:column; gap:6px; min-height:0; height:100%; }
+
+  /* ---- Tablet (<=1100px): 2 columns, un-pin the page and allow normal scrolling.
+     Tiles size to their content (no clipping) since the single no-scroll pane only
+     makes sense on a wide screen. Desktop (>1100px) is untouched. ---- */
+  @media (max-width:1100px) {
+    html, body { overflow-y:auto !important; overflow-x:hidden !important; height:auto !important; }
+    #wrap { position:static !important; inset:auto !important; height:auto !important; min-height:100vh; }
+    #grid { grid-template-columns:1fr 1fr !important; grid-template-rows:none !important; }
+    .col  { height:auto !important; }
+    .tile { flex:0 0 auto !important; min-height:0 !important; overflow:visible !important; }
+    .tile-body { flex:0 0 auto !important; overflow:visible !important; font-size:13.5px !important; }
+    .pulse-grid { height:auto !important; grid-auto-rows:auto !important; grid-template-columns:repeat(3,1fr) !important; }
+    .topbar { flex-wrap:wrap !important; gap:8px !important; }
+    .topbar-chips { flex-wrap:wrap !important; justify-content:flex-start !important; row-gap:6px; }
+  }
+
+  /* ---- Phone (<=700px): single column, bigger text, 2-wide category grid
+     (roomier for the OPS/ERA/WHIP rate values than 3-wide). ---- */
+  @media (max-width:700px) {
+    #grid { grid-template-columns:1fr !important; }
+    .tile-body { font-size:14.5px !important; }
+    .pulse-grid { grid-template-columns:repeat(2,1fr) !important; }
+    .chip { padding:0 6px !important; }
+    .topbar-chips { width:100% !important; }
+  }
 """
 
 

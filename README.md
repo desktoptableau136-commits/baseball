@@ -131,6 +131,8 @@ python dashboard.py --team "Houck Tuah"
 
 Open the file maximized in a browser — it's tuned for a 1440×900 viewport and should show no scrollbars.
 
+It's also **responsive**: on a tablet (≤1100px) it drops to two columns and on a phone (≤700px) to a single column, un-pinning the fixed pane so the page scrolls normally with larger, readable text. The desktop no-scroll layout is unchanged above 1100px.
+
 **On Windows PowerShell**, if `git` isn't found, run this first to restore it:
 ```powershell
 $env:PATH = [System.Environment]::GetEnvironmentVariable("PATH","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("PATH","User")
