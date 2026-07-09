@@ -452,13 +452,18 @@ def render_opponent(ctx):
     if not opp:
         return _tile("Opponent", f'<div style="color:{MUTED};">No opponent set.</div>', cls="t5")
     logo = sd.fantasy_logo(ctx["team_logos"].get(" ".join(opp.split()), ""), size=18, team_name=opp)
-    parts = [f'<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;">{logo}'
-             f'<span style="color:{TEXT};font-weight:700;font-size:12px;">{opp}</span></div>']
+    header = (f'<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;">{logo}'
+              f'<span style="color:{TEXT};font-weight:700;font-size:12px;">{opp}</span></div>')
+
+    # Body is two side-by-side columns: LEFT = starts/arms + roto strong/weak,
+    # RIGHT = Hot bats. `flex-wrap` lets them re-stack if the tile gets too narrow
+    # (phone). left/right are lists of html chunks.
+    left, right = [], []
 
     if oi:
         two = oi.get("two_start", [])
         two_s = ("".join(f'<span style="color:{PURPLE};font-weight:700;">{r.get("PlayerName")}</span>&#215;2 ' for r in two)) if two else ""
-        parts.append(
+        left.append(
             f'<div style="color:{MUTED};font-size:10px;margin-bottom:3px;">'
             f'<span style="color:{TEXT};font-weight:700;">{oi.get("n_starts",0)}</span> starts / '
             f'<span style="color:{TEXT};">{oi.get("n_starters",0)}</span> arms {two_s}</div>'
@@ -472,21 +477,32 @@ def render_opponent(ctx):
                 f'<span style="color:{GREEN};font-weight:700;">{_fv(ops,3)}</span></div>'
                 for r, ops in hot
             )
-            parts.append(f'<div style="color:{MUTED};font-size:10px;text-transform:uppercase;letter-spacing:.4px;margin:5px 0 2px;">Hot bats (recent OPS)</div>{rows}')
+            right.append(
+                f'<div style="color:{MUTED};font-size:10px;text-transform:uppercase;letter-spacing:.4px;margin-bottom:2px;">Hot bats (recent OPS)</div>'
+                f'<div style="font-size:11px;line-height:1.5;">{rows}</div>'
+            )
 
-    # Opponent roto strengths / weaknesses (season category ranks)
+    # Opponent roto strengths / weaknesses (season category ranks) → left column
     ocats, on = sd.category_ranks(ctx["roto"], opp)
     if ocats:
         best = sorted(ocats.items(), key=lambda kv: kv[1])[:3]
         worst = sorted(ocats.items(), key=lambda kv: -kv[1])[:3]
         b = " ".join(f'<span style="color:{GREEN};">{_CAT_LABELS_MAP.get(c,c)}</span>' for c, _ in best)
         w = " ".join(f'<span style="color:{RED};">{_CAT_LABELS_MAP.get(c,c)}</span>' for c, _ in worst)
-        parts.append(
+        left.append(
             f'<div style="margin-top:4px;font-size:10px;line-height:1.4;">'
             f'<span style="color:{MUTED};">strong</span> {b}<br>'
             f'<span style="color:{MUTED};">weak</span> {w}</div>'
         )
-    return _tile("Opponent This Matchup", "".join(parts), cls="t5")
+
+    if right:
+        # Two columns; each can shrink to ~130px before wrapping to a stack.
+        body = (f'{header}<div style="display:flex;flex-wrap:wrap;gap:12px;">'
+                f'<div style="flex:1 1 130px;min-width:0;">{"".join(left)}</div>'
+                f'<div style="flex:1 1 130px;min-width:0;">{"".join(right)}</div></div>')
+    else:
+        body = header + "".join(left)
+    return _tile("Opponent This Matchup", body, cls="t5")
 
 
 # ── Column 2: Pitching, Hitting, Holes ──────────────────────────────────────────
