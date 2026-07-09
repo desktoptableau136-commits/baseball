@@ -523,10 +523,22 @@ def render_pitching(ctx):
         qs = sd.qs_probability(r)
         hva = str(r.get("PSP_HomeVAway") or "")
         two = ' <span style="color:%s;font-weight:700;">&#215;2</span>' % PURPLE if _starts_this_week(r, datetime.now().strftime("%Y-%m-%d"), ctx["week_end_str"]) >= 2 else ""
+        # QS / 5K+ badges annotate the projected line (same rule as the digest's My
+        # Upcoming Starts, so they never contradict the Proj. Line shown here).
+        _pip, _per, _pk = vals if vals else (0, 0, 0)
+        badges = ""
+        if vals and sd._proj_is_qs(_pip, _per):
+            badges += (f' <span style="font-size:8px;font-weight:700;color:{GREEN};'
+                       f'background:rgba(34,197,94,0.12);border:1px solid rgba(34,197,94,0.35);'
+                       f'border-radius:3px;padding:0 3px;vertical-align:middle;">QS</span>')
+        if vals and _pk >= 5:
+            badges += (f' <span style="font-size:8px;font-weight:700;color:{YELLOW};'
+                       f'background:rgba(245,158,11,0.12);border:1px solid rgba(245,158,11,0.35);'
+                       f'border-radius:3px;padding:0 3px;vertical-align:middle;">5K+</span>')
         rows.append(
             f'<div style="display:flex;justify-content:space-between;gap:6px;padding:2px 0;white-space:nowrap;border-bottom:1px solid {BORDER};">'
             f'<span style="overflow:hidden;text-overflow:ellipsis;"><span style="color:{TEXT};font-weight:600;">{r.get("PlayerName")}</span>{two} '
-            f'<span style="color:{MUTED};font-size:10px;">{dlabel} {hva}</span></span>'
+            f'<span style="color:{MUTED};font-size:10px;">{dlabel} {hva}</span>{badges}</span>'
             f'<span style="flex:0 0 auto;"><span style="color:{MUTED};font-size:10px;">{line}</span> '
             f'<span style="color:{ACCENT};font-size:10px;">QS{qs}%</span> {_mini_badge(sd._score_p(r, ctx["best_recent_p"]))}</span></div>'
         )
