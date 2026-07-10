@@ -154,8 +154,6 @@ def build_context(snap, my_team):
     pos_data = sd.positional_breakdown(pitchers, hitters, my_team, best_recent_p, best_recent_h)
     starts   = sd.my_upcoming_starts(pitchers, my_team)
     alerts   = sd.roster_alerts(pitchers, hitters, my_team)
-    opp_intel = sd.opponent_week_intel(pitchers, hitters, matchup.get("opp_team", "") if matchup else "",
-                                       best_recent_h, today_str, week_end_str)
     lineup_eff_current = snap.get("lineup_efficiency_current", {}) if not override else {}
     roster_sugg = sd._roster_suggestion(
         matchup, pitchers, hitters, fa_sp, fa_rp, fa_hit, my_team, best_recent_p, best_recent_h,
@@ -224,7 +222,7 @@ def build_context(snap, my_team):
         best_recent_p=best_recent_p, best_recent_h=best_recent_h, p15=p15, rec_p=rec_p, rec_h=rec_h,
         fa_sp=fa_sp, fa_rp=fa_rp, fa_hit=fa_hit, luck=luck, my_row=my_row, cats=cats, n_teams=n,
         weekly_avgs=weekly_avgs, weekly_std=weekly_std, classification=classification, pit_proj=pit_proj,
-        pos_data=pos_data, starts=starts, alerts=alerts, opp_intel=opp_intel, hit_pctile=hit_pctile,
+        pos_data=pos_data, starts=starts, alerts=alerts, hit_pctile=hit_pctile,
         trades=trades,
         lineup_eff_current=lineup_eff_current, roster_sugg=roster_sugg, emerging=emerging, fading=fading,
         sparkline=sparkline, peak_label=peak_label, roto_week_results=roto_week_results,
@@ -473,65 +471,6 @@ def render_category_pulse(ctx):
     sub = (f'{cw}W&middot;{cl}L&middot;{ct}T &rarr; proj {pw}-{pl}-{pt}'
            + (f' &middot; &#9889;{close}' if close else ''))
     return _tile(f"Category Pulse", grid, flex=1.45, sub=sub)
-
-
-def render_opponent(ctx):
-    oi = ctx["opp_intel"]; matchup = ctx["matchup"]
-    opp = matchup.get("opp_team", "") if matchup else ""
-    if not opp:
-        return _tile("Opponent", f'<div style="color:{MUTED};">No opponent set.</div>')
-    logo = sd.fantasy_logo(ctx["team_logos"].get(" ".join(opp.split()), ""), size=18, team_name=opp)
-    header = (f'<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;">{logo}'
-              f'<span style="color:{TEXT};font-weight:700;font-size:12px;">{opp}</span></div>')
-
-    # Body is two side-by-side columns: LEFT = starts/arms + roto strong/weak,
-    # RIGHT = Hot bats. `flex-wrap` lets them re-stack if the tile gets too narrow
-    # (phone). left/right are lists of html chunks.
-    left, right = [], []
-
-    if oi:
-        two = oi.get("two_start", [])
-        two_s = ("".join(f'{sd.team_logo(r.get("Team"), 12)}<span style="color:{CYAN};font-weight:700;">{r.get("PlayerName")}</span>&#215;2 ' for r in two)) if two else ""
-        left.append(
-            f'<div style="color:{MUTED};font-size:10px;margin-bottom:3px;">'
-            f'<span style="color:{TEXT};font-weight:700;">{oi.get("n_starts",0)}</span> starts / '
-            f'<span style="color:{TEXT};">{oi.get("n_starters",0)}</span> arms {two_s}</div>'
-        )
-        hot = oi.get("hot_hitters", [])
-        if hot:
-            rows = "".join(
-                f'<div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'
-                f'{sd.team_logo(r.get("Team"), 13)}<span style="color:{TEXT};">{r.get("PlayerName")}</span> '
-                f'<span style="color:{MUTED};">{_pos(r)}</span> '
-                f'<span style="color:{GREEN};font-weight:700;">{_fv(ops,3)}</span></div>'
-                for r, ops in hot
-            )
-            right.append(
-                f'<div style="color:{MUTED};font-size:10px;text-transform:uppercase;letter-spacing:.4px;margin-bottom:2px;">Hot bats (recent OPS)</div>'
-                f'<div style="font-size:11px;line-height:1.5;">{rows}</div>'
-            )
-
-    # Opponent roto strengths / weaknesses (season category ranks) → left column
-    ocats, on = sd.category_ranks(ctx["roto"], opp)
-    if ocats:
-        best = sorted(ocats.items(), key=lambda kv: kv[1])[:3]
-        worst = sorted(ocats.items(), key=lambda kv: -kv[1])[:3]
-        b = " ".join(f'<span style="color:{GREEN};">{_CAT_LABELS_MAP.get(c,c)}</span>' for c, _ in best)
-        w = " ".join(f'<span style="color:{RED};">{_CAT_LABELS_MAP.get(c,c)}</span>' for c, _ in worst)
-        left.append(
-            f'<div style="margin-top:4px;font-size:10px;line-height:1.4;">'
-            f'<span style="color:{MUTED};">strong</span> {b}<br>'
-            f'<span style="color:{MUTED};">weak</span> {w}</div>'
-        )
-
-    if right:
-        # Two columns; each can shrink to ~130px before wrapping to a stack.
-        body = (f'{header}<div style="display:flex;flex-wrap:wrap;gap:12px;">'
-                f'<div style="flex:1 1 130px;min-width:0;">{"".join(left)}</div>'
-                f'<div style="flex:1 1 130px;min-width:0;">{"".join(right)}</div></div>')
-    else:
-        body = header + "".join(left)
-    return _tile("Opponent This Matchup", body)
 
 
 # ── Column 2: Pitching, Hitting, Holes ──────────────────────────────────────────
