@@ -2739,10 +2739,10 @@ def find_trades(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
 
 def _trade_player_line(r, hi_cats, hi_color, side, show_pos=False):
     """One player row inside a trade card: MLB logo + name + score badge + cat chips
-    (+ a CYAN position chip for a thin slot the incoming player upgrades, + a context-aware
-    buy-low/sell-high timing chip). `side` = 'give' (my player) or 'get' (theirs): selling
-    high is smart on the give side, buying low on the get side; the reverse is a trap and
-    is flagged as a warning (ORANGE)."""
+    (+ a CYAN position chip for a thin slot the incoming player upgrades, + the CANONICAL
+    buy-low/sell-high chip — same glyph-only `$`/`▼` (green/red) as everywhere else in the
+    digest, so the visual language stays consistent). `side` ('give'/'get') only tunes the
+    hover tooltip; the whole-trade framing lives in the footer's sell-high/buy-low tag."""
     logo  = team_logo(r.get("Team"), 14)
     nm    = str(r.get("PlayerName") or "")
     chips = "".join(_hit_badge(_CAT_DISPLAY.get(c, c), hi_color, f"strong in {c}")
@@ -2750,14 +2750,16 @@ def _trade_player_line(r, hi_cats, hi_color, side, show_pos=False):
     if show_pos:
         chips += "".join(_hit_badge(p, CYAN, f"upgrades your thin {p}")
                          for p in r.get("_tfillpos", []))
-    if side == "give" and r.get("_tsell"):
-        chips += _hit_badge("&#9660; sell-high", GREEN, "results running ahead of his Statcast expected — regression risk, smart to move him now")
-    elif side == "give" and r.get("_tbuy"):
-        chips += _hit_badge("selling low?", ORANGE, "results running behind his Statcast expected — a rebound candidate; think twice before dealing him")
-    elif side == "get" and r.get("_tbuy"):
-        chips += _hit_badge("$ buy-low", GREEN, "results running behind his Statcast expected — positive regression likely, acquire cheap")
-    elif side == "get" and r.get("_tsell"):
-        chips += _hit_badge("regression risk", ORANGE, "results running ahead of his Statcast expected — likely to decline; you'd be buying high")
+    if r.get("_tsell"):
+        tip = ("results ahead of his Statcast expected — sell him high"
+               if side == "give" else
+               "results ahead of his Statcast expected — regression risk (you'd be buying high)")
+        chips += _hit_badge("&#9660;", RED, tip)
+    elif r.get("_tbuy"):
+        tip = ("results behind his Statcast expected — a rebound candidate (think twice before dealing him)"
+               if side == "give" else
+               "results behind his Statcast expected — positive regression likely, acquire cheap")
+        chips += _hit_badge("$", GREEN, tip)
     return (f'<div style="margin:3px 0;font-size:12px;color:{TEXT};white-space:nowrap;">'
             f'{logo}<span style="font-weight:600;">{nm}</span> '
             f'{badge(int(round(r["_tscore"])))}{chips}</div>')
@@ -3922,8 +3924,9 @@ def build_glossary_section():
                "moves five categories daily vs one punt category in ~60 innings), and deals are tuned to "
                "<b>favor you</b> rather than land even. Where possible it leverages <b>buy-low / sell-high</b> "
                "timing (Statcast expected vs actual): move a bat whose surface stats are about to regress, "
-               "acquire one due to rebound. Chips on “you get” players: blue = category gained, cyan = thin "
-               "position upgraded, green = good buy-low/sell-high timing, orange = a timing warning."),
+               "acquire one due to rebound. Chips: blue = category gained, cyan = thin position upgraded, and "
+               "the same <b>$</b> (buy-low) / <b>▼</b> (sell-high) glyphs used everywhere else in the digest — "
+               "the footer tag tells you which way the timing helps you."),
         _entry("Luck (standings)", "Roto rank minus record rank. Positive = your W-L is better than your "
                "category performance suggests (running lucky); negative = unlucky."),
         _entry("Season Trajectory", "Every team's matchup result (W/L/T) across the whole season, "
