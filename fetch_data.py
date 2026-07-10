@@ -1508,12 +1508,24 @@ def get_matchup_dates(league) -> dict:
     }
 
 
+# ESPN proTeamId (1..30, see espn_api PRO_TEAM_MAP) -> MLB StatsAPI team id. Both id sets are
+# stable; used to gate the idle "wasting space" check on whether a hitter's team actually played.
+_ESPN_PROID_TO_MLBID = {
+    1: 110, 2: 111, 3: 108, 4: 145, 5: 114, 6: 116, 7: 118, 8: 158, 9: 142, 10: 147,
+    11: 133, 12: 136, 13: 140, 14: 141, 15: 144, 16: 112, 17: 113, 18: 117, 19: 119, 20: 120,
+    21: 121, 22: 143, 23: 134, 24: 138, 25: 135, 26: 137, 27: 115, 28: 146, 29: 109, 30: 139,
+}
+
+
 def get_lineup_efficiency(league, my_team_name: str, mode: str = "prev") -> dict:
     """Reconstruct MY team's DAILY lineup and quantify the opportunity cost of my
-    start/sit calls. `mode="prev"` audits the last COMPLETED matchup week (Mon-Sun,
-    for the Monday recap post-mortem); `mode="current"` audits the IN-PROGRESS week
-    Mon->yesterday (for the daily digest, so misses are still fixable). Returns {} for
-    the current week on a Monday (no completed days yet).
+    start/sit calls. BOTH modes span the FULL matchup period (the exact daily scoring
+    periods ESPN lists in the matchup's pointsByScoringPeriod - so a 14-day All-Star/
+    playoff matchup is covered end-to-end, not just one calendar week). `mode="prev"`
+    audits the last COMPLETED matchup (its full span, for the Monday recap post-mortem);
+    `mode="current"` audits the IN-PROGRESS matchup from its first day -> yesterday (for
+    the daily digest, so misses are still fixable). Returns {} on a Monday with no
+    completed days yet.
 
       (a) BATTER BENCH LEAKAGE - a hitter's R/HR/RBI/SB put up while sitting in a BE
           slot (never counted), NET of the weakest startable bat I'd have benched to
@@ -1521,6 +1533,10 @@ def get_lineup_efficiency(league, my_team_name: str, mode: str = "prev") -> dict
           recover) are ignored.
       (b) PITCHER BLOWUPS - an active-slot start of 5+ ER (or 4+ ER in <3 IP) that
           counted toward ERA/WHIP, flagged if I then dropped him (damage banked).
+      (c) IDLE ACTIVE HITTERS ("wasting space") - a hitter in an active slot not getting
+          ABs. Only games his MLB team actually PLAYED count (schedule-gated). Flagged
+          only on a pattern: 3+ idle games in a row, or an AB in <50% of active games
+          (min 4) - an occasional day off stays silent.
 
     Uses `mRoster` fetched per `scoringPeriodId` (the only way to see the slot AS SET
     that day for a categories league - box_scores exposes team totals only) plus the
@@ -1575,14 +1591,43 @@ def get_lineup_efficiency(league, my_team_name: str, mode: str = "prev") -> dict
         today_sp = int(league.scoringPeriodId)
         this_mon_sp = today_sp - today.weekday()
         cur_week = int(getattr(league, "currentMatchupPeriod", 0))
+        # True daily scoring-period span of each matchup, straight from ESPN's schedule:
+        # a matchup entry's `home.pointsByScoringPeriod` keys ARE the exact days that count
+        # toward it. This is robust for a 14-day All-Star/playoff matchup (which
+        # matchup_periods encodes as a single "week", so a length-based guess misses it) and
+        # equals this-Monday for a normal 7-day week. {} on any failure -> weekly fallback.
+        sp_span = {}
+        try:
+            _sched = league.espn_request.league_get(
+                params={"view": ["mMatchupScore"], "scoringPeriodId": today_sp}).get("schedule", [])
+            for _m in _sched:
+                mp = _m.get("matchupPeriodId")
+                ks = [int(k) for k in ((_m.get("home") or {}).get("pointsByScoringPeriod") or {}).keys()]
+                if mp is not None and ks:
+                    lo, hi = min(ks), max(ks)
+                    prev = sp_span.get(mp)
+                    sp_span[mp] = (min(lo, prev[0]), max(hi, prev[1])) if prev else (lo, hi)
+        except Exception:
+            sp_span = {}
+
         if mode == "current":
-            # In-progress week: Monday through YESTERDAY (today is incomplete, excluded).
-            prev_days = list(range(this_mon_sp, today_sp))
-            start_date = today - timedelta(days=today.weekday())
+            # Full in-progress matchup: its first day through YESTERDAY (today is incomplete,
+            # excluded). Spans the whole period, so a 14-day matchup covers both weeks.
+            span = sp_span.get(cur_week)
+            start_sp = span[0] if span else this_mon_sp
+            prev_days = list(range(start_sp, today_sp))
+            start_date = today - timedelta(days=today_sp - start_sp)
             week = cur_week
         else:
-            prev_days = list(range(this_mon_sp - 7, this_mon_sp))
-            start_date = today - timedelta(days=today.weekday() + 7)
+            # Full last COMPLETED matchup: its first through last day (all days are complete).
+            span = sp_span.get(cur_week - 1)
+            if span:
+                p_start, p_end = span
+                prev_days = list(range(p_start, p_end + 1))
+                start_date = today - timedelta(days=today_sp - p_start)
+            else:
+                prev_days = list(range(this_mon_sp - 7, this_mon_sp))
+                start_date = today - timedelta(days=today.weekday() + 7)
             week = cur_week - 1
         if not prev_days:
             return {}
@@ -1598,8 +1643,34 @@ def get_lineup_efficiency(league, my_team_name: str, mode: str = "prev") -> dict
             hit_ids.add(sid)
             hit_inst.extend([sid] * cnt)
 
-        hit_leak, pit_lines = {}, []
+        # Schedule gate for "wasted active space": a 0-AB day only counts against a hitter
+        # if his MLB team actually PLAYED that day. Build {(mlb_team_id, "YYYY-MM-DD")} of
+        # completed games over the window in one ranged call. None => fetch failed, so idle
+        # tracking falls back to counting every active day (feature stays alive, ungated).
+        played_days = None
+        try:
+            sched = requests.get(
+                f"https://statsapi.mlb.com/api/v1/schedule"
+                f"?sportId=1&startDate={dates[0].strftime('%Y-%m-%d')}"
+                f"&endDate={dates[-1].strftime('%Y-%m-%d')}&gameType=R",
+                timeout=10,
+            ).json()
+            played_days = set()
+            for d in sched.get("dates", []):
+                ds = d.get("date")
+                for g in d.get("games", []):
+                    if (g.get("status", {}) or {}).get("abstractGameState") != "Final":
+                        continue
+                    for side in ("home", "away"):
+                        tid = (((g.get("teams", {}) or {}).get(side, {}) or {}).get("team", {}) or {}).get("id")
+                        if tid is not None:
+                            played_days.add((tid, ds))
+        except Exception:
+            played_days = None
+
+        hit_leak, pit_lines, idle_track = {}, [], {}
         for sp, dt in zip(prev_days, dates):
+            ds = dt.strftime("%Y-%m-%d")
             data = league.espn_request.league_get(params={"view": "mRoster", "scoringPeriodId": sp})
             mt = next((t for t in data.get("teams", []) if t.get("id") == myid), None)
             if not mt:
@@ -1612,8 +1683,17 @@ def get_lineup_efficiency(league, my_team_name: str, mode: str = "prev") -> dict
                 sid = e.get("lineupSlotId")
                 elig = pl.get("eligibleSlots", [])
                 if sid not in (BE_ID, IL_ID) and sid not in PIT_IDS and not _is_pit(elig):
+                    st = _split(pl, sp)
                     active_hit.append((pl.get("fullName", "?"),
-                                       {s for s in elig if s in hit_ids}, _split(pl, sp)))
+                                       {s for s in elig if s in hit_ids}, st))
+                    # Idle "wasting space" tracking: only count days his MLB team had a game.
+                    mlbid = _ESPN_PROID_TO_MLBID.get(pl.get("proTeamId"))
+                    if played_days is None or (mlbid is not None and (mlbid, ds) in played_days):
+                        t = idle_track.setdefault(pl.get("fullName", "?"), {"active": 0, "played": 0, "seq": []})
+                        p = 1 if _f(st, AB) > 0 else 0
+                        t["active"] += 1
+                        t["played"] += p
+                        t["seq"].append(p)
 
             def _fits(cand_elig):
                 base = [[i for i, styp in enumerate(hit_inst) if styp in he] for _, he, _ in active_hit]
@@ -1700,10 +1780,43 @@ def get_lineup_efficiency(league, my_team_name: str, mode: str = "prev") -> dict
 
         net = {c: round(sum(a["net"][c] for a in hit_leak.values())) for c in ("R", "HR", "RBI", "SB")}
         gross = {c: int(sum(a[c] for a in hit_leak.values())) for c in ("R", "HR", "RBI", "SB")}
+
+        # (c) idle "wasting space": an active-slot hitter not accumulating stats. Only games
+        # his team actually played count (schedule-gated above). Flag when it's a pattern -
+        # 3+ idle in a row, or an AB in < 50% of his active games (min 4 so tiny samples stay
+        # quiet) - so an occasional day off never trips it.
+        idle = []
+        for nm, t in idle_track.items():
+            active_n, played_n = t["active"], t["played"]
+            seq = t["seq"]
+            idle_n = active_n - played_n
+            max_streak = _cur = 0
+            for p in seq:
+                _cur = 0 if p else _cur + 1
+                max_streak = max(max_streak, _cur)
+            trail = 0
+            for p in reversed(seq):
+                if p:
+                    break
+                trail += 1
+            streak_flag = max_streak >= 3
+            rate_flag = active_n >= 4 and played_n / active_n < 0.50
+            if not (streak_flag or rate_flag):
+                continue
+            if trail >= 3:
+                reason = f"{trail} straight idle games"
+            elif streak_flag:
+                reason = f"{max_streak} straight idle games"
+            else:
+                reason = f"played only {played_n} of {active_n} games"
+            idle.append({"name": nm, "active": active_n, "played": played_n, "idle": idle_n,
+                         "max_streak": max_streak, "trail_streak": trail, "reason": reason})
+        idle.sort(key=lambda x: (x["trail_streak"], x["idle"]), reverse=True)
+
         return {
             "week": week, "mode": mode,
             "week_dates": f"{dates[0].strftime('%b %d')} - {dates[-1].strftime('%b %d')}",
-            "bench": bench, "gross": gross, "net": net, "blowups": blowups,
+            "bench": bench, "gross": gross, "net": net, "blowups": blowups, "idle": idle,
         }
     except Exception as e:
         log(f"  get_lineup_efficiency failed: {e}")
@@ -1842,10 +1955,11 @@ def main():
     lineup_efficiency = get_lineup_efficiency(league, my_team, mode="prev")            # Monday recap
     lineup_efficiency_current = get_lineup_efficiency(league, my_team, mode="current")  # daily digest
     for _lbl, _eff in (("prev", lineup_efficiency), ("current", lineup_efficiency_current)):
-        if _eff.get("bench") or _eff.get("blowups"):
+        if _eff.get("bench") or _eff.get("blowups") or _eff.get("idle"):
             _n = _eff.get("net", {})
             print(f"       [{_lbl}] bench net: {_n.get('HR',0):+} HR / {_n.get('RBI',0):+} RBI | "
-                  f"{len(_eff.get('blowups',[]))} active-slot blowup(s)")
+                  f"{len(_eff.get('blowups',[]))} active-slot blowup(s) | "
+                  f"{len(_eff.get('idle',[]))} idle active hitter(s)")
 
     print("\n[8/10] Fetching last-7-day hitter stats...")
     recent_hitting = fetch_recent_hitter_stats(days=7)

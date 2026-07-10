@@ -410,14 +410,16 @@ def build_my_matchup(prev_matchup, logos):
 
 
 def build_lineup_efficiency(eff):
-    """MY team's start/sit opportunity cost last week: batter production stranded on
+    """MY team's start/sit opportunity cost last matchup: batter production stranded on
     the bench (net of the bat I'd have sat to play him) + active-slot pitcher blowups
-    that counted then got dropped. Data from fetch_data.get_lineup_efficiency."""
+    that counted then got dropped + hitters idling in an active slot on game days (wasted
+    space). Data from fetch_data.get_lineup_efficiency."""
     if not eff:
         return ""
     bench   = eff.get("bench") or []
     blowups = eff.get("blowups") or []
-    if not bench and not blowups:
+    idle    = eff.get("idle") or []
+    if not bench and not blowups and not idle:
         return ""
 
     net = eff.get("net") or {}
@@ -479,6 +481,21 @@ def build_lineup_efficiency(eff):
                 f'<span style="color:{MUTED};font-size:11px;"> &nbsp;{p["date"]} &nbsp;'
                 f'{p["ip"]} IP, <span style="color:{RED};font-weight:700;">{p["er"]} ER</span>, '
                 f'{p["k"]} K (+{p["h"]} H, {p["bb"]} BB)</span>{drop}</div>'
+            )
+
+    # ── idle active hitters (wasted space) ──
+    if idle:
+        parts.append(
+            f'<div style="color:{MUTED};font-size:11px;font-weight:700;text-transform:uppercase;'
+            f'letter-spacing:.5px;margin:14px 0 6px;">Idle &mdash; wasted active slots</div>'
+        )
+        for p in idle:
+            parts.append(
+                f'<div style="background:{SURFACE};border:1px solid {BORDER};border-radius:6px;'
+                f'padding:9px 14px;margin-bottom:7px;">'
+                f'<span style="color:{TEXT};font-weight:700;font-size:12px;">{p["name"]}</span>'
+                f'<span style="color:{MUTED};font-size:11px;"> &nbsp;{p["reason"]} &nbsp;&mdash;&nbsp; '
+                f'an AB in only {p["played"]} of {p["active"]} games he was slotted active</span></div>'
             )
 
     return "".join(parts)

@@ -3385,13 +3385,15 @@ def build_glossary_section():
         _entry("Season Trajectory", "Every team's matchup result (W/L/T) across the whole season, "
                "teams in standings order down the rows, matchups across the columns, with each team's "
                "<b>current streak</b> (e.g. W3, L2) in the final column. Your row is highlighted."),
-        _entry("Lineup Watch", "Reconstructs your <b>daily</b> lineup for the week so far (Mon→yesterday) "
-               "from ESPN's historical slots. Flags (a) counting-stat production a hitter put up while "
-               "sitting on your <b>bench</b> — shown <b>net</b> of the bat you'd have benched to start him "
-               "(so it only counts what a legal lineup change would actually have gained), and (b) a starter "
-               "who imploded in an <b>active</b> slot (ER/WHIP already counted). Only the still-fixable, "
-               "net-positive misses surface — it's silent on a clean week. The Monday recap shows the fuller "
-               "completed-week version."),
+        _entry("Lineup Watch", "Reconstructs your <b>daily</b> lineup for the matchup so far (first Monday→"
+               "yesterday) from ESPN's historical slots. Flags (a) counting-stat production a hitter put up "
+               "while sitting on your <b>bench</b> — shown <b>net</b> of the bat you'd have benched to start him "
+               "(so it only counts what a legal lineup change would actually have gained), (b) a starter "
+               "who imploded in an <b>active</b> slot (ER/WHIP already counted), and (c) a hitter <b>idling</b> "
+               "in an active slot — 0 AB on days his team played — when it's a pattern (3 games in a row, or an "
+               "AB in under half his active games), i.e. wasting the roster spot. Only still-fixable misses "
+               "surface — it's silent on a clean matchup. The Monday recap shows the fuller completed-matchup "
+               "version."),
     ])
     sources = _group("Data sources", [
         _entry("FantasyPros", "Pitcher & hitter stat lines across 4 ranges (last 7/15/30 days + season)."),
@@ -3672,19 +3674,20 @@ def build_season_roto_rankings(roto, my_team=MY_TEAM, team_logos=None, season_to
 
 
 def build_bench_watch(eff):
-    """Compact current-week 'Lineup Watch' callout for the daily digest: batter
-    production you've stranded on the bench so far this week (net of the bat you'd have
+    """Compact matchup-to-date 'Lineup Watch' callout for the daily digest: batter
+    production you've stranded on the bench so far this matchup (net of the bat you'd have
     sat — still fixable for the remaining days) + any starter who imploded in an active
-    slot (ER/WHIP already counted). eff = snapshot['lineup_efficiency_current']
-    (Mon->yesterday). Silent on a clean week. Fuller Mon-Sun post-mortem lives in the
-    recap's build_lineup_efficiency."""
+    slot (ER/WHIP already counted) + hitters idling in an active slot (wasting the spot).
+    eff = snapshot['lineup_efficiency_current'] (matchup start->yesterday). Silent on a
+    clean matchup. Fuller post-mortem lives in the recap's build_lineup_efficiency."""
     if not eff:
         return ""
     bench   = eff.get("bench") or []
     blowups = eff.get("blowups") or []
+    idle    = eff.get("idle") or []
     net     = eff.get("net") or {}
     net_bits = [f"{net.get(c, 0):+.0f} {c}" for c in ("HR", "RBI", "R", "SB") if net.get(c, 0)]
-    if not net_bits and not blowups:
+    if not net_bits and not blowups and not idle:
         return ""
 
     rows = []
@@ -3710,13 +3713,25 @@ def build_bench_watch(eff):
             f'<span style="color:{TEXT};font-weight:600;">{p["name"]}</span> imploded in your active slot '
             f'({p["ip"]} IP, {p["er"]} ER){drop} &mdash; ER/WHIP already counted</div>'
         )
+    if idle:
+        rows.append(
+            f'<div style="font-size:12px;color:{TEXT};padding:6px 0 2px;">'
+            f'<strong>Wasting active space</strong> '
+            f'<span style="color:{MUTED};">&mdash; idle in your lineup on game days</span></div>'
+        )
+        for p in idle[:3]:
+            rows.append(
+                f'<div style="font-size:11px;color:{MUTED};padding:1px 0 1px 16px;">'
+                f'<span style="color:{TEXT};font-weight:600;">{p["name"]}</span> &mdash; {p["reason"]} '
+                f'({p["played"]}/{p["active"]} games with an AB)</div>'
+            )
 
     dates = eff.get("week_dates", "")
     return (
         f'<div style="background:{SURFACE};border:1px solid {BORDER};border-left:3px solid {RED};'
         f'border-radius:6px;padding:12px 14px;margin-bottom:20px;">'
         f'<div style="color:{RED};font-size:10px;font-weight:700;text-transform:uppercase;'
-        f'letter-spacing:.7px;margin-bottom:6px;">&#9888; Lineup Watch &middot; week to date ({dates})</div>'
+        f'letter-spacing:.7px;margin-bottom:6px;">&#9888; Lineup Watch &middot; matchup to date ({dates})</div>'
         f'{"".join(rows)}</div>'
     )
 
@@ -5006,7 +5021,7 @@ def build_email(snap, override_team=None):
         matchup, week_cats, week_n, fa_sp, starts, days_elapsed, my_starts_by_day,
         week_end=week_end_str, is_sunday=is_sunday, roster_suggestion=roster_suggestion
     )
-    # Current-week Lineup Watch (my team only — snapshot stores only my daily lineup).
+    # Matchup-to-date Lineup Watch (my team only — snapshot stores only my daily lineup).
     bench_watch = build_bench_watch(snap.get("lineup_efficiency_current") or {}) if not override_team else ""
     body_parts += [
         build_prev_matchup_recap(prev_matchup, team_logos=team_logos) if is_monday and prev_matchup.get("week") != (matchup or {}).get("week") else "",  # 2a MONDAY RECAP
@@ -5021,7 +5036,7 @@ def build_email(snap, override_team=None):
                               game_days_elapsed=game_days_elapsed, matchup_game_days=matchup_game_days),  # 5
         band_divider("MY ROSTER", anchor="band-myroster"),                                # MY TEAM band header
         alert_section,                                                                    # 1  ALERTS (top of My Roster)
-        bench_watch,                                                                      # 1b Lineup Watch (current-week bench leakage / blowups)
+        bench_watch,                                                                      # 1b Lineup Watch (matchup-to-date bench leakage / blowups / idle hitters)
         pos_section,                                                                      # 10 Positional Breakdown (moved to top of My Roster)
         starts_section,                                                                   # 6
         my_rp_section,                                                                    # 7
