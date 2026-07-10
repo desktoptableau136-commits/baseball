@@ -891,28 +891,25 @@ def build_dashboard(snap, my_team):
     t_holes  = render_holes(ctx)
     t_pitch  = render_pitching(ctx)
     t_hit    = render_hitting(ctx)
-    t_opp    = render_opponent(ctx)
     t_moves  = render_moves(ctx)
     t_fa     = render_fa_radar(ctx)
     t_season = render_season(ctx)
     t_trade  = render_trade_radar(ctx)
 
-    # Desktop 3-col: col1 = Pulse + Weakest Spots/Lineup, col2 = Pitching·Hitting·Opponent,
-    # col3 = Moves·FA·Trade Radar·Season (the abbreviated trade panel sits right after FA
-    # Radar — both are acquisition/action panels, so they read together).
+    # Desktop 3-col: col1 = Pulse + Weakest Spots/Lineup, col2 = Pitching·Hitting·Trade
+    # Radar (Trade Radar took the Opponent This Matchup slot per user preference — opponent
+    # scouting still lives in the digest), col3 = Moves·FA·Season.
     col1 = f'<div class="col">{t_pulse}{t_holes}</div>'
-    col2 = f'<div class="col">{t_pitch}{t_hit}{t_opp}</div>'
-    col3 = f'<div class="col">{t_moves}{t_fa}{t_trade}{t_season}</div>'
+    col2 = f'<div class="col">{t_pitch}{t_hit}{t_trade}</div>'
+    col3 = f'<div class="col">{t_moves}{t_fa}{t_season}</div>'
     grid_desktop = f'<div id="grid">{col1}{col2}{col3}</div>'
 
-    # Tablet 2-col, user-chosen order, HEIGHT-BALANCED: DOWN the left column =
-    # Category Pulse (1), Recommended Moves (6), FA Radar (7), Season (8); DOWN the
-    # right = My Pitching (3), Hitting (4), Weakest Spots (2), Opponent (5). The two
-    # tall tiles (Pulse + Weakest Spots) are split one-per-column so the columns end
-    # at roughly the same height (Weakest<->Season swapped vs the raw 1,6,7,2/3,4,8,5
-    # order for balance). On a phone the two columns stack top-to-bottom.
-    colt_l = f'<div class="colt">{t_pulse}{t_moves}{t_fa}{t_trade}{t_season}</div>'
-    colt_r = f'<div class="colt">{t_pitch}{t_hit}{t_holes}{t_opp}</div>'
+    # Tablet 2-col, HEIGHT-BALANCED: left = Pulse · Moves · FA · Season; right =
+    # Pitching · Hitting · Weakest Spots · Trade Radar. The two tall tiles (Pulse +
+    # Weakest Spots) sit one-per-column so the columns end at roughly the same height.
+    # On a phone the two columns stack top-to-bottom.
+    colt_l = f'<div class="colt">{t_pulse}{t_moves}{t_fa}{t_season}</div>'
+    colt_r = f'<div class="colt">{t_pitch}{t_hit}{t_holes}{t_trade}</div>'
     grid_tablet = f'<div id="gridt">{colt_l}{colt_r}</div>'
 
     return (

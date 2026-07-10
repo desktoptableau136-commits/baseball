@@ -1771,7 +1771,7 @@ def nav_bar():
     links inline. Also drops the `top` anchor so the band `↑ TOP` links have a target."""
     items = [
         ("#band-myroster", "My Roster"),
-        ("#band-fa",       "Free Agents"),
+        ("#band-fa",       "Transactions"),
         ("#band-season",   "Season"),
         ("#band-glossary", "Glossary"),
     ]
@@ -5595,7 +5595,7 @@ def build_email(snap, override_team=None):
         my_rp_section,                                                                    # 7
         build_pitcher_hot_cold_section(pitchers, my_team, rec_p, best_recent_p),         # 8
         build_hot_cold_section(hitters, recent_hitting, my_team, best_recent_h, hit_pctile),  # 9
-        band_divider("FREE AGENTS", anchor="band-fa"),                                    # ACTION band header
+        band_divider("TRANSACTIONS", anchor="band-fa"),                                   # ACTION band header (FA pickups + Trade Radar)
         fa_sp_section,                                                                    # 11
         fa_rp_section,                                                                    # 12
         fa_hit_section,                                                                   # 13
