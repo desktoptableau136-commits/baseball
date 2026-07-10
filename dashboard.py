@@ -691,15 +691,16 @@ def render_trade_radar(ctx):
     def pl(p, is_get):
         chips = ""
         if p.get("_tsell"):
-            chips += f' <span style="color:{RED};font-weight:700;font-size:9px;">&#9660;</span>'
+            chips += f' <span style="color:{RED};font-weight:700;font-size:10px;">&#9660;</span>'
         elif p.get("_tbuy"):
-            chips += f' <span style="color:{GREEN};font-weight:700;font-size:9px;">$</span>'
+            chips += f' <span style="color:{GREEN};font-weight:700;font-size:10px;">$</span>'
         if is_get and p.get("_tfillpos"):
-            chips += f' <span style="color:{CYAN};font-size:9px;">({",".join(p["_tfillpos"])})</span>'
-        return f'{sd.team_logo(p.get("Team"), 12)}<span style="color:{TEXT};">{p.get("PlayerName")}</span>{chips}'
+            chips += f' <span style="color:{CYAN};font-size:10px;">({",".join(p["_tfillpos"])})</span>'
+        return f'{sd.team_logo(p.get("Team"), 13)}<span style="color:{TEXT};">{p.get("PlayerName")}</span>{chips}'
 
-    # Abbreviated view: prefer TWO DISTINCT partners (a 2-item panel showing two deals with
-    # the same team wastes the space); backfill from the full ranked list if only one team fits.
+    # Abbreviated view: prefer TWO DISTINCT partners (the dashboard is already dense — two
+    # is enough; showing two deals with the same team wastes the space); backfill from the
+    # full ranked list if only one distinct team fits.
     top, _seen = [], set()
     for t in trades:
         if t["team"] in _seen:
@@ -722,18 +723,18 @@ def render_trade_radar(ctx):
         thesis = "sell-high" if t.get("sell_out") else ""
         thesis += ("/buy-low" if thesis and t.get("buy_in") else ("buy-low" if t.get("buy_in") else ""))
         tag = val + (f" &middot; {thesis}" if thesis else "")
-        logo = sd.fantasy_logo(ctx["team_logos"].get(t["team"], ""), 12, t["team"])
+        logo = sd.fantasy_logo(ctx["team_logos"].get(t["team"], ""), 13, t["team"])
         _clip = "overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"
         rows.append(
             f'<div style="padding:3px 0;border-bottom:1px solid {BORDER};">'
-            f'<div style="font-size:10px;color:{MUTED};{_clip}">&#8644; {logo}'
+            f'<div style="font-size:11px;color:{MUTED};{_clip}">&#8644; {logo}'
             f'<span style="color:{TEXT};font-weight:600;">{t["team"]}</span> &middot; {tag}</div>'
-            f'<div style="font-size:11px;{_clip}"><span style="color:{RED};font-size:9px;font-weight:700;">GIVE</span> {give}</div>'
-            f'<div style="font-size:11px;{_clip}"><span style="color:{GREEN};font-size:9px;font-weight:700;">GET</span> {get_}</div>'
+            f'<div style="font-size:12.5px;{_clip}"><span style="color:{RED};font-size:10px;font-weight:700;">GIVE</span> {give}</div>'
+            f'<div style="font-size:12.5px;{_clip}"><span style="color:{GREEN};font-size:10px;font-weight:700;">GET</span> {get_}</div>'
             f'</div>')
     if not rows:
         rows = [f'<div style="color:{MUTED};">No trade fits right now.</div>']
-    return _tile("Trade Radar", "".join(rows), flex=0.9, sub="top mutual-benefit swaps")
+    return _tile("Trade Radar", "".join(rows), flex=0.95, sub="top mutual-benefit swaps")
 
 
 # ── Column 3: Moves, FA Radar, Season ───────────────────────────────────────────
