@@ -14,6 +14,8 @@ python fetch_data.py                           # refresh data only → data/snap
 python weekly_recap.py                         # Monday recap: refresh + email full-league recap
 python weekly_recap.py --dry-run --no-refresh  # instant recap preview → previews/recap_week_N.html
 python bench_leakage.py                         # standalone daily-lineup audit (my team + last week's opponent → console)
+python backtest_projections.py                  # walk-forward accuracy of the SP proj line (IP/ER/K) vs actual game logs → console
+python backtest_projections.py --limit 30 --no-cache  # quick smoke test (small pool, no cache)
 python dashboard.py                             # single-viewport dashboard → previews/dashboard_{team}.html (uses existing snapshot, no email)
 python dashboard.py --refresh                   # refresh data (~60s) first, then write the dashboard
 python dashboard.py --team "Houck Tuah"         # another team's dashboard (needs all_matchups)
@@ -194,7 +196,7 @@ Always `previews/digest_preview_{team_slug}.html` (e.g. `digest_preview_Guerrero
 - `hitter_score(r)` → 0–100. Prefers wRC+ over OPS. Uses xwOBA, sprint speed, Barrel%, ISO, HR_Probability. Opportunity multiplier (`_ab_opportunity_mult`): raw score scaled by AB vs a full-time benchmark (floored `_AB_FLOOR = 0.40`, capped 1.0) — a full-time hitter lands at 1.0 (no penalty). Calibrated `s * 1.587 - 5.2`. Displayed everywhere as `_blend(r, hitter_score, best_recent_h)`.
 - `qs_probability(r)` → 1–99. Calibrated league-avg ~38%, ace ~75%. Uses IP/G (not IP/GS).
 - `_fmt_ip(ip_decimal)` → baseball IP notation. `whole = int(d); outs = round((d-whole)*3); if outs>=3: whole+=1, outs=0`.
-- `_proj_line_html(r)` → `IP · ER · K` span. ER = `raw_er * opp_factor * park_factor`; `opp_factor = clamp(opp_ops / LG_team_ops, 0.80, 1.20)`; `park_factor` = 0.97 home / 1.03 away. K also opponent-adjusted via `Team_K_Value`. IP = `IP_per_G`.
+- `_proj_line_html(r)` → `IP · ER · K` span. ER = `raw_er * opp_factor * park_factor` where `raw_er = era_reg * IP_per_G / 9`; **`era_reg` is the row ERA regressed toward the pitcher's `xERA` (luck-stripped skill; falls back to `_LG["era"]` when xERA missing), IP-weighted: `(ERA*IP + target*_ERA_REG_PRIOR_IP)/(IP + _ERA_REG_PRIOR_IP)`, `_ERA_REG_PRIOR_IP = 40`.** A 1607-start walk-forward backtest (`backtest_projections.py`) showed raw ERA under-projects per-start ER; the regression cuts ER MAE/RMSE with no IP/K/badge regression (it tightens small-sample ERAs — the residual −0.33 mean bias is structural blowup-skew, NOT ERA noise, so no regression removes it). `opp_factor = clamp(opp_ops / LG_team_ops, 0.80, 1.20)`; `park_factor` = 0.97 home / 1.03 away. K also opponent-adjusted via `Team_K_Value`. IP = `IP_per_G` (backtest-confirmed better than IP_per_GS or any pitch-count predictor — pitch budget per start is ~uniform across starters so it carries ~zero signal on outing length; `r(IP_per_G, actual_IP)=0.27` beats pitches/start `≈0` and pitches/inning `−0.17`).
 - `hot_cold_cell(season_val, recent_val, …, no_data_title=None, td_style=TDC)` → `<td>` with colored recent stat + 🔥/↑/❄/↓ icon vs season baseline. When recent is missing/zero and `no_data_title` is set, renders `—` with a dotted underline + hover tooltip. Optional `td_style` so the compacted pitcher tables' L15 ERA cell matches.
 - `band_divider(label, color, anchor=…)` → full-width band boundary `<div>`.
 

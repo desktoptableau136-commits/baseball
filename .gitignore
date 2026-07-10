@@ -16,3 +16,6 @@ __pycache__/
 _archive/
 _trash/
 .claude/
+
+# Local scratch (generated CSVs, etc.)
+scratchpad/

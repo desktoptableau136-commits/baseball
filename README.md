@@ -313,7 +313,7 @@ Free agent starters with a confirmed or projected upcoming start, grouped by dat
 
 **Columns:** Pitcher · **Proj. Line** · Matchup (with opponent OPS on a second line) · QS% · ERA · **L15 ERA** (hot/cold colored) · K% · Score
 
-**Proj. Line** = projected `IP · ER · K` for one start. ER is adjusted for opponent lineup strength (their OPS) and a home/away park factor; K is adjusted for the opponent lineup's strikeout rate. IP is the pitcher's per-start average in baseball notation (e.g. 5.1 = 5⅓).
+**Proj. Line** = projected `IP · ER · K` for one start. ER builds off the pitcher's ERA regressed toward his expected ERA (xERA — luck-stripped, weighted by season IP), then adjusted for opponent lineup strength (their OPS) and a home/away park factor; K is adjusted for the opponent lineup's strikeout rate. IP is the pitcher's per-start average in baseball notation (e.g. 5.1 = 5⅓). *(The ERA regression is a small backtest-verified accuracy gain — see `backtest_projections.py`.)*
 
 **Day headers** show a ⚑ badge with your start count for that day: red = 0 my starts, yellow = 1, blue = 2+.
 
@@ -562,6 +562,7 @@ baseball/
 ├── dashboard.py                         # Single-viewport command dashboard (--refresh/--team/--email)
 ├── weekly_recap.py                      # Monday full-league recap email builder
 ├── bench_leakage.py                     # Standalone daily-lineup audit (my team + opponent → console)
+├── backtest_projections.py              # Standalone walk-forward accuracy check of the SP proj line → console
 ├── CLAUDE.md                            # Actionable rules / gotchas for contributors
 ├── NOTES.md                             # Background & rationale ("why we did it this way")
 ├── requirements.txt                     # pip install -r requirements.txt
