@@ -134,7 +134,7 @@ python dashboard.py --email
 
 Open the file maximized in a browser — it's tuned for a 1440×900 viewport and should show no scrollbars.
 
-The **My Pitching** tile lists each upcoming start with its projected `IP·ER·K` line, a purple `×2` marker for two-start pitchers, and green **QS** / yellow **5K+** badges after the matchup date (same projected-line rule as the digest's My Upcoming Starts — a quality-start projection of 6+ IP & ≤3 ER, or 5+ projected K). **MLB team logos** appear next to player names throughout the dashboard (My Pitching, Hitting Hot/Cold, Opponent, Weakest Spots, Free-Agent Radar). The browser tab title reads **"Dashboard — {team}"** (and the daily digest reads **"Daily Digest — {team}"**) so the type is identifiable at a glance.
+The **My Pitching** tile lists each upcoming start with its projected `IP·ER·K` line, a purple `×2` marker for two-start pitchers, green **QS** / yellow **5K+** badges, and a red **⚠** low-floor (blowup-risk) chip after the matchup date (same projected-line and risk rules as the digest's My Upcoming Starts — a quality-start projection of 6+ IP & ≤3 ER, 5+ projected K, or a blowup-prone skill profile). The **Free-Agent Radar** starters carry the same ⚠ chip. **MLB team logos** appear next to player names throughout the dashboard (My Pitching, Hitting Hot/Cold, Opponent, Weakest Spots, Free-Agent Radar). The browser tab title reads **"Dashboard — {team}"** (and the daily digest reads **"Daily Digest — {team}"**) so the type is identifiable at a glance.
 
 It's also **responsive**: on a tablet (≤1100px) the tiles reflow into two height-balanced columns — Category Pulse → Recommended Moves → Free-Agent Radar → Season down the left, then My Pitching → Hitting Hot/Cold → Weakest Spots → Opponent down the right — and on a phone (≤700px) into a single column, un-pinning the fixed pane so the page scrolls normally with larger, readable text. The desktop no-scroll layout is unchanged above 1100px.
 
@@ -321,6 +321,7 @@ Free agent starters with a confirmed or projected upcoming start, grouped by dat
 - 🟢 **QS** badge (green left border) — the projected line is a quality start (6+ IP & ≤3 ER)
 - 🟡 **5K+** badge (yellow left border) — the projected line is 5+ K
 - When both fire: left border is green (top half) / yellow (bottom half)
+- 🔴 **⚠ RISK** badge — a **low-floor** (blowup-prone) skill profile: high WHIP + weak strikeout escape hatch + poor effective run prevention (ERA regressed toward xERA) + loud contact allowed, escalated when the arm is cold lately (high L15 ERA). Hover for the worst 2–3 drivers. It's a floor *warning* only — it never lowers the Score, and the digest steers pickup recommendations away from flagged arms. Blowups are largely random (validated in `backtest_projections.py`: ~1.25× top-decile lift, AUC ≈ 0.52), so treat it as "stream with caution," not a guarantee.
 
 The **QS% column** shows the season quality-start *probability* separately.
 

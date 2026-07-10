@@ -706,6 +706,131 @@ def k5_badge(k, row=None):
     return _hit_badge("5K+", YELLOW, f"Projected {k} strikeouts (&ge; 5){tail}")
 
 
+# ── Blowup-risk (low-floor) flag for starters ────────────────────────────────────
+# A DISPLAY-ONLY, skill-based read of how prone a starter is to a disaster outing
+# (the ER/WHIP-wrecking 5+ ER start you can't take back once it's slotted). It is
+# deliberately NOT folded into pitcher_score/_score_p — a high-ceiling arm can still
+# carry real blowup risk; the flag is an independent floor warning, not a quality knock.
+#
+# WHY SKILL-ONLY (no realized blowup rate): a pitcher's own past blowup FREQUENCY is
+# almost pure binomial noise at a season's ~20 starts (p~0.17 -> SD~8.5%), so folding
+# it in HURT decile lift in the walk-forward backtest (1.34x vs 1.38x skill-only).
+# The four skill drivers below — traffic (WHIP), a strikeout escape hatch (K%),
+# true-skill run prevention (xERA), and loud contact allowed (HardHit%) — carry the
+# real, stable signal. Validated in backtest_projections.py (skill risk decile lift
+# ~1.38x top decile / AUC ~0.54 on 1600+ walk-forward starts).
+_RISK_MIN        = 55.0   # 0-100 risk score at/above which the ⚠ RISK chip fires (~top ~12% of startable arms)
+_RISK_W          = {"whip": 0.32, "k": 0.22, "era": 0.28, "contact": 0.18}
+_RISK_WHIP_SPAN  = 0.35   # WHIP this far ABOVE league starter WHIP = max traffic risk
+_RISK_K_SPAN     = 0.09   # K% this far BELOW league starter K% = max no-escape risk
+_RISK_WPCT_SPAN  = 40.0   # WhiffPctile fallback: this far below the 50th pctile = max
+_RISK_ERA_SPAN   = 1.60   # effective ERA this far ABOVE league starter ERA = max run-prevention risk
+_RISK_HH_BASE    = 40.0   # HardHit% allowed baseline; +10 pts above = max contact risk
+_RISK_HH_SPAN    = 10.0
+_RISK_RECENT_W   = 0.25   # weight of the recent-form escalator when a recent ERA is supplied
+_RISK_RECENT_SPAN = 2.50  # recent ERA this far ABOVE the pitcher's own baseline = max cold-form risk
+
+
+def _effective_era(r):
+    """Actual ERA regressed toward xERA (IP-weighted, same shrinkage as the proj line's
+    _ERA_REG_PRIOR_IP). Better than pure xERA for a FLOOR read: a pitcher genuinely running
+    a high ERA has been giving up runs regardless of 'deserved', which is what wrecks a
+    start — but small samples are still pulled toward the luck-stripped skill."""
+    era = _n(r.get("ERA"))
+    if era <= 0:
+        return 0.0
+    target = _n(r.get("xERA")) or (_LG.get("era") or 4.00)
+    ip = _n(r.get("IP"))
+    return (era * ip + target * _ERA_REG_PRIOR_IP) / (ip + _ERA_REG_PRIOR_IP)
+
+
+def blowup_risk(r, recent_era=None):
+    """0-100 skill-based blowup (disaster-start) risk for a starter — higher = lower floor.
+    Combines baserunner traffic (WHIP), strikeout escape hatch (K%/whiff), effective run
+    prevention (`_effective_era` — ERA regressed toward xERA), and loud contact allowed
+    (HardHit%). League-anchored via `_LG`. When `recent_era` (e.g. L15 ERA) is supplied, a
+    cold recent stretch escalates the score (a currently-scuffling arm has a lower floor).
+    Display-only; never fed into any quality score. See _is_blowup_risk."""
+    whip = _n(r.get("WHIP"))
+    if whip <= 0:
+        return 0.0
+    _clamp = lambda x: 0.0 if x < 0 else (1.0 if x > 1 else x)
+
+    lg_whip = _LG.get("whip") or 1.28
+    whip_bad = _clamp((whip - lg_whip) / _RISK_WHIP_SPAN)
+
+    lg_k = _LG.get("k_pct") or 0.22
+    kpct = _n(r.get("Kpct_P"))
+    if kpct > 0:
+        k_bad = _clamp((lg_k - kpct) / _RISK_K_SPAN)
+    else:
+        wpct = _n(r.get("WhiffPctile"))
+        k_bad = _clamp((50.0 - wpct) / _RISK_WPCT_SPAN) if wpct > 0 else 0.5
+
+    lg_era = _LG.get("era") or 4.10
+    eff = _effective_era(r)
+    era_bad = _clamp((eff - lg_era) / _RISK_ERA_SPAN) if eff > 0 else 0.5
+
+    hh = _n(r.get("HardHitPctAllowed"))
+    contact_bad = _clamp((hh - _RISK_HH_BASE) / _RISK_HH_SPAN) if hh > 0 else 0.4
+
+    w = _RISK_W
+    base = w["whip"] * whip_bad + w["k"] * k_bad + w["era"] * era_bad + w["contact"] * contact_bad
+
+    # Recent-form escalator: ADDITIVE-ONLY. A cold recent stretch (recent ERA above the
+    # pitcher's own effective baseline) RAISES the floor risk; a hot stretch does NOT lower it
+    # (a good week doesn't cure a structurally shaky arm's blowup floor). Off when ERA missing.
+    rec = _n(recent_era) if recent_era is not None else 0.0
+    risk01 = base
+    if rec > 0 and eff > 0:
+        risk01 = _clamp(base + _RISK_RECENT_W * _clamp((rec - eff) / _RISK_RECENT_SPAN))
+    return round(100.0 * risk01, 1)
+
+
+def _is_blowup_risk(r, recent_era=None):
+    """True when a startable arm's skill (+ recent form) profile flags a low floor."""
+    return _is_sp(r) and blowup_risk(r, recent_era) >= _RISK_MIN
+
+
+def _risk_drivers(r, recent_era=None, cap=3):
+    """The 2-3 worst blowup drivers, worst-first, for the ⚠ RISK chip tooltip."""
+    whip = _n(r.get("WHIP"))
+    kpct = _n(r.get("Kpct_P"))
+    wpct = _n(r.get("WhiffPctile"))
+    eff  = _effective_era(r)
+    hh   = _n(r.get("HardHitPctAllowed"))
+    lg_whip = _LG.get("whip") or 1.28
+    lg_k    = _LG.get("k_pct") or 0.22
+    lg_era  = _LG.get("era") or 4.10
+    drivers = []
+    if whip > 0:
+        drivers.append(((whip - lg_whip) / _RISK_WHIP_SPAN, f"{whip:.2f} WHIP"))
+    if kpct > 0:
+        drivers.append(((lg_k - kpct) / _RISK_K_SPAN, f"{kpct*100:.0f}% K rate"))
+    elif wpct > 0:
+        drivers.append(((50.0 - wpct) / _RISK_WPCT_SPAN, f"{wpct:.0f}th-pctile whiff"))
+    if eff > 0:
+        drivers.append(((eff - lg_era) / _RISK_ERA_SPAN, f"{eff:.2f} eff. ERA"))
+    if hh > 0:
+        drivers.append(((hh - _RISK_HH_BASE) / _RISK_HH_SPAN, f"{hh:.0f}% hard-hit"))
+    rec = _n(recent_era) if recent_era is not None else 0.0
+    if rec > 0 and eff > 0:
+        drivers.append(((rec - eff) / _RISK_RECENT_SPAN, f"{rec:.2f} L15 ERA (cold)"))
+    drivers.sort(key=lambda d: -d[0])
+    return [txt for score, txt in drivers[:cap] if score > 0]
+
+
+def blowup_badge(r, recent_era=None):
+    """Red ⚠ RISK chip for a low-floor (blowup-prone) starter, or '' when not flagged.
+    Hover title names the worst 2-3 drivers. `recent_era` (L15) escalates on cold form.
+    Display-only, steer-aware."""
+    if not _is_blowup_risk(r, recent_era):
+        return ""
+    drivers = _risk_drivers(r, recent_era)
+    tip = "Low floor &mdash; blowup-prone: " + " &middot; ".join(drivers) if drivers else "Low floor &mdash; blowup-prone"
+    return _hit_badge("&#9888; RISK", RED, tip)
+
+
 def hitter_badges(row, hit_pctile=None, cap=2):
     """Concatenated tactical badge HTML for a hitter row (up to `cap`, priority SB→PWR→BUY/SELL).
     `hit_pctile` is the league SB percentile pool (build_cat_percentiles) — when None, SB is skipped."""
@@ -2959,7 +3084,9 @@ def _roster_suggestion(matchup, pitchers, hitters, fa_sp, fa_rp, fa_hit,
                 return _n(r.get("GS")) >= _pit_viable_min("SP", "GS")
             return (_n(r.get("ESPN_GP")) >= _pit_viable_min("RP", "GP")
                     or _n(r.get("IP")) >= _pit_viable_min("RP", "IP"))
-        pool = sorted([r for r in (fa_sp + fa_rp) if _stable(r)],
+        # Steer away from low-floor arms: a stabilizer must not be blowup-prone
+        # (a tidy ERA/WHIP can still hide a high-xERA / loud-contact disaster profile).
+        pool = sorted([r for r in (fa_sp + fa_rp) if _stable(r) and not _is_blowup_risk(r)],
                       key=lambda r: ((_n(r.get("xERA")) or _n(r.get("ERA"))), _n(r.get("WHIP"))))
         if pool:
             pa   = pool[0]
@@ -3133,9 +3260,9 @@ def build_week_overview(matchup, week_cats, week_n, fa_sp, starts, days_elapsed,
             _today = datetime.now().strftime("%Y-%m-%d")
             def _two(r):
                 return _starts_this_week(r, _today, week_end or "9999-99-99") >= 2
-            # Prefer a two-start pitcher (double the K/W/QS) among comparable candidates,
-            # then fall back to highest QS probability.
-            best = max(pool, key=lambda r: (_two(r), qs_probability(r) or 0))
+            # Steer away from low-floor (blowup-prone) arms first, then prefer a two-start
+            # pitcher (double the K/W/QS) among comparable candidates, then highest QS prob.
+            best = max(pool, key=lambda r: (not _is_blowup_risk(r), _two(r), qs_probability(r) or 0))
             top  = pool[0]
             qsp  = qs_probability(best)
             try:
@@ -3159,6 +3286,10 @@ def build_week_overview(matchup, week_cats, week_n, fa_sp, starts, days_elapsed,
                 kc = GREEN if kpct >= 0.26 else (YELLOW if kpct >= 0.22 else TEXT)
                 s += f', K% <span style="color:{kc};">{kpct*100:.1f}%</span>'
             s += ')'
+            if _is_blowup_risk(best):
+                _rd = _risk_drivers(best)
+                _rt = " · ".join(_rd) if _rd else "blowup-prone skill profile"
+                s += (f' · <span style="color:{RED};font-weight:700;" title="{_rt}">&#9888; low floor</span>')
             if _two(best):
                 s += f' · <span style="color:{GREEN};font-weight:700;">×2 starts this matchup</span>'
             if top.get("PlayerName") != best.get("PlayerName"):
@@ -3319,6 +3450,15 @@ def build_glossary_section():
                "Score pill) for the projected line that earned each one — the 5K+ tooltip and its Score-pill "
                "line also name the K-skill behind the projection (whiff rate, whiff percentile, or K%). The "
                "QS% column shows the season quality-start probability separately."),
+        _entry("⚠ RISK badge (low floor)",
+               "A red ⚠ RISK chip next to a starter warns of a <b>low floor</b> — a skill profile prone to "
+               "a disaster outing (the 5+ ER start that wrecks your ERA/WHIP and can't be undone once it's "
+               "in your lineup). It blends baserunner traffic (WHIP), a strikeout escape hatch (K% / whiff), "
+               "effective run prevention (ERA regressed toward xERA), and hard contact allowed, then escalates "
+               "when the arm is <b>cold lately</b> (high L15 ERA). <b>Hover</b> for the worst 2–3 drivers. It's "
+               "a floor warning only — it never lowers a pitcher's Score, and the digest steers free-agent "
+               "pickups away from flagged arms. Blowups are largely random, so treat it as “stream with "
+               "caution,” not a guarantee."),
     ])
     pitching = _group("Pitching metrics", [
         _entry("xERA / xwOBA-against", "Baseball Savant “deserved” run prevention from contact quality — "
@@ -4207,6 +4347,7 @@ def build_email(snap, override_team=None):
                     start_badges.append(qs_badge(_pjs_ip, _pjs_er))
                 if k_fires_s:
                     start_badges.append(k5_badge(_pjs_k, r))
+                start_badges.append(blowup_badge(r, p15r.get("ERA")))
                 start_badge = "".join(start_badges)
                 proj_line_s = _proj_line_html(r)
                 _mus_bd = (_pitcher_score_breakdown(r, best_recent_p)
@@ -4427,6 +4568,7 @@ def build_email(snap, override_team=None):
                     name_border = f"border-left:3px solid {GREEN};"
                 elif k_fires:
                     name_border = f"border-left:3px solid {YELLOW};"
+                pickup_badges.append(blowup_badge(r, p15r.get("ERA")))
                 pickup_badge = "".join(pickup_badges)
                 # Two-start flag always shows — a 2-start FA is a top streaming target
                 _n_starts_fa = _starts_this_week(r, today_str, week_end_str)

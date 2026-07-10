@@ -545,6 +545,15 @@ def render_pitching(ctx):
             badges += (f' <span title="{_kt}" style="font-size:8px;font-weight:700;color:{YELLOW};'
                        f'background:rgba(245,158,11,0.12);border:1px solid rgba(245,158,11,0.35);'
                        f'border-radius:3px;padding:0 3px;vertical-align:middle;">5K+</span>')
+        # ⚠ RISK — low-floor (blowup-prone) skill profile, L15-escalated; same rule/model as
+        # the digest's My Upcoming Starts, so a flag here never contradicts the digest.
+        _l15 = (ctx["p15"].get(r.get("PlayerName", "")) or ctx["rec_p"].get(r.get("PlayerName", ""), {})).get("ERA")
+        if sd._is_blowup_risk(r, _l15):
+            _rd = sd._risk_drivers(r, _l15)
+            _rt = "Low floor &mdash; blowup-prone: " + " &middot; ".join(_rd) if _rd else "Low floor &mdash; blowup-prone"
+            badges += (f' <span title="{_rt}" style="font-size:8px;font-weight:700;color:{RED};'
+                       f'background:rgba(239,68,68,0.12);border:1px solid rgba(239,68,68,0.35);'
+                       f'border-radius:3px;padding:0 3px;vertical-align:middle;">&#9888;</span>')
         rows.append(
             f'<div style="display:flex;justify-content:space-between;gap:6px;padding:2px 0;white-space:nowrap;border-bottom:1px solid {BORDER};">'
             f'<span style="overflow:hidden;text-overflow:ellipsis;">{sd.team_logo(r.get("Team"), 14)}<span style="color:{TEXT};font-weight:600;">{r.get("PlayerName")}</span>{two} '
@@ -680,7 +689,9 @@ def render_fa_radar(ctx):
     parts = [hdr("Starters")]
     for r in ctx["fa_sp"][:2]:
         qs = sd.qs_probability(r)
-        parts.append(spline(r, r.get("_score", 0), f'{_n(r.get("ERA")):.2f} ERA &middot; QS{qs}%'))
+        _l15 = (ctx["p15"].get(r.get("PlayerName", "")) or ctx["rec_p"].get(r.get("PlayerName", ""), {})).get("ERA")
+        parts.append(spline(r, r.get("_score", 0), f'{_n(r.get("ERA")):.2f} ERA &middot; QS{qs}%',
+                            badges=sd.blowup_badge(r, _l15)))
     parts.append(hdr("Relievers"))
     for r in ctx["fa_rp"][:2]:
         parts.append(spline(r, r.get("_rp_score", 0), f'{int(_n(r.get("ESPN_SVHD")) or _n(r.get("SVHD")))} SV+H &middot; {_n(r.get("ERA")):.2f}'))
