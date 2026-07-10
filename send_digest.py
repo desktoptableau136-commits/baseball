@@ -832,6 +832,59 @@ def blowup_badge(r, recent_era=None):
     return _hit_badge("&#9888;", ORANGE, tip)
 
 
+# ── Pitcher buy-low / sell-high (ERA vs xERA) — the pitcher analog of the hitter $ / ▼ ──
+# MEAN-regression / luck read, DISTINCT from the ⚠ low-floor flag (single-start TAIL risk):
+# a pitcher can be sell-high without being blowup-prone (a soft-contact arm riding a low
+# BABIP) or blowup-prone without being sell-high (ugly ERA that already matches an ugly
+# xERA). They share the ERA/xERA signal so they sometimes co-fire — a strong "move him" cue.
+_XREG_ERA    = 1.00   # de-biased |xERA − ERA| gap for a pitcher regression flag (~12% each side)
+_XREG_ERA_IP = 20     # min IP so the gap is a real signal, not small-sample noise
+# xERA runs systematically ABOVE ERA in this data (~+0.33 median), so a raw threshold would
+# over-fire "sell". De-bias against the league median gap → the flag means luckier/unluckier
+# than TYPICAL. Set live from the snapshot (like _LG / _SCORE_CALIB); 0.0 cold-start default.
+_XERA_OFFSET = 0.0
+
+
+def compute_xera_offset(pitchers):
+    """Set the module `_XERA_OFFSET` = league median (xERA − ERA) over the qualified YEAR
+    pool, so `pitcher_regression_flag` measures luck RELATIVE to the systematic offset."""
+    global _XERA_OFFSET
+    gaps = sorted(_n(r.get("xERA")) - _n(r.get("ERA")) for r in pitchers
+                  if int(_n(r.get("Dataset")) or 0) == YEAR
+                  and _n(r.get("ERA")) > 0 and _n(r.get("xERA")) > 0 and _n(r.get("IP")) >= _XREG_ERA_IP)
+    if len(gaps) >= 20:
+        _XERA_OFFSET = gaps[len(gaps) // 2]
+
+
+def pitcher_regression_flag(row):
+    """'buy' (ERA unluckier than typical — positive regression likely), 'sell' (ERA luckier
+    than typical — regression risk), or None. Pitcher analog of `_regression_flag`, de-biased
+    by `_XERA_OFFSET` so it flags relative luck, not the league-wide xERA/ERA offset."""
+    era, xera, ip = _n(row.get("ERA")), _n(row.get("xERA")), _n(row.get("IP"))
+    if era <= 0 or xera <= 0 or ip < _XREG_ERA_IP:
+        return None
+    adj = (xera - era) - _XERA_OFFSET   # + = luckier than typical, − = unluckier
+    if adj >= _XREG_ERA:
+        return "sell"
+    if adj <= -_XREG_ERA:
+        return "buy"
+    return None
+
+
+def pitcher_regression_badge(row):
+    """Green $ (buy-low) / red ▼ (sell-high) chip for a pitcher whose ERA has diverged from
+    xERA, or '' when neither. Display-only (never folded into any score); hover names the
+    ERA vs xERA gap. SEPARATE from ⚠ (tail risk) — see the note above."""
+    flag = pitcher_regression_flag(row)
+    if not flag:
+        return ""
+    era, xera = _n(row.get("ERA")), _n(row.get("xERA"))
+    gap = f"ERA {era:.2f} vs xERA {xera:.2f}"
+    if flag == "buy":
+        return _hit_badge("$", GREEN, gap + " &mdash; ERA above expected, positive regression likely (buy-low)")
+    return _hit_badge("&#9660;", RED, gap + " &mdash; ERA below expected, regression risk (sell-high)")
+
+
 def hitter_badges(row, hit_pctile=None, cap=None):
     """Concatenated tactical badge HTML for a hitter row (priority SB→PWR→BUY/SELL; `cap=None`
     shows every applicable badge). `hit_pctile` is the league SB percentile pool
@@ -1480,6 +1533,16 @@ def _sp_badge_context(row, qs_fires, k_fires, two_start_n, recent_era=None):
         tail = ": " + " &middot; ".join(drivers) if drivers else ""
         lines.append(f'{blowup_badge(row, recent_era)} low floor &mdash; blowup-prone{tail}. '
                      f'A floor warning only; it doesn&rsquo;t lower the score.')
+    _rflag = pitcher_regression_flag(row)
+    if _rflag:
+        era, xera = _n(row.get("ERA")), _n(row.get("xERA"))
+        if _rflag == "sell":
+            lines.append(f'{pitcher_regression_badge(row)} ERA {era:.2f} is running below his '
+                         f'{xera:.2f} xERA &mdash; getting lucky, regression risk (sell-high). '
+                         f'Separate from &#9888;: this is mean regression, not blowup floor.')
+        else:
+            lines.append(f'{pitcher_regression_badge(row)} ERA {era:.2f} is running above his '
+                         f'{xera:.2f} xERA &mdash; unlucky, positive regression likely (buy-low).')
     return _badge_ctx_wrap(lines)
 
 
@@ -2345,7 +2408,7 @@ def build_pitcher_hot_cold_section(pitchers, my_team, rec_p=None, best_recent_p=
             _bd_uid("phc", r["name"]), 7)
         rows_html += (
             f'<tr style="{bg}">'
-            f'<td style="{TD_S}font-weight:600;">{team_logo(r["team"])}{r["name"]}{r["inj"]}</td>'
+            f'<td style="{TD_S}font-weight:600;">{team_logo(r["team"])}{r["name"]}{r["inj"]}{pitcher_regression_badge(r["srow"])}</td>'
             f'<td style="{TDC}color:{MUTED};">{r["pos"]}</td>'
             f'<td style="{TDC}">{r["season_era"]:.2f}</td>'
             f'<td style="{TDC}">{recent_str}</td>'
@@ -2561,7 +2624,7 @@ def find_trades(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
             r["_tscore"] = _score_p(r, best_recent_p)
             r["_tcats"]  = set(player_cat_strengths(r, pit_pctile, _FA_RP_CATS, set()))
         r["_tval"]    = _trade_value(r, ptype)
-        _flag = _regression_flag(r) if ptype == "hit" else None  # pitcher buy/sell = future feature
+        _flag = _regression_flag(r) if ptype == "hit" else pitcher_regression_flag(r)
         r["_tsell"]   = (_flag == "sell")
         r["_tbuy"]    = (_flag == "buy")
         r["_tgroups"] = _trade_pos_groups(r)
@@ -2688,13 +2751,13 @@ def _trade_player_line(r, hi_cats, hi_color, side, show_pos=False):
         chips += "".join(_hit_badge(p, CYAN, f"upgrades your thin {p}")
                          for p in r.get("_tfillpos", []))
     if side == "give" and r.get("_tsell"):
-        chips += _hit_badge("&#9660; sell-high", GREEN, "surface stats over his Statcast expected — regression risk, smart to move him now")
+        chips += _hit_badge("&#9660; sell-high", GREEN, "results running ahead of his Statcast expected — regression risk, smart to move him now")
     elif side == "give" and r.get("_tbuy"):
-        chips += _hit_badge("selling low?", ORANGE, "under his Statcast expected — a rebound candidate; think twice before dealing him")
+        chips += _hit_badge("selling low?", ORANGE, "results running behind his Statcast expected — a rebound candidate; think twice before dealing him")
     elif side == "get" and r.get("_tbuy"):
-        chips += _hit_badge("$ buy-low", GREEN, "surface stats under his Statcast expected — positive regression likely, acquire cheap")
+        chips += _hit_badge("$ buy-low", GREEN, "results running behind his Statcast expected — positive regression likely, acquire cheap")
     elif side == "get" and r.get("_tsell"):
-        chips += _hit_badge("regression risk", ORANGE, "over his Statcast expected — likely to decline; you'd be buying high")
+        chips += _hit_badge("regression risk", ORANGE, "results running ahead of his Statcast expected — likely to decline; you'd be buying high")
     return (f'<div style="margin:3px 0;font-size:12px;color:{TEXT};white-space:nowrap;">'
             f'{logo}<span style="font-weight:600;">{nm}</span> '
             f'{badge(int(round(r["_tscore"])))}{chips}</div>')
@@ -3784,7 +3847,17 @@ def build_glossary_section():
                "when the arm is <b>cold lately</b> (high L15 ERA). <b>Hover</b> for the worst 2–3 drivers. It's "
                "a floor warning only — it never lowers a pitcher's Score, and the digest steers free-agent "
                "pickups away from flagged arms. Blowups are largely random, so treat it as “stream with "
-               "caution,” not a guarantee."),
+               "caution,” not a guarantee. <b>Distinct from the ▼ sell-high chip below</b> — ⚠ is single-start "
+               "<i>tail</i> risk; ▼ is <i>mean</i> regression (a lucky ERA due to rise)."),
+        _entry("Pitcher $ / ▼ (buy-low / sell-high)",
+               "The pitcher version of the hitter regression badges. <b>$</b> (green) = <b>buy-low</b>: his ERA "
+               "is running <i>above</i> his Statcast expected ERA (xERA), i.e. unlucky — positive regression "
+               "likely, a good acquire-cheap target. <b>▼</b> (red) = <b>sell-high</b>: ERA running <i>below</i> "
+               "xERA, i.e. getting lucky — regression risk, move him while the surface stats look great. The "
+               "gap is measured <b>relative to the league's typical xERA-vs-ERA offset</b> (xERA runs a bit "
+               "high across the board, so we de-bias) and needs a real innings sample. Display-only — never "
+               "changes a Score — and it also powers the buy-low / sell-high timing in Trade Radar. <b>Hover</b> "
+               "for the ERA-vs-xERA numbers."),
     ])
     pitching = _group("Pitching metrics", [
         _entry("xERA / xwOBA-against", "Baseball Savant “deserved” run prevention from contact quality — "
@@ -4246,6 +4319,7 @@ def build_email(snap, override_team=None):
     compute_pitcher_benchmarks(pitchers)
     compute_score_calibration(pitchers)          # re-anchor SP/RP score scale (after benchmarks)
     compute_league_averages(hitters, pitchers)   # league-avg reference points → _LG
+    compute_xera_offset(pitchers)                # de-bias the pitcher buy/sell (ERA vs xERA) flag
 
     # Map Baseball Ref recent rows to add fields pitcher_score expects
     rec_p_fp = {}
@@ -4690,6 +4764,7 @@ def build_email(snap, override_team=None):
                 if k_fires_s:
                     start_badges.append(k5_badge(_pjs_k, r))
                 start_badges.append(blowup_badge(r, p15r.get("ERA")))
+                start_badges.append(pitcher_regression_badge(r))
                 start_badge = "".join(start_badges)
                 proj_line_s = _proj_line_html(r)
                 _mus_bd = (_pitcher_score_breakdown(r, best_recent_p)
@@ -4783,7 +4858,7 @@ def build_email(snap, override_team=None):
                 _bd_uid("myrp", r.get("PlayerName", "")), 8)
             return (
                 f'<tr style="{bg}">'
-                f'<td style="{TD_S}font-weight:600;">{team_logo(r.get("Team"))}{r.get("PlayerName","")}{inj_tag(r)}{ds_badge}</td>'
+                f'<td style="{TD_S}font-weight:600;">{team_logo(r.get("Team"))}{r.get("PlayerName","")}{inj_tag(r)}{ds_badge}{pitcher_regression_badge(r)}</td>'
                 f'<td style="{TDC}color:{MUTED};">{r.get("Position","")}</td>'
                 f'<td style="{TDC}">{v(svhd, 0)}</td>'
                 f'<td style="{TDC}">{v(k, 0)}</td>'
@@ -4911,6 +4986,7 @@ def build_email(snap, override_team=None):
                 elif k_fires:
                     name_border = f"border-left:3px solid {YELLOW};"
                 pickup_badges.append(blowup_badge(r, p15r.get("ERA")))
+                pickup_badges.append(pitcher_regression_badge(r))
                 pickup_badge = "".join(pickup_badges)
                 # Two-start flag always shows — a 2-start FA is a top streaming target
                 _n_starts_fa = _starts_this_week(r, today_str, week_end_str)
@@ -4987,7 +5063,7 @@ def build_email(snap, override_team=None):
                 _bd_uid("farp", r.get("PlayerName", "")), 9)
             return (
                 f'<tr style="{bg}">'
-                f'<td style="{TD_S}font-weight:600;">{team_logo(r.get("Team"))}{r.get("PlayerName","")}{inj_tag(r)}{ds_badge}</td>'
+                f'<td style="{TD_S}font-weight:600;">{team_logo(r.get("Team"))}{r.get("PlayerName","")}{inj_tag(r)}{ds_badge}{pitcher_regression_badge(r)}</td>'
                 f'<td style="{TDC}color:{MUTED};">{r.get("Position","")}</td>'
                 f'<td style="{TDC}">{v(svhd, 0)}</td>'
                 f'<td style="{TDC}">{v(k, 0)}</td>'
@@ -5302,7 +5378,7 @@ def build_email(snap, override_team=None):
                 f'{team_logo(worst.get("Team"), 16)}'
                 f'<span style="font-weight:600;">{worst["PlayerName"]}</span>'
                 f'{inj_tag(worst)}'
-                f'{"" if _is_pit_pos else hitter_badges(worst, hit_pctile)}'
+                f'{pitcher_regression_badge(worst) if _is_pit_pos else hitter_badges(worst, hit_pctile)}'
                 f' {_worst_badge}'
                 f'{pos_stat_line(worst, p["pos"])}'
             )
@@ -5333,7 +5409,7 @@ def build_email(snap, override_team=None):
                 f'<span style="{"font-weight:600;" if upgrade else ""}'
                 f'color:{GREEN if upgrade else MUTED};">'
                 f'{top_fa["PlayerName"]}</span>'
-                f'{"" if _is_pit_pos else hitter_badges(top_fa, hit_pctile)}'
+                f'{pitcher_regression_badge(top_fa) if _is_pit_pos else hitter_badges(top_fa, hit_pctile)}'
                 f' {_fa_badge}'
                 f'{"&nbsp;&#8593;" if upgrade else ""}'
                 f'{pos_stat_line(top_fa, p["pos"])}'
