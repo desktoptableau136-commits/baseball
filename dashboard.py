@@ -23,7 +23,7 @@ from pathlib import Path
 
 import send_digest as sd
 from send_digest import (
-    SURFACE, SURFACE2, BORDER, TEXT, MUTED, ACCENT, GREEN, RED, YELLOW, CYAN,
+    SURFACE, SURFACE2, BORDER, TEXT, MUTED, ACCENT, GREEN, RED, YELLOW, ORANGE, CYAN,
     YEAR, MY_TEAM, _n, _is_sp, _fmt_ip, _starts_this_week,
     _project, _cat_win_prob, _CAT_DEC, _CAT_LABELS_MAP, _LOWER_BETTER,
     _CLOSE_THRESH, _TOSSUP_LO, _TOSSUP_HI,
@@ -551,8 +551,8 @@ def render_pitching(ctx):
         if sd._is_blowup_risk(r, _l15):
             _rd = sd._risk_drivers(r, _l15)
             _rt = "Low floor &mdash; blowup-prone: " + " &middot; ".join(_rd) if _rd else "Low floor &mdash; blowup-prone"
-            badges += (f' <span title="{_rt}" style="font-size:8px;font-weight:700;color:{RED};'
-                       f'background:rgba(239,68,68,0.12);border:1px solid rgba(239,68,68,0.35);'
+            badges += (f' <span title="{_rt}" style="font-size:8px;font-weight:700;color:{ORANGE};'
+                       f'background:rgba(234,88,12,0.12);border:1px solid rgba(234,88,12,0.35);'
                        f'border-radius:3px;padding:0 3px;vertical-align:middle;">&#9888;</span>')
         rows.append(
             f'<div style="display:flex;justify-content:space-between;gap:6px;padding:2px 0;white-space:nowrap;border-bottom:1px solid {BORDER};">'

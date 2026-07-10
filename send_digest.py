@@ -650,7 +650,7 @@ def two_start_badge(title=""):
     return (
         f'<span{tt} style="font-size:9px;font-weight:800;color:#04121a;'
         f'background:{CYAN};border-radius:3px;padding:1px 5px;margin-left:5px;'
-        f'vertical-align:middle;letter-spacing:.3px;">2-START</span>'
+        f'vertical-align:middle;letter-spacing:.3px;">2</span>'
     )
 
 
@@ -828,12 +828,13 @@ def blowup_badge(r, recent_era=None):
         return ""
     drivers = _risk_drivers(r, recent_era)
     tip = "Low floor &mdash; blowup-prone: " + " &middot; ".join(drivers) if drivers else "Low floor &mdash; blowup-prone"
-    return _hit_badge("&#9888; RISK", RED, tip)
+    return _hit_badge("&#9888;", ORANGE, tip)
 
 
-def hitter_badges(row, hit_pctile=None, cap=2):
-    """Concatenated tactical badge HTML for a hitter row (up to `cap`, priority SB→PWR→BUY/SELL).
-    `hit_pctile` is the league SB percentile pool (build_cat_percentiles) — when None, SB is skipped."""
+def hitter_badges(row, hit_pctile=None, cap=None):
+    """Concatenated tactical badge HTML for a hitter row (priority SB→PWR→BUY/SELL; `cap=None`
+    shows every applicable badge). `hit_pctile` is the league SB percentile pool
+    (build_cat_percentiles) — when None, SB is skipped."""
     badges = []
 
     # SB — genuine base-stealer (scarce, streamable). Percentile of actual SB, speed-corroborated.
@@ -856,9 +857,9 @@ def hitter_badges(row, hit_pctile=None, cap=2):
         d_ba, d_slg = xba - avg, xslg - slg
         _rt = f"xBA {xba:.3f} vs AVG {avg:.3f} · xSLG {xslg:.3f} vs SLG {slg:.3f}"
         if d_ba >= _XREG_BA and d_slg >= _XREG_SLG:
-            badges.append(_hit_badge("&#9650;BUY", GREEN, _rt))
+            badges.append(_hit_badge("$", GREEN, _rt))
         elif -d_ba >= _XREG_BA and -d_slg >= _XREG_SLG:
-            badges.append(_hit_badge("&#9660;SELL", RED, _rt))
+            badges.append(_hit_badge("&#9660;", RED, _rt))
 
     return "".join(badges[:cap])
 
@@ -1247,8 +1248,9 @@ ACCENT   = "#3b82f6"
 GREEN    = "#22c55e"
 RED      = "#ef4444"
 YELLOW   = "#f59e0b"
+ORANGE   = "#ea580c"   # starter low-floor ⚠ badge (burnt orange) — deliberately distinct from the amber YELLOW 5K+ chip
 PURPLE   = "#a855f7"   # hitter PWR badge (translucent) — distinct from green/yellow/red
-CYAN     = "#22d3ee"   # pitcher 2-START badge (solid) + dashboard ×2 markers
+CYAN     = "#22d3ee"   # pitcher two-start "2" badge (solid) + dashboard ×2 markers
 SILVER   = "#c8d0da"   # hitter SB "Quicksilver" speed badge (metallic, distinct from TEXT/MUTED)
 
 TH_S = f"padding:8px 10px;background:{SURFACE};color:{MUTED};font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.7px;border-bottom:2px solid {BORDER};white-space:nowrap;"
@@ -1405,9 +1407,10 @@ def _badge_ctx_wrap(lines):
     return f'<div style="margin-top:6px;color:{MUTED};">{inner}</div>'
 
 
-def _hit_badge_context(row, hit_pctile=None, cap=2):
+def _hit_badge_context(row, hit_pctile=None, cap=None):
     """Explain whichever hitter badges `row` earns — SAME predicates, order and cap as
-    hitter_badges — so the tap-to-expand panel explains exactly the chips shown, no more."""
+    hitter_badges (cap=None: every applicable badge) — so the tap-to-expand panel explains
+    exactly the chips shown, no more."""
     lines = []
     if hit_pctile is not None:
         sb = _n(row.get("SB")); spd = _n(row.get("SprintSpeed"))
@@ -1424,11 +1427,11 @@ def _hit_badge_context(row, hit_pctile=None, cap=2):
         slg = iso + avg; d_ba = xba - avg; d_slg = xslg - slg
         gap = f'xBA {xba:.3f} vs AVG {avg:.3f}, xSLG {xslg:.3f} vs SLG {slg:.3f}'
         if d_ba >= _XREG_BA and d_slg >= _XREG_SLG:
-            lines.append(f'{_hit_badge("&#9650;BUY", GREEN)} under his Statcast expected stats ({gap}) '
-                         f'&mdash; positive regression likely.')
+            lines.append(f'{_hit_badge("$", GREEN)} under his Statcast expected stats ({gap}) '
+                         f'&mdash; positive regression likely (buy-low).')
         elif -d_ba >= _XREG_BA and -d_slg >= _XREG_SLG:
-            lines.append(f'{_hit_badge("&#9660;SELL", RED)} over his Statcast expected stats ({gap}) '
-                         f'&mdash; regression risk.')
+            lines.append(f'{_hit_badge("&#9660;", RED)} over his Statcast expected stats ({gap}) '
+                         f'&mdash; regression risk (sell-high).')
     return _badge_ctx_wrap(lines[:cap])
 
 
@@ -3447,17 +3450,17 @@ def build_glossary_section():
         _entry("QS% (quality-start probability)",
                "Modeled chance a starter throws a quality start (6+ IP, ≤3 ER). League-average ≈ 38%, "
                "an ace ≈ 75%. Driven by innings-per-start, K%, ERA/WHIP and contact allowed."),
-        _entry("QS / 5K+ / 2-START badges",
+        _entry("QS / 5K+ / 2 badges",
                "Next to a starter's name in My Upcoming Starts and FA Starting Pitchers. They annotate "
                "his projected line for that day: green QS shows when the Proj. Line is a quality start "
-               "(6+ IP & ≤3 ER); yellow 5K+ shows when it projects 5+ strikeouts; a cyan 2-START flags "
+               "(6+ IP & ≤3 ER); yellow 5K+ shows when it projects 5+ strikeouts; a cyan 2 flags "
                "two starts inside the matchup week. They match the Proj. Line exactly (no 5K+ badge next "
                "to a 4 K line) and appear regardless of your rotation that day. <b>Hover</b> (or tap the "
                "Score pill) for the projected line that earned each one — the 5K+ tooltip and its Score-pill "
                "line also name the K-skill behind the projection (whiff rate, whiff percentile, or K%). The "
                "QS% column shows the season quality-start probability separately."),
-        _entry("⚠ RISK badge (low floor)",
-               "A red ⚠ RISK chip next to a starter warns of a <b>low floor</b> — a skill profile prone to "
+        _entry("⚠ badge (low floor)",
+               "An orange ⚠ chip next to a starter warns of a <b>low floor</b> — a skill profile prone to "
                "a disaster outing (the 5+ ER start that wrecks your ERA/WHIP and can't be undone once it's "
                "in your lineup). It blends baserunner traffic (WHIP), a strikeout escape hatch (K% / whiff), "
                "effective run prevention (ERA regressed toward xERA), and hard contact allowed, then escalates "
@@ -3495,13 +3498,13 @@ def build_glossary_section():
                "(also listed in the hitter's expanded Score panel for touch devices)."),
         _entry("Sprint speed / ISO", "Statcast sprint speed (ft/sec, a steals/​range signal) and Isolated "
                "Power (SLG − AVG, extra-base power)."),
-        _entry("Hitter badges (PWR / SB / ▲BUY / ▼SELL)",
-               "Tactical flags next to a hitter's name (up to 2, hover or tap the Score pill for why). "
-               "<b>PWR</b> (purple) = top-tier modeled HR probability. <b>SB</b> (silver) = a genuine "
-               "base-stealer (top-20% SB producer, sprint-speed corroborated). <b>▲BUY</b> (green) = "
-               "under his Statcast expected stats (xBA/xSLG vs actual) — positive regression likely. "
-               "<b>▼SELL</b> (red) = over his expected stats — regression risk. Display-only, never part "
-               "of the Score."),
+        _entry("Hitter badges (PWR / SB / $ / ▼)",
+               "Tactical flags next to a hitter's name (all applicable badges show; hover or tap the "
+               "Score pill for why). <b>PWR</b> (purple) = top-tier modeled HR probability. <b>SB</b> "
+               "(silver) = a genuine base-stealer (top-20% SB producer, sprint-speed corroborated). "
+               "<b>$</b> (green) = buy-low — under his Statcast expected stats (xBA/xSLG vs actual), so "
+               "positive regression likely. <b>▼</b> (red) = sell-high — over his expected stats, so "
+               "regression risk. Display-only, never part of the Score."),
     ])
     proj = _group("Projections & matchup", [
         _entry("Category Pulse cards", "Per-category snapshot of the current matchup: your value vs the "
