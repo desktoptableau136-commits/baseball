@@ -29,7 +29,6 @@ Run:  python bench_leakage.py
 from datetime import datetime, timedelta
 
 import fetch_data as fd
-from espn_api.baseball.constant import POSITION_MAP
 
 # stat-id string keys (STATS_MAP)
 AB, H, HR, TB, BB_H, R, RBI, SB, B_SO = "0", "1", "5", "8", "10", "20", "21", "23", "27"

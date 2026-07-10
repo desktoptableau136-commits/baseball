@@ -669,32 +669,6 @@ def get_opponent_ops() -> pd.DataFrame:
     return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
 
 
-# â”€â”€ FANGRAPHS ADVANCED STATS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-
-def get_fg_pitcher_holds(year: int) -> pd.DataFrame:
-    """Season SV and HLD from FanGraphs via pybaseball — FantasyPros HLD column is unreliable.
-    Uses pitching_stats_range (works) rather than pitching_stats (403 on legacy endpoint)."""
-    try:
-        from pybaseball import pitching_stats_range
-        start_dt = f"{year}-03-20"
-        end_dt   = datetime.now().strftime("%Y-%m-%d")
-        df = pitching_stats_range(start_dt, end_dt)
-        if df is None or df.empty:
-            return pd.DataFrame()
-        name_col = next((c for c in df.columns if c.lower() in ("name", "playername")), None)
-        if not name_col:
-            return pd.DataFrame()
-        df = df.rename(columns={name_col: "PlayerName"})
-        df["PlayerName"] = df["PlayerName"].str.strip()
-        keep = [c for c in ["PlayerName", "SV", "HLD"] if c in df.columns]
-        result = df[keep].dropna(subset=["PlayerName"]).copy()
-        log(f"  FanGraphs pitcher holds (season): {len(result)} rows, HLD={'HLD' in result.columns}")
-        return result
-    except Exception as e:
-        log(f"  FanGraphs pitcher holds FAILED: {e}")
-        return pd.DataFrame()
-
-
 def get_savant_pitcher_contact(year: int) -> pd.DataFrame:
     """Barrel% allowed and hard-hit% allowed from Baseball Savant (via pybaseball)."""
     try:
@@ -1545,7 +1519,6 @@ def get_lineup_efficiency(league, my_team_name: str, mode: str = "prev") -> dict
     JSON-serializable dict consumed by weekly_recap. Standalone/opponent version lives
     in bench_leakage.py. Returns {} on any failure (never breaks the fetch)."""
     try:
-        from espn_api.baseball.constant import POSITION_MAP  # noqa: F401
         AB, H, HR, R, RBI, SB, B_SO = "0", "1", "5", "20", "21", "23", "27"
         TB, BB_H = "8", "10"
         OUTS, P_H, P_BB, ER, K = "34", "37", "39", "45", "48"
@@ -1888,11 +1861,6 @@ def get_all_prev_matchups(league) -> dict:
         }
 
     return all_prev
-
-
-def get_prev_matchup(league, my_team: str) -> dict:
-    """Return the most recently completed matchup for my_team, same structure as current_matchup."""
-    return get_all_prev_matchups(league).get(" ".join(my_team.split()), {})
 
 
 # â”€â”€ MAIN â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€

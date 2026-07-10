@@ -23,9 +23,9 @@ from pathlib import Path
 
 import send_digest as sd
 from send_digest import (
-    BG, SURFACE, SURFACE2, BORDER, TEXT, MUTED, ACCENT, GREEN, RED, YELLOW, PURPLE, CYAN,
+    SURFACE, SURFACE2, BORDER, TEXT, MUTED, ACCENT, GREEN, RED, YELLOW, CYAN,
     YEAR, MY_TEAM, _n, _is_sp, _fmt_ip, _starts_this_week,
-    _project, _cat_win_prob, _CAT_DEC, _CAT_LABELS_MAP, _LOWER_BETTER, _RATE_CATS,
+    _project, _cat_win_prob, _CAT_DEC, _CAT_LABELS_MAP, _LOWER_BETTER,
     _CLOSE_THRESH, _TOSSUP_LO, _TOSSUP_HI,
 )
 
@@ -238,10 +238,10 @@ def _fv(v, dec=0):
     return s[1:] if (dec >= 2 and 0 <= v < 1) else s
 
 
-def _tile(title, body, flex=1.0, accent=ACCENT, sub="", cls=""):
+def _tile(title, body, flex=1.0, accent=ACCENT, sub=""):
     sub_html = f'<span style="color:{MUTED};font-weight:400;text-transform:none;letter-spacing:0;font-size:10px;margin-left:6px;">{sub}</span>' if sub else ""
     return (
-        f'<div class="tile {cls}" style="flex:{flex} 1 0;min-height:0;background:{SURFACE};border:1px solid {BORDER};'
+        f'<div class="tile" style="flex:{flex} 1 0;min-height:0;background:{SURFACE};border:1px solid {BORDER};'
         f'border-top:2px solid {accent};border-radius:6px;padding:6px 10px;display:flex;flex-direction:column;overflow:hidden;">'
         f'<div style="color:{TEXT};font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.6px;'
         f'margin-bottom:4px;flex:0 0 auto;">{title}{sub_html}</div>'
@@ -421,7 +421,7 @@ def _pulse_cell(c, ctx, my_avgs, opp_avgs, my_std, opp_std, elapsed_frac, remain
 def render_category_pulse(ctx):
     matchup = ctx["matchup"]
     if not matchup or not matchup.get("categories"):
-        return _tile("Category Pulse", f'<div style="color:{MUTED};">No live matchup yet.</div>', flex=1.7, cls="t1")
+        return _tile("Category Pulse", f'<div style="color:{MUTED};">No live matchup yet.</div>', flex=1.7)
     mk = " ".join(matchup.get("my_team", "").split()); ok = " ".join(matchup.get("opp_team", "").split())
     my_avgs = ctx["weekly_avgs"].get(mk, {}); opp_avgs = ctx["weekly_avgs"].get(ok, {})
     my_std = ctx["weekly_std"].get(mk, {}); opp_std = ctx["weekly_std"].get(ok, {})
@@ -448,14 +448,14 @@ def render_category_pulse(ctx):
     close = sum(1 for (r, tier) in cls.values() if tier == "tossup")
     sub = (f'{cw}W&middot;{cl}L&middot;{ct}T &rarr; proj {pw}-{pl}-{pt}'
            + (f' &middot; &#9889;{close}' if close else ''))
-    return _tile(f"Category Pulse", grid, flex=1.45, sub=sub, cls="t1")
+    return _tile(f"Category Pulse", grid, flex=1.45, sub=sub)
 
 
 def render_opponent(ctx):
     oi = ctx["opp_intel"]; matchup = ctx["matchup"]
     opp = matchup.get("opp_team", "") if matchup else ""
     if not opp:
-        return _tile("Opponent", f'<div style="color:{MUTED};">No opponent set.</div>', cls="t5")
+        return _tile("Opponent", f'<div style="color:{MUTED};">No opponent set.</div>')
     logo = sd.fantasy_logo(ctx["team_logos"].get(" ".join(opp.split()), ""), size=18, team_name=opp)
     header = (f'<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;">{logo}'
               f'<span style="color:{TEXT};font-weight:700;font-size:12px;">{opp}</span></div>')
@@ -507,7 +507,7 @@ def render_opponent(ctx):
                 f'<div style="flex:1 1 130px;min-width:0;">{"".join(right)}</div></div>')
     else:
         body = header + "".join(left)
-    return _tile("Opponent This Matchup", body, cls="t5")
+    return _tile("Opponent This Matchup", body)
 
 
 # ── Column 2: Pitching, Hitting, Holes ──────────────────────────────────────────
@@ -559,7 +559,7 @@ def render_pitching(ctx):
     cold = _arm_movers(ctx)
     body = "".join(rows) + cold
     starts_wk = sum(1 for s in ctx["starts"] if s.get("PSP_Date", "") <= ctx["week_end_str"])
-    return _tile("My Pitching", body, flex=1.15, sub=f'{starts_wk} starts this matchup', cls="t3")
+    return _tile("My Pitching", body, flex=1.15, sub=f'{starts_wk} starts this matchup')
 
 
 def _arm_movers(ctx):
@@ -616,7 +616,7 @@ def render_hitting(ctx):
         rows += [line(d, r, ro, "&#10052;", ACCENT) for d, r, ro in cold]
     if not rows:
         rows = [f'<div style="color:{MUTED};">No hitter data.</div>']
-    return _tile("Hitting Hot / Cold", "".join(rows), sub="7-day OPS vs season", cls="t4")
+    return _tile("Hitting Hot / Cold", "".join(rows), sub="7-day OPS vs season")
 
 
 def render_holes(ctx):
@@ -646,7 +646,7 @@ def render_holes(ctx):
     if watch:
         # tighten the reused callout for the compact tile
         watch = f'<div style="margin-top:5px;font-size:10.5px;">{watch}</div>'
-    return _tile("Weakest Spots &middot; Lineup Watch", holes + watch, flex=1.25, sub="rank / worst &rarr; best FA", cls="t2")
+    return _tile("Weakest Spots &middot; Lineup Watch", holes + watch, flex=1.25, sub="rank / worst &rarr; best FA")
 
 
 # ── Column 3: Moves, FA Radar, Season ───────────────────────────────────────────
@@ -666,7 +666,7 @@ def render_moves(ctx):
     if srw:
         rows.append(f'<div style="margin-top:6px;font-size:10.5px;color:{MUTED};">'
                     f'<span style="text-transform:uppercase;letter-spacing:.4px;">Save-role watch:</span><br>' + " &middot; ".join(srw) + '</div>')
-    return _tile("Recommended Moves", "".join(rows), flex=0.85, cls="t6")
+    return _tile("Recommended Moves", "".join(rows), flex=0.85)
 
 
 def render_fa_radar(ctx):
@@ -687,7 +687,7 @@ def render_fa_radar(ctx):
     parts.append(hdr("Hitters"))
     for r in ctx["fa_hit"][:2]:
         parts.append(spline(r, r.get("_score", 0), f'{_fv(_n(r.get("OPS")),3)} OPS', badges=sd.hitter_badges(r, ctx["hit_pctile"])))
-    return _tile("Free-Agent Radar", "".join(parts), flex=1.2, sub="top available by score", cls="t7")
+    return _tile("Free-Agent Radar", "".join(parts), flex=1.2, sub="top available by score")
 
 
 def render_season(ctx):
@@ -728,7 +728,7 @@ def render_season(ctx):
     strip = (f'<div style="margin-top:6px;"><div style="color:{MUTED};font-size:10px;text-transform:uppercase;'
              f'letter-spacing:.5px;margin-bottom:3px;">Weekly finishes</div>'
              f'<div style="display:flex;gap:3px;">{"".join(cells)}</div></div>') if cells else ""
-    return _tile("Season", top + spark + spark_sub + strip, flex=1.15, cls="t8")
+    return _tile("Season", top + spark + spark_sub + strip, flex=1.15)
 
 
 # ══════════════════════════════════════════════════════════════════════════════

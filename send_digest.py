@@ -261,7 +261,6 @@ def pitcher_score(r, _raw=False, _parts=False):
     kpct  = _n(r.get("Kpct_P"))
     w     = _n(r.get("ESPN_W")) or _n(r.get("W"))
     ip_g  = _n(r.get("IP_per_G"))
-    ip    = _n(r.get("IP"))
     xera     = _n(r.get("xERA"))            # Baseball Savant deserved-ERA (absolute)
     xwoba_ag = _n(r.get("xwOBA_against"))   # xwOBA allowed (absolute, ~.315 avg)
     brl_ag   = _n(r.get("BarrelPctAllowed"))
@@ -1558,17 +1557,6 @@ def nav_bar():
     )
 
 
-def vp(val):
-    """Format a decimal-stored percentage (0.28 → 28.0%)."""
-    try:
-        f = float(val or 0)
-        if f <= 0:
-            return f'<span style="color:{MUTED}">—</span>'
-        return f"{f * 100:.1f}%"
-    except (TypeError, ValueError):
-        return f'<span style="color:{MUTED}">—</span>'
-
-
 def _hrp_driver_str(row):
     """The HR-probability drivers (Barrel% · HardHit% · EV · xwOBA · ISO) as a joined
     string, or "" when none are present. Single source for the HR% hover tooltip and
@@ -2601,10 +2589,6 @@ def build_category_pulse(matchup, weekly_avgs=None, days_elapsed=None, remaining
             f'<tr>{cells}</tr>'
         )
 
-    wins   = matchup["wins"]
-    losses = matchup["losses"]
-    score_color = GREEN if wins > losses else (RED if losses > wins else TEXT)
-
     table = (
         f'<div style="overflow-x:auto;-webkit-overflow-scrolling:touch;margin-bottom:24px;">'
         f'<table style="width:100%;border-collapse:collapse;min-width:480px;">'
@@ -3049,9 +3033,6 @@ def _roster_suggestion(matchup, pitchers, hitters, fa_sp, fa_rp, fa_hit,
 
 def build_week_overview(matchup, week_cats, week_n, fa_sp, starts, days_elapsed, my_starts_by_day, week_end=None, is_sunday=False, roster_suggestion=""):
     bullets = []
-
-    def _cat_label(key):
-        return _CAT_DISPLAY.get(key, key)
 
     # Bullet 1: week record with hitting/pitching split summary
     if matchup:
@@ -3817,20 +3798,17 @@ def build_email(snap, override_team=None):
     _mstart_raw = snap.get("matchup_start_date") or ""
     _mend_raw   = snap.get("matchup_end_date")   or ""
     _mdays      = snap.get("matchup_period_days") or 0
-    _next_end   = snap.get("next_matchup_end_date") or ""
 
     if _mend_raw:
         matchup_end_date   = datetime.strptime(_mend_raw,   "%Y-%m-%d").date()
         matchup_start_date = datetime.strptime(_mstart_raw, "%Y-%m-%d").date() if _mstart_raw else (_today - timedelta(days=_today.weekday()))
         matchup_period_days = int(_mdays) if _mdays else max(7, (matchup_end_date - matchup_start_date).days + 1)
         week_end_str      = _mend_raw
-        next_week_end_str = _next_end or (matchup_end_date + timedelta(days=7)).strftime("%Y-%m-%d")
     else:
         matchup_start_date  = _today - timedelta(days=_today.weekday())
         matchup_end_date    = _today + timedelta(days=6 - _today.weekday())
         matchup_period_days = 7
         week_end_str        = matchup_end_date.strftime("%Y-%m-%d")
-        next_week_end_str   = (_today + timedelta(days=13 - _today.weekday())).strftime("%Y-%m-%d")
 
     days_elapsed = max(0, (_today - matchup_start_date).days)   # 0 on matchup start day
 
