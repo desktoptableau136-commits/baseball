@@ -154,8 +154,6 @@ def build_context(snap, my_team):
     pos_data = sd.positional_breakdown(pitchers, hitters, my_team, best_recent_p, best_recent_h)
     starts   = sd.my_upcoming_starts(pitchers, my_team)
     alerts   = sd.roster_alerts(pitchers, hitters, my_team)
-    opp_intel = sd.opponent_week_intel(pitchers, hitters, matchup.get("opp_team", "") if matchup else "",
-                                       best_recent_h, today_str, week_end_str)
     lineup_eff_current = snap.get("lineup_efficiency_current", {}) if not override else {}
     roster_sugg = sd._roster_suggestion(
         matchup, pitchers, hitters, fa_sp, fa_rp, fa_hit, my_team, best_recent_p, best_recent_h,
@@ -224,7 +222,7 @@ def build_context(snap, my_team):
         best_recent_p=best_recent_p, best_recent_h=best_recent_h, p15=p15, rec_p=rec_p, rec_h=rec_h,
         fa_sp=fa_sp, fa_rp=fa_rp, fa_hit=fa_hit, luck=luck, my_row=my_row, cats=cats, n_teams=n,
         weekly_avgs=weekly_avgs, weekly_std=weekly_std, classification=classification, pit_proj=pit_proj,
-        pos_data=pos_data, starts=starts, alerts=alerts, opp_intel=opp_intel, hit_pctile=hit_pctile,
+        pos_data=pos_data, starts=starts, alerts=alerts, hit_pctile=hit_pctile,
         trades=trades,
         lineup_eff_current=lineup_eff_current, roster_sugg=roster_sugg, emerging=emerging, fading=fading,
         sparkline=sparkline, peak_label=peak_label, roto_week_results=roto_week_results,
@@ -475,65 +473,6 @@ def render_category_pulse(ctx):
     return _tile(f"Category Pulse", grid, flex=1.45, sub=sub)
 
 
-def render_opponent(ctx):
-    oi = ctx["opp_intel"]; matchup = ctx["matchup"]
-    opp = matchup.get("opp_team", "") if matchup else ""
-    if not opp:
-        return _tile("Opponent", f'<div style="color:{MUTED};">No opponent set.</div>')
-    logo = sd.fantasy_logo(ctx["team_logos"].get(" ".join(opp.split()), ""), size=18, team_name=opp)
-    header = (f'<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;">{logo}'
-              f'<span style="color:{TEXT};font-weight:700;font-size:12px;">{opp}</span></div>')
-
-    # Body is two side-by-side columns: LEFT = starts/arms + roto strong/weak,
-    # RIGHT = Hot bats. `flex-wrap` lets them re-stack if the tile gets too narrow
-    # (phone). left/right are lists of html chunks.
-    left, right = [], []
-
-    if oi:
-        two = oi.get("two_start", [])
-        two_s = ("".join(f'{sd.team_logo(r.get("Team"), 12)}<span style="color:{CYAN};font-weight:700;">{r.get("PlayerName")}</span>&#215;2 ' for r in two)) if two else ""
-        left.append(
-            f'<div style="color:{MUTED};font-size:10px;margin-bottom:3px;">'
-            f'<span style="color:{TEXT};font-weight:700;">{oi.get("n_starts",0)}</span> starts / '
-            f'<span style="color:{TEXT};">{oi.get("n_starters",0)}</span> arms {two_s}</div>'
-        )
-        hot = oi.get("hot_hitters", [])
-        if hot:
-            rows = "".join(
-                f'<div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'
-                f'{sd.team_logo(r.get("Team"), 13)}<span style="color:{TEXT};">{r.get("PlayerName")}</span> '
-                f'<span style="color:{MUTED};">{_pos(r)}</span> '
-                f'<span style="color:{GREEN};font-weight:700;">{_fv(ops,3)}</span></div>'
-                for r, ops in hot
-            )
-            right.append(
-                f'<div style="color:{MUTED};font-size:10px;text-transform:uppercase;letter-spacing:.4px;margin-bottom:2px;">Hot bats (recent OPS)</div>'
-                f'<div style="font-size:11px;line-height:1.5;">{rows}</div>'
-            )
-
-    # Opponent roto strengths / weaknesses (season category ranks) → left column
-    ocats, on = sd.category_ranks(ctx["roto"], opp)
-    if ocats:
-        best = sorted(ocats.items(), key=lambda kv: kv[1])[:3]
-        worst = sorted(ocats.items(), key=lambda kv: -kv[1])[:3]
-        b = " ".join(f'<span style="color:{GREEN};">{_CAT_LABELS_MAP.get(c,c)}</span>' for c, _ in best)
-        w = " ".join(f'<span style="color:{RED};">{_CAT_LABELS_MAP.get(c,c)}</span>' for c, _ in worst)
-        left.append(
-            f'<div style="margin-top:4px;font-size:10px;line-height:1.4;">'
-            f'<span style="color:{MUTED};">strong</span> {b}<br>'
-            f'<span style="color:{MUTED};">weak</span> {w}</div>'
-        )
-
-    if right:
-        # Two columns; each can shrink to ~130px before wrapping to a stack.
-        body = (f'{header}<div style="display:flex;flex-wrap:wrap;gap:12px;">'
-                f'<div style="flex:1 1 130px;min-width:0;">{"".join(left)}</div>'
-                f'<div style="flex:1 1 130px;min-width:0;">{"".join(right)}</div></div>')
-    else:
-        body = header + "".join(left)
-    return _tile("Opponent This Matchup", body)
-
-
 # ── Column 2: Pitching, Hitting, Holes ──────────────────────────────────────────
 
 def render_pitching(ctx):
@@ -691,15 +630,21 @@ def render_trade_radar(ctx):
     def pl(p, is_get):
         chips = ""
         if p.get("_tsell"):
-            chips += f' <span style="color:{RED};font-weight:700;font-size:9px;">&#9660;</span>'
+            tip = ("results ahead of his Statcast expected — regression risk, you'd be buying high"
+                   if is_get else "results ahead of his Statcast expected — sell him high")
+            chips += f' <span title="{tip}" style="color:{RED};font-weight:700;font-size:11px;cursor:help;">&#9660;</span>'
         elif p.get("_tbuy"):
-            chips += f' <span style="color:{GREEN};font-weight:700;font-size:9px;">$</span>'
+            tip = ("results behind his Statcast expected — positive regression likely, acquire cheap"
+                   if is_get else "results behind his Statcast expected — a rebound candidate, think twice before dealing him")
+            chips += f' <span title="{tip}" style="color:{GREEN};font-weight:700;font-size:11px;cursor:help;">$</span>'
         if is_get and p.get("_tfillpos"):
-            chips += f' <span style="color:{CYAN};font-size:9px;">({",".join(p["_tfillpos"])})</span>'
-        return f'{sd.team_logo(p.get("Team"), 12)}<span style="color:{TEXT};">{p.get("PlayerName")}</span>{chips}'
+            _pp = ",".join(p["_tfillpos"])
+            chips += f' <span title="upgrades your thin {_pp} — a position you rank near the bottom of the league" style="color:{CYAN};font-size:11px;cursor:help;">({_pp})</span>'
+        return f'{sd.team_logo(p.get("Team"), 13)}<span style="color:{TEXT};">{p.get("PlayerName")}</span>{chips}'
 
-    # Abbreviated view: prefer TWO DISTINCT partners (a 2-item panel showing two deals with
-    # the same team wastes the space); backfill from the full ranked list if only one team fits.
+    # Abbreviated view: prefer TWO DISTINCT partners (the dashboard is already dense — two
+    # is enough; showing two deals with the same team wastes the space); backfill from the
+    # full ranked list if only one distinct team fits.
     top, _seen = [], set()
     for t in trades:
         if t["team"] in _seen:
@@ -714,6 +659,8 @@ def render_trade_radar(ctx):
             top.append(t)
 
     rows = []
+    _clip = "overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"
+    _lbl = "display:inline-block;width:36px;font-size:10px;font-weight:700;letter-spacing:.5px;"
     for t in top:
         give = " + ".join(pl(o, False) for o in t["outs"])
         get_ = " + ".join(pl(i, True) for i in t["ins"])
@@ -722,18 +669,21 @@ def render_trade_radar(ctx):
         thesis = "sell-high" if t.get("sell_out") else ""
         thesis += ("/buy-low" if thesis and t.get("buy_in") else ("buy-low" if t.get("buy_in") else ""))
         tag = val + (f" &middot; {thesis}" if thesis else "")
-        logo = sd.fantasy_logo(ctx["team_logos"].get(t["team"], ""), 12, t["team"])
-        _clip = "overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"
+        logo = sd.fantasy_logo(ctx["team_logos"].get(t["team"], ""), 14, t["team"])
+        accent = GREEN if net > 0.1 else MUTED
+        # Each trade is a padded full-width mini-card (uses the width + breathes vertically,
+        # so the panel doesn't feel cramped); left accent green when the value tilts to me.
         rows.append(
-            f'<div style="padding:3px 0;border-bottom:1px solid {BORDER};">'
-            f'<div style="font-size:10px;color:{MUTED};{_clip}">&#8644; {logo}'
+            f'<div style="background:{SURFACE2};border-left:3px solid {accent};border-radius:6px;'
+            f'padding:7px 11px;margin-bottom:8px;">'
+            f'<div style="font-size:11px;color:{MUTED};margin-bottom:3px;{_clip}">&#8644; {logo}'
             f'<span style="color:{TEXT};font-weight:600;">{t["team"]}</span> &middot; {tag}</div>'
-            f'<div style="font-size:11px;{_clip}"><span style="color:{RED};font-size:9px;font-weight:700;">GIVE</span> {give}</div>'
-            f'<div style="font-size:11px;{_clip}"><span style="color:{GREEN};font-size:9px;font-weight:700;">GET</span> {get_}</div>'
+            f'<div style="font-size:12.5px;line-height:1.6;{_clip}"><span style="{_lbl}color:{RED};">GIVE</span>{give}</div>'
+            f'<div style="font-size:12.5px;line-height:1.6;{_clip}"><span style="{_lbl}color:{GREEN};">GET</span>{get_}</div>'
             f'</div>')
     if not rows:
         rows = [f'<div style="color:{MUTED};">No trade fits right now.</div>']
-    return _tile("Trade Radar", "".join(rows), flex=0.9, sub="top mutual-benefit swaps")
+    return _tile("Trade Radar", "".join(rows), flex=1.05, sub="top mutual-benefit swaps &middot; hover a badge for why")
 
 
 # ── Column 3: Moves, FA Radar, Season ───────────────────────────────────────────
@@ -891,28 +841,25 @@ def build_dashboard(snap, my_team):
     t_holes  = render_holes(ctx)
     t_pitch  = render_pitching(ctx)
     t_hit    = render_hitting(ctx)
-    t_opp    = render_opponent(ctx)
     t_moves  = render_moves(ctx)
     t_fa     = render_fa_radar(ctx)
     t_season = render_season(ctx)
     t_trade  = render_trade_radar(ctx)
 
-    # Desktop 3-col: col1 = Pulse + Weakest Spots/Lineup, col2 = Pitching·Hitting·Opponent,
-    # col3 = Moves·FA·Trade Radar·Season (the abbreviated trade panel sits right after FA
-    # Radar — both are acquisition/action panels, so they read together).
+    # Desktop 3-col: col1 = Pulse + Weakest Spots/Lineup, col2 = Pitching·Hitting·Trade
+    # Radar (Trade Radar took the Opponent This Matchup slot per user preference — opponent
+    # scouting still lives in the digest), col3 = Moves·FA·Season.
     col1 = f'<div class="col">{t_pulse}{t_holes}</div>'
-    col2 = f'<div class="col">{t_pitch}{t_hit}{t_opp}</div>'
-    col3 = f'<div class="col">{t_moves}{t_fa}{t_trade}{t_season}</div>'
+    col2 = f'<div class="col">{t_pitch}{t_hit}{t_trade}</div>'
+    col3 = f'<div class="col">{t_moves}{t_fa}{t_season}</div>'
     grid_desktop = f'<div id="grid">{col1}{col2}{col3}</div>'
 
-    # Tablet 2-col, user-chosen order, HEIGHT-BALANCED: DOWN the left column =
-    # Category Pulse (1), Recommended Moves (6), FA Radar (7), Season (8); DOWN the
-    # right = My Pitching (3), Hitting (4), Weakest Spots (2), Opponent (5). The two
-    # tall tiles (Pulse + Weakest Spots) are split one-per-column so the columns end
-    # at roughly the same height (Weakest<->Season swapped vs the raw 1,6,7,2/3,4,8,5
-    # order for balance). On a phone the two columns stack top-to-bottom.
-    colt_l = f'<div class="colt">{t_pulse}{t_moves}{t_fa}{t_trade}{t_season}</div>'
-    colt_r = f'<div class="colt">{t_pitch}{t_hit}{t_holes}{t_opp}</div>'
+    # Tablet 2-col, HEIGHT-BALANCED: left = Pulse · Moves · FA · Season; right =
+    # Pitching · Hitting · Weakest Spots · Trade Radar. The two tall tiles (Pulse +
+    # Weakest Spots) sit one-per-column so the columns end at roughly the same height.
+    # On a phone the two columns stack top-to-bottom.
+    colt_l = f'<div class="colt">{t_pulse}{t_moves}{t_fa}{t_season}</div>'
+    colt_r = f'<div class="colt">{t_pitch}{t_hit}{t_holes}{t_trade}</div>'
     grid_tablet = f'<div id="gridt">{colt_l}{colt_r}</div>'
 
     return (

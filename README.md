@@ -116,7 +116,7 @@ After `--dry-run`, open `previews/recap_week_N.html` in any browser.
 
 ### Single-Viewport Dashboard
 
-A glance-able "command dashboard" that condenses the entire digest onto **one 1440×900 laptop screen with zero scrolling** — even coverage of every topic (matchup, category pulse, opponent, pitching, hitting hot/cold, weakest spots, moves, free agents, trade radar, season). It reuses the digest's exact scoring so every number matches.
+A glance-able "command dashboard" that condenses the entire digest onto **one 1440×900 laptop screen with zero scrolling** — even coverage of every topic (matchup, category pulse, pitching, hitting hot/cold, weakest spots, moves, free agents, trade radar, season). It reuses the digest's exact scoring so every number matches.
 
 ```bash
 # Write previews/dashboard_{team}.html from the existing snapshot (fast, no email)
@@ -134,9 +134,9 @@ python dashboard.py --email
 
 Open the file maximized in a browser — it's tuned for a 1440×900 viewport and should show no scrollbars.
 
-The **My Pitching** tile lists each upcoming start with its projected `IP·ER·K` line, a purple `×2` marker for two-start pitchers, green **QS** / yellow **5K+** badges, a red **⚠** low-floor (blowup-risk) chip, and the **$ / ▼** buy-low / sell-high chip after the matchup date (same projected-line, risk, and regression rules as the digest). The **Free-Agent Radar** (starters and relievers) and **Weakest Spots** (pitcher rows) carry the ⚠ and $ / ▼ chips too. A compact **Trade Radar** tile shows the top couple of mutually-beneficial trade suggestions (two distinct partners), each as a give / get line with the same $ / ▼ and position chips as the digest — the full list lives in the daily digest. **MLB team logos** appear next to player names throughout the dashboard (My Pitching, Hitting Hot/Cold, Opponent, Weakest Spots, Free-Agent Radar, Trade Radar). The browser tab title reads **"Dashboard — {team}"** (and the daily digest reads **"Daily Digest — {team}"**) so the type is identifiable at a glance.
+The **My Pitching** tile lists each upcoming start with its projected `IP·ER·K` line, a purple `×2` marker for two-start pitchers, green **QS** / yellow **5K+** badges, a red **⚠** low-floor (blowup-risk) chip, and the **$ / ▼** buy-low / sell-high chip after the matchup date (same projected-line, risk, and regression rules as the digest). The **Free-Agent Radar** (starters and relievers) and **Weakest Spots** (pitcher rows) carry the ⚠ and $ / ▼ chips too. A compact **Trade Radar** tile (in place of a standalone opponent tile — opponent scouting lives in the digest) shows the top couple of mutually-beneficial trade suggestions (two distinct partners), each as a give / get line with the same $ / ▼ and position chips as the digest — the full list lives in the daily digest. **MLB team logos** appear next to player names throughout the dashboard (My Pitching, Hitting Hot/Cold, Weakest Spots, Free-Agent Radar, Trade Radar). The browser tab title reads **"Dashboard — {team}"** (and the daily digest reads **"Daily Digest — {team}"**) so the type is identifiable at a glance.
 
-It's also **responsive**: on a tablet (≤1100px) the tiles reflow into two height-balanced columns — Category Pulse → Recommended Moves → Free-Agent Radar → Trade Radar → Season down the left, then My Pitching → Hitting Hot/Cold → Weakest Spots → Opponent down the right — and on a phone (≤700px) into a single column, un-pinning the fixed pane so the page scrolls normally with larger, readable text. The desktop no-scroll layout is unchanged above 1100px.
+It's also **responsive**: on a tablet (≤1100px) the tiles reflow into two height-balanced columns — Category Pulse → Recommended Moves → Free-Agent Radar → Season down the left, then My Pitching → Hitting Hot/Cold → Weakest Spots → Trade Radar down the right — and on a phone (≤700px) into a single column, un-pinning the fixed pane so the page scrolls normally with larger, readable text. The desktop no-scroll layout is unchanged above 1100px.
 
 **Viewing on a phone/tablet:** use `--email` (or attach `previews/dashboard_{team}.html` to an email yourself) and open the **attachment** in your device browser — email apps strip the `<style>` block that holds the layout, so the attached file works but a pasted-in body won't.
 
@@ -188,7 +188,7 @@ Go to **Settings → Secrets and variables → Actions** to view or update:
 
 ## What's in the Digest
 
-The digest is organized into labeled **bands**, with a **Jump to** nav in the header (My Roster · Free Agents · Season · Glossary) that anchors to each band.
+The digest is organized into labeled **bands**, with a **Jump to** nav in the header (My Roster · Transactions · Season · Glossary) that anchors to each band.
 
 **Header** — date · team name + logo · KPI row · Jump-to nav pills
 KPI row: **Record** · **Current Matchup** (W-L-T + win%) · **Roster** (whole-team hot/cold count — hitters *and* pitchers) · **Starts This Matchup**
@@ -211,7 +211,7 @@ KPI row: **Record** · **Current Matchup** (W-L-T + win%) · **Roster** (whole-t
 11. **Pitcher Hot/Cold**
 12. **Roster Hot/Cold**
 
-**FREE AGENTS**
+**TRANSACTIONS**
 13. **FA Pickup — Starting Pitchers**
 14. **FA Pickup — Relief Pitchers**
 15. **FA Pickup — Hitters**
