@@ -1432,9 +1432,10 @@ def _hit_badge_context(row, hit_pctile=None, cap=2):
     return _badge_ctx_wrap(lines[:cap])
 
 
-def _sp_badge_context(row, qs_fires, k_fires, two_start_n):
-    """Explain the SP badges (2-START / QS / 5K+) actually shown on a row. Fed the already-computed
-    fire flags from the render site so the panel can never disagree with the chips beside the name."""
+def _sp_badge_context(row, qs_fires, k_fires, two_start_n, recent_era=None):
+    """Explain the SP badges (2-START / QS / 5K+ / ⚠ RISK) actually shown on a row. Fed the
+    already-computed fire flags + recent ERA from the render site so the panel can never
+    disagree with the chips beside the name."""
     lines = []
     vals = _proj_line_vals(row)
     ip_g, er, k = vals if vals else (0, 0, 0)
@@ -1447,6 +1448,11 @@ def _sp_badge_context(row, qs_fires, k_fires, two_start_n):
         stat = _k5_stat_clause(row)
         tail = f", backed by a {stat}" if stat else ""
         lines.append(f'{k5_badge(k, row)} projected {k} strikeouts (&ge; 5){tail}.')
+    if _is_blowup_risk(row, recent_era):
+        drivers = _risk_drivers(row, recent_era)
+        tail = ": " + " &middot; ".join(drivers) if drivers else ""
+        lines.append(f'{blowup_badge(row, recent_era)} low floor &mdash; blowup-prone{tail}. '
+                     f'A floor warning only; it doesn&rsquo;t lower the score.')
     return _badge_ctx_wrap(lines)
 
 
@@ -4351,7 +4357,7 @@ def build_email(snap, override_team=None):
                 start_badge = "".join(start_badges)
                 proj_line_s = _proj_line_html(r)
                 _mus_bd = (_pitcher_score_breakdown(r, best_recent_p)
-                           + _sp_badge_context(r, qs_fires_s, k_fires_s, _n_starts_s))
+                           + _sp_badge_context(r, qs_fires_s, k_fires_s, _n_starts_s, p15r.get("ERA")))
                 _cell, _bdrow = score_reveal(
                     _score_p(r, best_recent_p), _mus_bd,
                     _bd_uid("mus", name), 8)
@@ -4583,7 +4589,7 @@ def build_email(snap, override_team=None):
                 )
                 proj_line_str = _proj_line_html(r)
                 _fasp_bd = (_pitcher_score_breakdown(r, best_recent_p)
-                            + _sp_badge_context(r, qs_fires, k_fires, _n_starts_fa))
+                            + _sp_badge_context(r, qs_fires, k_fires, _n_starts_fa, p15r.get("ERA")))
                 _cell, _bdrow = score_reveal(
                     r["_score"], _fasp_bd,
                     _bd_uid("fasp", r.get("PlayerName", "")), 8)
