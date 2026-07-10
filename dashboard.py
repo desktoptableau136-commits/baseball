@@ -897,12 +897,12 @@ def build_dashboard(snap, my_team):
     t_season = render_season(ctx)
     t_trade  = render_trade_radar(ctx)
 
-    # Desktop 3-col: col1 = Pulse + Weakest Spots/Lineup + Trade Radar (the abbreviated
-    # trade panel joins col1 to keep the three columns balanced at 3 tiles each),
-    # col2 = Pitching·Hitting·Opponent, col3 = Moves·FA·Season.
-    col1 = f'<div class="col">{t_pulse}{t_holes}{t_trade}</div>'
+    # Desktop 3-col: col1 = Pulse + Weakest Spots/Lineup, col2 = Pitching·Hitting·Opponent,
+    # col3 = Moves·FA·Trade Radar·Season (the abbreviated trade panel sits right after FA
+    # Radar — both are acquisition/action panels, so they read together).
+    col1 = f'<div class="col">{t_pulse}{t_holes}</div>'
     col2 = f'<div class="col">{t_pitch}{t_hit}{t_opp}</div>'
-    col3 = f'<div class="col">{t_moves}{t_fa}{t_season}</div>'
+    col3 = f'<div class="col">{t_moves}{t_fa}{t_trade}{t_season}</div>'
     grid_desktop = f'<div id="grid">{col1}{col2}{col3}</div>'
 
     # Tablet 2-col, user-chosen order, HEIGHT-BALANCED: DOWN the left column =
@@ -911,7 +911,7 @@ def build_dashboard(snap, my_team):
     # tall tiles (Pulse + Weakest Spots) are split one-per-column so the columns end
     # at roughly the same height (Weakest<->Season swapped vs the raw 1,6,7,2/3,4,8,5
     # order for balance). On a phone the two columns stack top-to-bottom.
-    colt_l = f'<div class="colt">{t_pulse}{t_moves}{t_trade}{t_fa}{t_season}</div>'
+    colt_l = f'<div class="colt">{t_pulse}{t_moves}{t_fa}{t_trade}{t_season}</div>'
     colt_r = f'<div class="colt">{t_pitch}{t_hit}{t_holes}{t_opp}</div>'
     grid_tablet = f'<div id="gridt">{colt_l}{colt_r}</div>'
 
