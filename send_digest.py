@@ -2462,7 +2462,16 @@ def _cats_cell(row, pctile, cats, need_cats):
 # player strong in a category that is MY surplus and the rival's NEED; they send one
 # strong in a category that is THEIR surplus and MY need. Value-parity gated so offers
 # read as plausible. Season-category-fit ranking (roto ranks x player cat strengths).
-_TRADE_PARITY       = 12    # max |role-score gap| for a 1-for-1 to read as fair
+#
+# TRADE VALUE is a CROSS-ROLE currency, NOT the role-calibrated 0-100 badge score. A 95
+# closer and a 98 hitter both sit "top of their role," but they are NOT equal trade
+# chips: an everyday bat moves 5 categories every day while a closer touches one punt
+# category (SV+H) plus a sliver of K/ERA/WHIP in ~60 IP. `_trade_value` sums a player's
+# above-median contribution across EVERY category they move (percentiles vs the whole
+# qualified pool, so a reliever's low K/W volume ranks low), with saves discounted since
+# we punt them — so a smasher correctly outweighs a one-category reliever.
+_TRADE_VAL_PARITY   = 0.45  # max cross-role trade-value gap for a fair 1-for-1
+_TRADE_SVHD_W       = 0.35  # punt-saves: discount SV+H contribution in trade value
 _TRADE_MAX_CARDS    = 5     # trades surfaced
 _TRADE_PER_TEAM_CAP = 2     # max cards per partner team (variety)
 _TRADE_POOL_WIDTH   = 4     # top-N of each side fed into the 2-for-2 combinations
@@ -2493,13 +2502,34 @@ def find_trades(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
         return []
 
     # Position groups I'm deep in (top-third rank) — safe to trade FROM without a hole.
-    surplus_pos = {p.get("pos") for p in pos_data
-                   if (p.get("rank") or (p.get("n_teams") or n)) <= max(1, round((p.get("n_teams") or n) / 3.0))}
+    _nt    = lambda p: (p.get("n_teams") or n)
+    _third = lambda p: max(1, round(_nt(p) / 3.0))
+    surplus_pos = {p["pos"] for p in pos_data if (p.get("rank") or _nt(p)) <= _third(p)}
+    # HITTER positions I'm thin at (bottom-third rank) → {pos: (rank, my_avg_score)}. The
+    # hitting game is filling roster holes across C/1B/2B/3B/SS/OF, so a hitter who
+    # UPGRADES a thin position is worth acquiring even when my category totals there
+    # aren't bottom-third — positional scarcity is its own need. (Pitching need is
+    # category-shaped — QS/SP vs SV+H/K balance — so it stays category-driven.)
+    need_pos = {p["pos"]: ((p.get("rank") or _nt(p)), (p.get("my_avg") or 0))
+                for p in pos_data if p.get("ptype") == "hit"
+                and (p.get("rank") or _nt(p)) >= _nt(p) - _third(p) + 1}
 
     def roster(source, team):
         return [r for r in source
                 if " ".join((r.get("FantasyTeam") or "").split()) == team
                 and int(r.get("Dataset", 0) or 0) == YEAR]
+
+    def _trade_value(r, ptype):
+        """Cross-role trade currency: summed above-median category contribution. Hitters
+        span 5 everyday cats; a reliever's counting stats (K/W) rank low vs the whole
+        pitcher pool (volume-aware) and SV+H is punt-discounted — so an everyday bat
+        outweighs a one-category closer even when both post a top role-score badge."""
+        cats, pctile = (_FA_HIT_CATS, hit_pctile) if ptype == "hit" else (_FA_RP_CATS, pit_pctile)
+        v = 0.0
+        for c in cats:
+            p = _cat_pctile(pctile, c, _cat_value(r, c))
+            v += max(0.0, p - 0.5) * (_TRADE_SVHD_W if c == "SVHD" else 1.0)
+        return v
 
     def enrich(r, ptype):
         if ptype == "hit":
@@ -2508,6 +2538,7 @@ def find_trades(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
         else:
             r["_tscore"] = _score_p(r, best_recent_p)
             r["_tcats"]  = set(player_cat_strengths(r, pit_pctile, _FA_RP_CATS, set()))
+        r["_tval"]    = _trade_value(r, ptype)
         r["_tgroups"] = _trade_pos_groups(r)
         r["_tptype"]  = ptype
         return r
@@ -2519,13 +2550,21 @@ def find_trades(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
                  for r in itertools.chain(hitters, pitchers)
                  if (r.get("FantasyTeam") or "").strip()}
 
+    def _fills_need_pos(r):
+        """Need positions this player upgrades — a hitter at a thin position of mine whose
+        value clears my current average there (a genuine upgrade, not a lateral move)."""
+        if r["_tptype"] != "hit":
+            return set()
+        return {pos for pos in (r["_tgroups"] & set(need_pos))
+                if r["_tscore"] > need_pos[pos][1]}
+
     trades = []
     for team in all_teams:
         if team == my_key or team not in ranks:
             continue
-        send_cats = my_surplus & needs_of(team)   # cats I can help THEM in
+        send_cats = my_surplus & needs_of(team)   # cats I can help THEM in (they must benefit)
         get_cats  = surplus_of(team) & my_needs    # cats they can help ME in
-        if not send_cats or not get_cats:
+        if not send_cats:                          # no mutual benefit possible → skip
             continue
         t_players = ([enrich(r, "hit") for r in roster(hitters, team)] +
                      [enrich(r, "pit") for r in roster(pitchers, team)])
@@ -2533,38 +2572,45 @@ def find_trades(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
         out_pool = sorted([r for r in my_players
                            if (r["_tcats"] & send_cats) and (r["_tgroups"] & surplus_pos)],
                           key=lambda r: -r["_tscore"])[:_TRADE_POOL_WIDTH]
-        in_pool  = sorted([r for r in t_players if r["_tcats"] & get_cats],
+        # Incoming: helps a category I need OR upgrades a thin position of mine.
+        in_pool  = sorted([r for r in t_players if (r["_tcats"] & get_cats) or _fills_need_pos(r)],
                           key=lambda r: -r["_tscore"])[:_TRADE_POOL_WIDTH]
         if not out_pool or not in_pool:
             continue
+        for r in in_pool:
+            r["_tfillpos"] = sorted(_fills_need_pos(r))
 
         packages = []
         for o in out_pool:                                   # 1-for-1
             for i in in_pool:
-                if abs(o["_tscore"] - i["_tscore"]) <= _TRADE_PARITY:
+                if abs(o["_tval"] - i["_tval"]) <= _TRADE_VAL_PARITY:
                     packages.append(([o], [i]))
         for oa, ob in itertools.combinations(out_pool, 2):   # 2-for-2
             for ia, ib in itertools.combinations(in_pool, 2):
-                if len((ia["_tcats"] | ib["_tcats"]) & get_cats) < 2:
-                    continue   # a package must address >= 2 of my need cats to justify it
-                if abs((oa["_tscore"] + ob["_tscore"]) - (ia["_tscore"] + ib["_tscore"])) <= _TRADE_PARITY * 1.5:
+                benefits = (((ia["_tcats"] | ib["_tcats"]) & get_cats)
+                            | set(ia["_tfillpos"]) | set(ib["_tfillpos"]))
+                if len(benefits) < 2:
+                    continue   # a package must address >= 2 distinct needs (cat or position)
+                if abs((oa["_tval"] + ob["_tval"]) - (ia["_tval"] + ib["_tval"])) <= _TRADE_VAL_PARITY * 1.5:
                     packages.append(([oa, ob], [ia, ib]))
 
         for outs, ins in packages:
-            gcov = set().union(*[i["_tcats"] for i in ins]) & get_cats
+            gcov = set().union(*[i["_tcats"] for i in ins]) & get_cats   # category needs met
+            gpos = set().union(*[set(i["_tfillpos"]) for i in ins])       # positional holes filled
             scov = set().union(*[o["_tcats"] for o in outs]) & send_cats
-            if not gcov or not scov:
+            if (not gcov and not gpos) or not scov:
                 continue
-            gap = abs(sum(o["_tscore"] for o in outs) - sum(i["_tscore"] for i in ins))
-            # Season fit: deeper need cats (higher rank number) addressed are worth more;
-            # their-side benefit (weighted 0.5) keeps the offer realistic; penalize the
-            # value gap and, mildly, package size (prefer the simpler equivalent deal).
-            my_gain    = sum(ranks[my_key][c] for c in gcov)
+            gap = abs(sum(o["_tval"] for o in outs) - sum(i["_tval"] for i in ins))
+            # Season fit: deeper need cats/positions (higher rank number) addressed are
+            # worth more; their-side benefit (weighted 0.5) keeps the offer realistic;
+            # penalize the value gap and, mildly, package size (prefer the simpler deal).
+            my_gain    = sum(ranks[my_key][c] for c in gcov) + sum(need_pos[p][0] for p in gpos)
             their_gain = sum(ranks[team][c]   for c in scov)
-            score = my_gain + 0.5 * their_gain - 0.3 * gap - 0.5 * (len(ins) - 1)
+            score = my_gain + 0.5 * their_gain - 2.0 * gap - 0.5 * (len(ins) - 1)
             trades.append({
                 "team": team, "outs": outs, "ins": ins, "gap": gap, "score": score,
                 "get_cats":  sorted(gcov, key=lambda c: -ranks[my_key][c]),
+                "get_pos":   sorted(gpos, key=lambda p: -need_pos[p][0]),
                 "send_cats": sorted(scov, key=lambda c: -ranks[team][c]),
             })
 
@@ -2584,12 +2630,16 @@ def find_trades(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
     return picked
 
 
-def _trade_player_line(r, hi_cats, hi_color):
-    """One player row inside a trade card: MLB logo + name + score badge + cat chips."""
+def _trade_player_line(r, hi_cats, hi_color, show_pos=False):
+    """One player row inside a trade card: MLB logo + name + score badge + cat chips
+    (+ a CYAN position chip for a thin slot the incoming player upgrades)."""
     logo  = team_logo(r.get("Team"), 14)
     nm    = str(r.get("PlayerName") or "")
     chips = "".join(_hit_badge(_CAT_DISPLAY.get(c, c), hi_color, f"strong in {c}")
                     for c in sorted(r["_tcats"] & hi_cats))
+    if show_pos:
+        chips += "".join(_hit_badge(p, CYAN, f"upgrades your thin {p}")
+                         for p in r.get("_tfillpos", []))
     return (f'<div style="margin:3px 0;font-size:12px;color:{TEXT};white-space:nowrap;">'
             f'{logo}<span style="font-weight:600;">{nm}</span> '
             f'{badge(int(round(r["_tscore"])))}{chips}</div>')
@@ -2604,13 +2654,15 @@ def build_trade_radar(pitchers, hitters, roto, my_team, best_recent_p, best_rece
     team_logos = team_logos or {}
     cards = []
     for t in trades:
-        give = "".join(_trade_player_line(o, set(t["send_cats"]), MUTED)  for o in t["outs"])
-        get_ = "".join(_trade_player_line(i, set(t["get_cats"]),  ACCENT) for i in t["ins"])
-        get_lbl  = ", ".join(_CAT_DISPLAY.get(c, c) for c in t["get_cats"])
+        give = "".join(_trade_player_line(o, set(t["send_cats"]), MUTED) for o in t["outs"])
+        get_ = "".join(_trade_player_line(i, set(t["get_cats"]), ACCENT, show_pos=True) for i in t["ins"])
+        gains = ([_CAT_DISPLAY.get(c, c) for c in t["get_cats"]]
+                 + [f"{p} slot" for p in t.get("get_pos", [])])
+        get_lbl  = ", ".join(gains) or "depth"
         send_lbl = ", ".join(_CAT_DISPLAY.get(c, c) for c in t["send_cats"])
-        net = sum(i["_tscore"] for i in t["ins"]) - sum(o["_tscore"] for o in t["outs"])
-        value = ("even value" if abs(net) <= 5 else
-                 "you gain value" if net > 5 else "you pay a premium")
+        net = sum(i["_tval"] for i in t["ins"]) - sum(o["_tval"] for o in t["outs"])
+        value = ("even value" if abs(net) <= 0.15 else
+                 "you gain value" if net > 0.15 else "you pay a premium")
         logo = fantasy_logo(team_logos.get(t["team"], ""), size=20, team_name=t["team"])
         cards.append(
             f'<div style="background:{SURFACE};border:1px solid {BORDER};border-radius:8px;'
@@ -2634,7 +2686,7 @@ def build_trade_radar(pitchers, hitters, roto, my_team, best_recent_p, best_rece
             f'</div>'
         )
     sub = (f'{len(trades)} mutually-beneficial swap{"s" if len(trades) != 1 else ""} '
-           f'&middot; both teams upgrade a weak category')
+           f'&middot; both sides address a real need (category or roster hole)')
     return section_head("Trade Radar", sub) + "".join(cards)
 
 
@@ -3728,12 +3780,15 @@ def build_glossary_section():
                "history yet falls back to its close-threshold. The % always agrees in direction with the "
                "“proj” value on the same card."),
         _entry("Trade Radar", "Mutually-beneficial trade ideas with rival teams. Each card is a swap where "
-               "<b>both</b> sides upgrade a weak category — you send a player strong in a category you're deep "
-               "in and they're weak in, and get back one strong in a category they're deep in and you're weak "
-               "in. Only players at a position where you have <b>surplus</b> are offered (so no trade opens a "
-               "hole), and both sides are gated to <b>similar player value</b> so the offer is plausible. "
-               "Ranked by how well it addresses your deepest season-long category needs. 1-for-1 and 2-for-2 "
-               "shapes; the “you get” category chips are highlighted."),
+               "<b>both</b> sides address a real need — you send a player strong in a category you're deep in "
+               "and they're weak in, and get back one who fills a category <i>or a thin roster position</i> "
+               "you need. Only players at a position where you have <b>surplus</b> are offered (so no trade "
+               "opens a hole). Fairness is judged on <b>true trade value</b>, not the role-score badge: a "
+               "closer and an everyday hitter can both post a 90+ score, but the bat moves five categories "
+               "daily while the closer touches one punt category (SV+H) in ~60 innings — so an everyday "
+               "smasher won't be offered straight up for a reliever. Ranked by how well it addresses your "
+               "deepest season-long needs. 1-for-1 and 2-for-2 shapes; the “you get” chips are highlighted "
+               "(blue = category gained, cyan = a thin position upgraded)."),
         _entry("Luck (standings)", "Roto rank minus record rank. Positive = your W-L is better than your "
                "category performance suggests (running lucky); negative = unlucky."),
         _entry("Season Trajectory", "Every team's matchup result (W/L/T) across the whole season, "
