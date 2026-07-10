@@ -64,6 +64,41 @@ def _proj_legacy(era, kip, ip_per_g, opp_ops, opp_k, hva, lg_ops, lg_k):
     return ip, er, k
 
 
+def _nk(name):
+    """Loose name key for matching MLB fullName -> snapshot PlayerName (accent/punct/lower)."""
+    import unicodedata
+    s = unicodedata.normalize("NFKD", str(name)).encode("ascii", "ignore").decode()
+    return "".join(ch for ch in s.lower() if ch.isalnum() or ch == " ").strip()
+
+
+def _is_blowup(ip, er):
+    """A disaster start: the ER/WHIP-wrecking outing the RISK flag is meant to predict."""
+    return er >= 5 or (er >= 4 and ip < 3)
+
+
+def _auc(pairs):
+    """AUC (prob a random blowup outscores a random clean start) via rank-sum. pairs=(score,label)."""
+    pos = [s for s, y in pairs if y]
+    neg = [s for s, y in pairs if not y]
+    if not pos or not neg:
+        return 0.5
+    ranked = sorted(pairs, key=lambda p: p[0])
+    # average ranks (1-based), handling ties
+    ranks = {}
+    i = 0
+    while i < len(ranked):
+        j = i
+        while j + 1 < len(ranked) and ranked[j + 1][0] == ranked[i][0]:
+            j += 1
+        avg = (i + j) / 2.0 + 1.0
+        for k in range(i, j + 1):
+            ranks[id(ranked[k])] = avg
+        i = j + 1
+    sum_pos = sum(ranks[id(p)] for p in ranked if p[1])
+    n_pos, n_neg = len(pos), len(neg)
+    return (sum_pos - n_pos * (n_pos + 1) / 2.0) / (n_pos * n_neg)
+
+
 def _pearson(pairs):
     n = len(pairs)
     if n < 2:
@@ -228,8 +263,20 @@ def main():
         sd.compute_pitcher_benchmarks(snap["pitchers"])
     except Exception:
         pass
+    try:
+        sd.compute_score_calibration(snap["pitchers"])
+    except Exception:
+        pass
     sd.compute_league_averages(snap["hitters"], snap["pitchers"])
     print(f"_LG team_ops={sd._LG.get('team_ops')}  team_k={sd._LG.get('team_k')}")
+
+    # Season-final skill rows (xERA / WHIP / K% / HardHit) keyed by loose name, for the
+    # blowup-RISK validation. Risk is a per-pitcher skill PROPENSITY (not walk-forward), but
+    # the recent-form escalator IS walk-forward (trailing-3-start ERA computed from game logs).
+    skill_by_name = {}
+    for r in snap["pitchers"]:
+        if int(sd._n(r.get("Dataset")) or 0) == args.season and r.get("PlayerName"):
+            skill_by_name.setdefault(_nk(r["PlayerName"]), r)
 
     print(f"Fetching pitcher pool (season {args.season}, top {args.limit} by GS)...")
     pool = build_pitcher_pool(args.season, args.limit, args.min_gs)
@@ -252,6 +299,7 @@ def main():
     er_home, er_away = Acc(), Acc()
     er_bucket = {"weak": Acc(), "avg": Acc(), "strong": Acc()}
 
+    risk_pairs = []      # (blowup_risk score, actual_blowup 0/1) per scored start
     csv_rows = []
     lg_ops = sd._LG.get("team_ops") or 0.717
     lg_k = sd._LG.get("team_k") or 0.22
@@ -267,6 +315,8 @@ def main():
         # cumulative-through-prior totals
         c_ip = c_er = c_k = c_pitches = c_bf = 0.0
         c_games = c_starts = 0
+        recent = []                       # trailing (ip, er) of prior STARTS (walk-forward L15 proxy)
+        skill_row = skill_by_name.get(_nk(name))
         for g in games:
             prior_ip = c_ip
             # Only SCORE actual starts with enough prior sample.
@@ -321,6 +371,14 @@ def main():
                         ip_pred["batters/start"].add(c_bf / c_starts, a_ip)
                     if c_ip > 0:
                         ip_pred["pitches/inn (eff.)"].add(c_pitches / c_ip, a_ip)
+                    # ---- BLOWUP-RISK validation (skill propensity + walk-forward L15) ----
+                    if skill_row is not None:
+                        r3ip = sum(x[0] for x in recent[-3:])
+                        r3er = sum(x[1] for x in recent[-3:])
+                        rec_era = (9.0 * r3er / r3ip) if r3ip > 0 else None
+                        risk = sd.blowup_risk(skill_row, recent_era=rec_era)
+                        if risk > 0:
+                            risk_pairs.append((risk, 1 if _is_blowup(a_ip, a_er) else 0))
                     scored += 1
                     if args.csv:
                         csv_rows.append([name, g["date"], hva, f"{p_ip:.2f}", p_er, p_k,
@@ -334,6 +392,7 @@ def main():
             c_games += 1
             if g["gs"] >= 1:
                 c_starts += 1
+                recent.append((g["ip"], g["er"]))
         if i % 25 == 0:
             print(f"  [{i}/{len(pool)}] processed, {scored} starts scored so far")
 
@@ -378,6 +437,33 @@ def main():
     print(er_bucket["weak"].row("weak"))
     print(er_bucket["avg"].row("avg"))
     print(er_bucket["strong"].row("strong"))
+
+    print("\nBLOWUP-RISK FLAG (sd.blowup_risk) -- does it sort starts by disaster rate?")
+    print("  blowup = ER>=5, or ER>=4 in <3 IP (the ER/WHIP-wrecking outing).")
+    if len(risk_pairs) >= 100:
+        base = sum(y for _, y in risk_pairs) / len(risk_pairs)
+        auc = _auc(risk_pairs)
+        ordered = sorted(risk_pairs, key=lambda p: p[0])
+        d = len(ordered) // 10
+        bot = ordered[:d]
+        top = ordered[-d:]
+        br_bot = sum(y for _, y in bot) / len(bot)
+        br_top = sum(y for _, y in top) / len(top)
+        flagged = [y for s, y in risk_pairs if s >= sd._RISK_MIN]
+        clean = [y for s, y in risk_pairs if s < sd._RISK_MIN]
+        print(f"  n={len(risk_pairs)}  base blowup rate={base:.1%}  AUC={auc:.3f}")
+        print(f"  top decile (riskiest) blowup={br_top:.1%} ({br_top/base:.2f}x base)  "
+              f"bottom decile={br_bot:.1%} ({br_bot/base:.2f}x)")
+        if flagged:
+            fr = sum(flagged) / len(flagged)
+            cr = (sum(clean) / len(clean)) if clean else 0.0
+            print(f"  FLAGGED (risk>={sd._RISK_MIN:.0f}): n={len(flagged)} blowup={fr:.1%} ({fr/base:.2f}x)  "
+                  f"| not flagged: n={len(clean)} blowup={cr:.1%}")
+        print("  (skill risk is a soft signal by nature -- blowups are largely variance, so AUC "
+              "tops out ~0.52-0.53; a ~1.25x top-decile lift + a <1.0x safe bottom decile is a "
+              "real, useful floor read -- swapping raw ERA for the xERA regression moves AUC <0.01.)")
+    else:
+        print(f"  (only {len(risk_pairs)} risk-scored starts -- need >=100; run without --limit.)")
 
     if args.csv:
         os.makedirs("scratchpad", exist_ok=True)
