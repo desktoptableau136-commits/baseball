@@ -659,7 +659,7 @@ def two_start_badge(title=""):
 # Glance flags next to a hitter's name, mirroring the pitcher QS/5K+/2-START badges:
 # display-only (never folded into any score), and each carries a hover `title` naming
 # the stat that justifies it so it stays "anchored" even in a table with no such column.
-_PWR_HRP_MIN   = 0.20    # modeled per-game HR probability (matches _hrp_cell green tier)
+_PWR_HRP_MIN   = 0.23    # modeled per-game HR probability (a notch above _hrp_cell's 0.20 green tier)
 _SB_PCTILE_MIN = 0.80    # top ~20% of SB producers within the qualified YEAR pool
 _SB_SPEED_MIN  = 27.0    # ft/s sprint-speed corroboration (skipped when SprintSpeed missing)
 _XREG_BA       = 0.020   # xBA − AVG gap for a regression flag
