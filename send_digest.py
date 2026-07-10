@@ -645,13 +645,78 @@ def _starts_this_week(r, today_str, week_end_str):
     return 1 if d and d != "1999-01-01" and today_str <= d <= week_end_str else 0
 
 
-def two_start_badge():
+def two_start_badge(title=""):
     """Bold chip flagging a pitcher with two starts inside the matchup week."""
+    tt = f' title="{title}"' if title else ""
     return (
-        f'<span style="font-size:9px;font-weight:800;color:#fff;'
-        f'background:{PURPLE};border-radius:3px;padding:1px 5px;margin-left:5px;'
+        f'<span{tt} style="font-size:9px;font-weight:800;color:#04121a;'
+        f'background:{CYAN};border-radius:3px;padding:1px 5px;margin-left:5px;'
         f'vertical-align:middle;letter-spacing:.3px;">2-START</span>'
     )
+
+
+# ── Hitter tactical badges (PWR / SB / BUY-LOW / SELL-HIGH) ───────────────────────
+# Glance flags next to a hitter's name, mirroring the pitcher QS/5K+/2-START badges:
+# display-only (never folded into any score), and each carries a hover `title` naming
+# the stat that justifies it so it stays "anchored" even in a table with no such column.
+_PWR_HRP_MIN   = 0.20    # modeled per-game HR probability (matches _hrp_cell green tier)
+_SB_PCTILE_MIN = 0.80    # top ~20% of SB producers within the qualified YEAR pool
+_SB_SPEED_MIN  = 27.0    # ft/s sprint-speed corroboration (skipped when SprintSpeed missing)
+_XREG_BA       = 0.020   # xBA − AVG gap for a regression flag
+_XREG_SLG      = 0.030   # xSLG − SLG gap for a regression flag
+
+
+def _hit_badge(text, color, title=""):
+    """A translucent hitter badge chip in the QS/5K+ visual style (color-tinted bg + border)."""
+    r, g, b = int(color[1:3], 16), int(color[3:5], 16), int(color[5:7], 16)
+    tt = f' title="{title}"' if title else ""
+    return (
+        f'<span{tt} style="font-size:9px;font-weight:700;color:{color};'
+        f'background:rgba({r},{g},{b},0.12);border:1px solid rgba({r},{g},{b},0.35);'
+        f'border-radius:3px;padding:1px 5px;margin-left:5px;vertical-align:middle;">{text}</span>'
+    )
+
+
+def qs_badge(ip_g, er):
+    """Green QS chip with a hover `title` naming the projected line that earned it."""
+    return _hit_badge("QS", GREEN, f"Projected {_fmt_ip(ip_g)} IP &middot; {er} ER &mdash; quality start (6+ IP, &le; 3 ER)")
+
+
+def k5_badge(k):
+    """Yellow 5K+ chip with a hover `title` naming the projected strikeouts."""
+    return _hit_badge("5K+", YELLOW, f"Projected {k} strikeouts (&ge; 5)")
+
+
+def hitter_badges(row, hit_pctile=None, cap=2):
+    """Concatenated tactical badge HTML for a hitter row (up to `cap`, priority SB→PWR→BUY/SELL).
+    `hit_pctile` is the league SB percentile pool (build_cat_percentiles) — when None, SB is skipped."""
+    badges = []
+
+    # SB — genuine base-stealer (scarce, streamable). Percentile of actual SB, speed-corroborated.
+    if hit_pctile is not None:
+        sb = _n(row.get("SB"))
+        spd = _n(row.get("SprintSpeed"))
+        if sb > 0 and _cat_pctile(hit_pctile, "SB", sb) >= _SB_PCTILE_MIN and (spd <= 0 or spd >= _SB_SPEED_MIN):
+            _t = f"SB {sb:.0f}" + (f" · Sprint {spd:.1f} ft/s" if spd > 0 else "")
+            badges.append(_hit_badge("SB", SILVER, _t))
+
+    # PWR — power/HR threat (modeled per-game HR probability).
+    hrp = _n(row.get("HR_Probability"))
+    if hrp >= _PWR_HRP_MIN:
+        badges.append(_hit_badge("PWR", PURPLE, _hrp_driver_str(row) or f"HR prob {hrp*100:.0f}%"))
+
+    # BUY-LOW / SELL-HIGH — Statcast expected vs actual (skill-vs-luck read). Mutually exclusive.
+    avg, iso, xba, xslg = _n(row.get("AVG")), _n(row.get("ISO")), _n(row.get("xBA")), _n(row.get("xSLG"))
+    if avg > 0 and iso > 0 and xba > 0 and xslg > 0:
+        slg = iso + avg
+        d_ba, d_slg = xba - avg, xslg - slg
+        _rt = f"xBA {xba:.3f} vs AVG {avg:.3f} · xSLG {xslg:.3f} vs SLG {slg:.3f}"
+        if d_ba >= _XREG_BA and d_slg >= _XREG_SLG:
+            badges.append(_hit_badge("&#9650;BUY", GREEN, _rt))
+        elif -d_ba >= _XREG_BA and -d_slg >= _XREG_SLG:
+            badges.append(_hit_badge("&#9660;SELL", RED, _rt))
+
+    return "".join(badges[:cap])
 
 
 def fa_relievers(pitchers, claimed=None):
@@ -1038,7 +1103,9 @@ ACCENT   = "#3b82f6"
 GREEN    = "#22c55e"
 RED      = "#ef4444"
 YELLOW   = "#f59e0b"
-PURPLE   = "#a855f7"   # 2-START badge — distinct from green (quality/QS) & yellow (K/5K+)
+PURPLE   = "#a855f7"   # hitter PWR badge (translucent) — distinct from green/yellow/red
+CYAN     = "#22d3ee"   # pitcher 2-START badge (solid) + dashboard ×2 markers
+SILVER   = "#c8d0da"   # hitter SB "Quicksilver" speed badge (metallic, distinct from TEXT/MUTED)
 
 TH_S = f"padding:8px 10px;background:{SURFACE};color:{MUTED};font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.7px;border-bottom:2px solid {BORDER};white-space:nowrap;"
 TD_S = f"padding:7px 10px;border-bottom:1px solid {BORDER};color:{TEXT};font-size:13px;vertical-align:middle;"
@@ -1186,7 +1253,58 @@ def _score_narrative(clauses):
     return "Balanced across the board — no standout strength or weakness."
 
 
-def _hitter_score_breakdown(r, idx_recent=None):
+def _badge_ctx_wrap(lines):
+    """Wrap per-badge explanation lines in a muted block for the tap-to-expand score panel."""
+    if not lines:
+        return ""
+    inner = "".join(f'<div style="margin-top:3px;">{ln}</div>' for ln in lines)
+    return f'<div style="margin-top:6px;color:{MUTED};">{inner}</div>'
+
+
+def _hit_badge_context(row, hit_pctile=None, cap=2):
+    """Explain whichever hitter badges `row` earns — SAME predicates, order and cap as
+    hitter_badges — so the tap-to-expand panel explains exactly the chips shown, no more."""
+    lines = []
+    if hit_pctile is not None:
+        sb = _n(row.get("SB")); spd = _n(row.get("SprintSpeed"))
+        if sb > 0 and _cat_pctile(hit_pctile, "SB", sb) >= _SB_PCTILE_MIN and (spd <= 0 or spd >= _SB_SPEED_MIN):
+            top = (1.0 - _cat_pctile(hit_pctile, "SB", sb)) * 100
+            spd_s = f' &middot; {spd:.1f} ft/s sprint' if spd > 0 else ''
+            lines.append(f'{_hit_badge("SB", SILVER)} base-stealer &mdash; {sb:.0f} SB, top {top:.0f}% of the league{spd_s}.')
+    hrp = _n(row.get("HR_Probability"))
+    if hrp >= _PWR_HRP_MIN:
+        lines.append(f'{_hit_badge("PWR", PURPLE)} power threat &mdash; modeled HR probability {hrp*100:.0f}% '
+                     f'(&ge; {_PWR_HRP_MIN*100:.0f}%, top power tier).')
+    avg, iso, xba, xslg = _n(row.get("AVG")), _n(row.get("ISO")), _n(row.get("xBA")), _n(row.get("xSLG"))
+    if avg > 0 and iso > 0 and xba > 0 and xslg > 0:
+        slg = iso + avg; d_ba = xba - avg; d_slg = xslg - slg
+        gap = f'xBA {xba:.3f} vs AVG {avg:.3f}, xSLG {xslg:.3f} vs SLG {slg:.3f}'
+        if d_ba >= _XREG_BA and d_slg >= _XREG_SLG:
+            lines.append(f'{_hit_badge("&#9650;BUY", GREEN)} under his Statcast expected stats ({gap}) '
+                         f'&mdash; positive regression likely.')
+        elif -d_ba >= _XREG_BA and -d_slg >= _XREG_SLG:
+            lines.append(f'{_hit_badge("&#9660;SELL", RED)} over his Statcast expected stats ({gap}) '
+                         f'&mdash; regression risk.')
+    return _badge_ctx_wrap(lines[:cap])
+
+
+def _sp_badge_context(row, qs_fires, k_fires, two_start_n):
+    """Explain the SP badges (2-START / QS / 5K+) actually shown on a row. Fed the already-computed
+    fire flags from the render site so the panel can never disagree with the chips beside the name."""
+    lines = []
+    vals = _proj_line_vals(row)
+    ip_g, er, k = vals if vals else (0, 0, 0)
+    if two_start_n >= 2:
+        lines.append(f'{two_start_badge()} {two_start_n} starts inside the matchup week.')
+    if qs_fires:
+        lines.append(f'{qs_badge(ip_g, er)} projected {_fmt_ip(ip_g)} IP &middot; {er} ER '
+                     f'is a quality start (6+ IP, &le; 3 ER).')
+    if k_fires:
+        lines.append(f'{k5_badge(k)} projected {k} strikeouts (&ge; 5).')
+    return _badge_ctx_wrap(lines)
+
+
+def _hitter_score_breakdown(r, idx_recent=None, hit_pctile=None):
     """Prose breakdown of a hitter's Score for the tap-to-expand panel."""
     comps, mult = hitter_score(r, _parts=True)
     if not comps:
@@ -1211,6 +1329,7 @@ def _hitter_score_breakdown(r, idx_recent=None):
         line = f'HR% {hrp * 100:.0f}% modeled per-game HR probability'
         line += f' ({drivers})' if drivers else ''
         html += f'<div style="margin-top:6px;color:{MUTED};">{line}</div>'
+    html += _hit_badge_context(r, hit_pctile)
     return html
 
 
@@ -1849,7 +1968,7 @@ def build_matchup_section(matchup, logos=None, my_team=MY_TEAM,
 
 # ── ROSTER HOT/COLD ──────────────────────────────────────────────────────────
 
-def build_hot_cold_section(hitters, recent_hitting, my_team, best_recent_h=None):
+def build_hot_cold_section(hitters, recent_hitting, my_team, best_recent_h=None, hit_pctile=None):
     if not recent_hitting:
         return ""
 
@@ -1924,11 +2043,11 @@ def build_hot_cold_section(hitters, recent_hitting, my_team, best_recent_h=None)
         )
 
         _cell, _bdrow = score_reveal(
-            r["score"], _hitter_score_breakdown(r["srow"], best_recent_h),
+            r["score"], _hitter_score_breakdown(r["srow"], best_recent_h, hit_pctile),
             _bd_uid("rhc", r["name"]), 7)
         rows_html += (
             f'<tr style="{bg}">'
-            f'<td style="{TD_S}font-weight:600;">{team_logo(r["team"])}{r["name"]}{r["inj"]}</td>'
+            f'<td style="{TD_S}font-weight:600;">{team_logo(r["team"])}{r["name"]}{r["inj"]}{hitter_badges(r["srow"], hit_pctile)}</td>'
             f'<td style="{TDC}color:{MUTED};">{r["pos"]}</td>'
             f'<td style="{TDC}">{r["season_ops"]:.3f}</td>'
             f'<td style="{TDC}">{recent_str}</td>'
@@ -3177,12 +3296,14 @@ def build_glossary_section():
         _entry("QS% (quality-start probability)",
                "Modeled chance a starter throws a quality start (6+ IP, ≤3 ER). League-average ≈ 38%, "
                "an ace ≈ 75%. Driven by innings-per-start, K%, ERA/WHIP and contact allowed."),
-        _entry("QS / 5K+ badges",
+        _entry("QS / 5K+ / 2-START badges",
                "Next to a starter's name in My Upcoming Starts and FA Starting Pitchers. They annotate "
                "his projected line for that day: green QS shows when the Proj. Line is a quality start "
-               "(6+ IP & ≤3 ER); yellow 5K+ shows when it projects 5+ strikeouts. They match the Proj. Line "
-               "exactly (no 5K+ badge next to a 4 K line) and appear regardless of your rotation that day. "
-               "The QS% column shows the season quality-start probability separately."),
+               "(6+ IP & ≤3 ER); yellow 5K+ shows when it projects 5+ strikeouts; a cyan 2-START flags "
+               "two starts inside the matchup week. They match the Proj. Line exactly (no 5K+ badge next "
+               "to a 4 K line) and appear regardless of your rotation that day. <b>Hover</b> (or tap the "
+               "Score pill) for the projected line that earned each one. The QS% column shows the season "
+               "quality-start probability separately."),
     ])
     pitching = _group("Pitching metrics", [
         _entry("xERA / xwOBA-against", "Baseball Savant “deserved” run prevention from contact quality — "
@@ -3212,6 +3333,13 @@ def build_glossary_section():
                "(also listed in the hitter's expanded Score panel for touch devices)."),
         _entry("Sprint speed / ISO", "Statcast sprint speed (ft/sec, a steals/​range signal) and Isolated "
                "Power (SLG − AVG, extra-base power)."),
+        _entry("Hitter badges (PWR / SB / ▲BUY / ▼SELL)",
+               "Tactical flags next to a hitter's name (up to 2, hover or tap the Score pill for why). "
+               "<b>PWR</b> (purple) = top-tier modeled HR probability. <b>SB</b> (silver) = a genuine "
+               "base-stealer (top-20% SB producer, sprint-speed corroborated). <b>▲BUY</b> (green) = "
+               "under his Statcast expected stats (xBA/xSLG vs actual) — positive regression likely. "
+               "<b>▼SELL</b> (red) = over his expected stats — regression risk. Display-only, never part "
+               "of the Score."),
     ])
     proj = _group("Projections & matchup", [
         _entry("Category Pulse cards", "Per-category snapshot of the current matchup: your value vs the "
@@ -4043,25 +4171,20 @@ def build_email(snap, override_team=None):
                 _pjs_ip, _pjs_er, _pjs_k = _pv_s if _pv_s else (0, 0, 0)
                 qs_fires_s = _proj_is_qs(_pjs_ip, _pjs_er)
                 k_fires_s  = _pjs_k >= 5
+                _n_starts_s = _starts_this_week(r, today_str, week_end_str)
                 start_badges = []
-                if _starts_this_week(r, today_str, week_end_str) >= 2:
-                    start_badges.append(two_start_badge())
+                if _n_starts_s >= 2:
+                    start_badges.append(two_start_badge(f"{_n_starts_s} starts this matchup week"))
                 if qs_fires_s:
-                    start_badges.append(
-                        f'<span style="font-size:9px;font-weight:700;color:{GREEN};'
-                        f'background:rgba(34,197,94,0.12);border:1px solid rgba(34,197,94,0.35);'
-                        f'border-radius:3px;padding:1px 5px;margin-left:5px;vertical-align:middle;">QS</span>'
-                    )
+                    start_badges.append(qs_badge(_pjs_ip, _pjs_er))
                 if k_fires_s:
-                    start_badges.append(
-                        f'<span style="font-size:9px;font-weight:700;color:{YELLOW};'
-                        f'background:rgba(245,158,11,0.12);border:1px solid rgba(245,158,11,0.35);'
-                        f'border-radius:3px;padding:1px 5px;margin-left:5px;vertical-align:middle;">5K+</span>'
-                    )
+                    start_badges.append(k5_badge(_pjs_k))
                 start_badge = "".join(start_badges)
                 proj_line_s = _proj_line_html(r)
+                _mus_bd = (_pitcher_score_breakdown(r, best_recent_p)
+                           + _sp_badge_context(r, qs_fires_s, k_fires_s, _n_starts_s))
                 _cell, _bdrow = score_reveal(
-                    _score_p(r, best_recent_p), _pitcher_score_breakdown(r, best_recent_p),
+                    _score_p(r, best_recent_p), _mus_bd,
                     _bd_uid("mus", name), 8)
                 rows += (
                     f'<tr style="{bg}">'
@@ -4263,17 +4386,9 @@ def build_email(snap, override_team=None):
                 pickup_badges = []
                 name_border = ""
                 if qs_fires:
-                    pickup_badges.append(
-                        f'<span style="font-size:9px;font-weight:700;color:{GREEN};'
-                        f'background:rgba(34,197,94,0.12);border:1px solid rgba(34,197,94,0.35);'
-                        f'border-radius:3px;padding:1px 5px;margin-left:5px;vertical-align:middle;">QS</span>'
-                    )
+                    pickup_badges.append(qs_badge(_pj_ip, _pj_er))
                 if k_fires:
-                    pickup_badges.append(
-                        f'<span style="font-size:9px;font-weight:700;color:{YELLOW};'
-                        f'background:rgba(245,158,11,0.12);border:1px solid rgba(245,158,11,0.35);'
-                        f'border-radius:3px;padding:1px 5px;margin-left:5px;vertical-align:middle;">5K+</span>'
-                    )
+                    pickup_badges.append(k5_badge(_pj_k))
                 if qs_fires and k_fires:
                     # Half green (top) / half yellow (bottom)
                     name_border = (
@@ -4286,7 +4401,8 @@ def build_email(snap, override_team=None):
                     name_border = f"border-left:3px solid {YELLOW};"
                 pickup_badge = "".join(pickup_badges)
                 # Two-start flag always shows — a 2-start FA is a top streaming target
-                two_start_html = two_start_badge() if _starts_this_week(r, today_str, week_end_str) >= 2 else ""
+                _n_starts_fa = _starts_this_week(r, today_str, week_end_str)
+                two_start_html = two_start_badge(f"{_n_starts_fa} starts this matchup week") if _n_starts_fa >= 2 else ""
 
                 _kpct_val = _n(r.get("Kpct_P"))
                 _kpct_top = _kpct_val > 0 and _kpct_val in _top3_kpct_fa
@@ -4296,8 +4412,10 @@ def build_email(snap, override_team=None):
                     else (f"{_kpct_val*100:.1f}%" if _kpct_val > 0 else f'<span style="color:{MUTED}">—</span>')
                 )
                 proj_line_str = _proj_line_html(r)
+                _fasp_bd = (_pitcher_score_breakdown(r, best_recent_p)
+                            + _sp_badge_context(r, qs_fires, k_fires, _n_starts_fa))
                 _cell, _bdrow = score_reveal(
-                    r["_score"], _pitcher_score_breakdown(r, best_recent_p),
+                    r["_score"], _fasp_bd,
                     _bd_uid("fasp", r.get("PlayerName", "")), 8)
                 rows += (
                     f'<tr style="{bg}">'
@@ -4428,11 +4546,11 @@ def build_email(snap, override_team=None):
             bg = f"background:{SURFACE2};" if i % 2 else ""
             rh = rec_h.get(r.get("PlayerName", ""), {})
             _cell, _bdrow = score_reveal(
-                r["_score"], _hitter_score_breakdown(r, best_recent_h),
+                r["_score"], _hitter_score_breakdown(r, best_recent_h, hit_pctile),
                 _bd_uid("fahit", r.get("PlayerName", "")), 11)
             rows += (
                 f'<tr style="{bg}">'
-                f'<td style="{TD_S}font-weight:600;">{team_logo(r.get("Team"))}{r.get("PlayerName","")}{inj_tag(r)}</td>'
+                f'<td style="{TD_S}font-weight:600;">{team_logo(r.get("Team"))}{r.get("PlayerName","")}{inj_tag(r)}{hitter_badges(r, hit_pctile)}</td>'
                 f'<td style="{TDC}color:{MUTED};">{r.get("Position","")}</td>'
                 f'<td style="{TDC}">{v(r.get("R"), 0)}</td>'
                 f'<td style="{TDC}">{v(r.get("HR"), 0)}</td>'
@@ -4661,7 +4779,7 @@ def build_email(snap, override_team=None):
 
         def _pb_reveal(pl, tag):
             bd = (_pitcher_score_breakdown(pl, best_recent_p) if _is_pit_pos
-                  else _hitter_score_breakdown(pl, best_recent_h))
+                  else _hitter_score_breakdown(pl, best_recent_h, hit_pctile))
             return score_reveal(pl["_pscore"], bd, _bd_uid(tag, pl.get("PlayerName", "")), 4)
 
         _worst_bdrow = _fa_bdrow = ""
@@ -4672,6 +4790,7 @@ def build_email(snap, override_team=None):
                 f'{team_logo(worst.get("Team"), 16)}'
                 f'<span style="font-weight:600;">{worst["PlayerName"]}</span>'
                 f'{inj_tag(worst)}'
+                f'{"" if _is_pit_pos else hitter_badges(worst, hit_pctile)}'
                 f' {_worst_badge}'
                 f'{pos_stat_line(worst, p["pos"])}'
             )
@@ -4701,7 +4820,9 @@ def build_email(snap, override_team=None):
                 f'{team_logo(top_fa.get("Team"), 16)}'
                 f'<span style="{"font-weight:600;" if upgrade else ""}'
                 f'color:{GREEN if upgrade else MUTED};">'
-                f'{top_fa["PlayerName"]}</span> {_fa_badge}'
+                f'{top_fa["PlayerName"]}</span>'
+                f'{"" if _is_pit_pos else hitter_badges(top_fa, hit_pctile)}'
+                f' {_fa_badge}'
                 f'{"&nbsp;&#8593;" if upgrade else ""}'
                 f'{pos_stat_line(top_fa, p["pos"])}'
                 f'{depth_html}'
@@ -4882,7 +5003,7 @@ def build_email(snap, override_team=None):
         starts_section,                                                                   # 6
         my_rp_section,                                                                    # 7
         build_pitcher_hot_cold_section(pitchers, my_team, rec_p, best_recent_p),         # 8
-        build_hot_cold_section(hitters, recent_hitting, my_team, best_recent_h),         # 9
+        build_hot_cold_section(hitters, recent_hitting, my_team, best_recent_h, hit_pctile),  # 9
         band_divider("FREE AGENTS", anchor="band-fa"),                                    # ACTION band header
         fa_sp_section,                                                                    # 11
         fa_rp_section,                                                                    # 12

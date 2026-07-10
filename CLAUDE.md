@@ -148,6 +148,7 @@ Tapping a Score badge reveals a **full-width row below the player's row** narrat
 - **`_bd_uid(prefix, name)`** mints a globally-unique anchor id (`bd-{prefix}-{slug}-{counter}` via a running `_BD_SEQ`). Prefixes: `rhc`/`phc`/`mus`/`myrp`/`fasp`/`farp`/`fahit`/`posw`/`posfa`.
 - **Narrative (`_score_narrative` + `_hit_clauses`/`_sp_clauses`/`_rp_clauses`):** each `_*_clauses` returns `(fill, strength_phrase, weakness_phrase)` per component (`fill = comp_points / max`). `_score_narrative` names ≤ 2 strongest (fill ≥ .60) and ≤ 2 weakest (fill ≤ .35): `Carried by … ; held back by …`. Punt-saves-consistent: low SVHD / low HR% are NOT surfaced as weaknesses; SP `Role` (start volume) is omitted entirely. **HR/ISO power dedupe (`_hit_clauses`):** HR (volume) and ISO (rate) are the same "power" concept — when ISO is strong (fill ≥ .60) and HR weak (≤ .35) the HR weakness clause is dropped (and symmetrically for the reverse); the strength always survives.
 - **Wired into all Score badges:** the 7 tables (Roster Hot/Cold, Pitcher Hot/Cold, My Upcoming Starts, My Relief Pitchers, FA SP, FA RP, FA Hitters) plus Positional Breakdown (weakest-my-player `posw` + best-FA `posfa`, role-aware via `p["ptype"]`, `colspan=4`). **HR% drivers are in the expanded hitter panel** (`_hitter_score_breakdown`) as a trailing muted `<div>` via `_hrp_driver_str(row)` — so touch users (no hover) see them.
+- **Badge context (why each chip fired):** the panel appends a muted block explaining whichever tactical badges the row earns, each line rendering the exact chip + the stat that triggered it. Hitters — `_hit_badge_context(row, hit_pctile, cap=2)` (SAME predicates/order/cap as `hitter_badges`, so it explains exactly the ≤2 chips shown, no more), appended inside `_hitter_score_breakdown` (which now takes a `hit_pctile` param, threaded from all 3 call sites). SP — `_sp_badge_context(row, qs_fires, k_fires, two_start_n)` fed the already-computed fire flags at the My Upcoming Starts + FA SP render sites (NOT embedded in the shared `_pitcher_score_breakdown`, so QS/5K+ context never shows in Pitcher Hot/Cold where no chip renders). Both reuse `_hit_badge` for the inline QS/5K+ chip (its style is byte-identical to the inline QS/5K+ table badges) and `two_start_badge()` for 2-START.
 
 ### Unified role scores — a player shows the SAME score in every section
 Three canonical role scores, all calibrated to p50→50, p90→80: SP → `_score_p` (blended `pitcher_score`), RP → `rp_score` (never blended — ESPN season counting stats, identical across My RP / FA RP / Positional Breakdown), Hitter → `_blend(r, hitter_score, best_recent_h)`. Never score a section with a different function than others use for the same role.
@@ -198,8 +199,16 @@ Always `previews/digest_preview_{team_slug}.html` (e.g. `digest_preview_Guerrero
 - `band_divider(label, color, anchor=…)` → full-width band boundary `<div>`.
 
 ### QS / 5K+ / 2-START badges (My Upcoming Starts + FA SP)
-- `2-START` (purple, `_starts_this_week ≥ 2`), QS (green), 5K+ (yellow) render next to the pitcher name. **QS and 5K+ purely annotate the projected line** — driven ONLY by `_proj_line_vals(r)`, NOT season rates. QS = `_proj_is_qs` (6+ displayed IP & ≤ 3 ER, using `_fmt_ip` rounding); 5K+ = projected `K ≥ 5`. The **QS% column** shows season QS probability separately. Both tables use the identical rule.
+- `2-START` (cyan, `_starts_this_week ≥ 2`), QS (green), 5K+ (yellow) render next to the pitcher name via `two_start_badge(title)` / `qs_badge(ip_g, er)` / `k5_badge(k)` — the QS/5K+ helpers wrap `_hit_badge` so the chip is byte-identical to the hitter badges AND carries a hover **`title`** naming the projected line that earned it (e.g. "Projected 6.0 IP · 2 ER — quality start (6+ IP, ≤ 3 ER)", "Projected 7 strikeouts (≥ 5)", "2 starts this matchup week"). The dashboard My Pitching tile mirrors the tooltips on its own compact 8px chips. **QS and 5K+ purely annotate the projected line** — driven ONLY by `_proj_line_vals(r)`, NOT season rates. QS = `_proj_is_qs` (6+ displayed IP & ≤ 3 ER, using `_fmt_ip` rounding); 5K+ = projected `K ≥ 5`. The **QS% column** shows season QS probability separately. Both tables use the identical rule.
 - **FA SP badges are unconditional:** they fire on the projected line wherever the pitcher appears (the old thin-rotation-day gate was removed). `thin_days`/`my_starts_by_day` still drive the ⚑ per-day "N my starts" banner and Week-at-a-Glance bullet 2.
+
+### Hitter tactical badges (PWR / SB / BUY / SELL)
+Glance flags next to a **hitter's** name, mirroring the SP badges — **display-only, never folded into any score**. One shared source: `hitter_badges(row, hit_pctile=None, cap=2)` in send_digest.py (dashboard imports `sd.hitter_badges`), which emits chips via `_hit_badge(text, color, title)` (translucent QS/5K+ style). Each carries a hover `title` naming the justifying stat, so a badge stays **anchored even in a table with no matching column** (e.g. Roster Hot/Cold shows no SB column). Priority order **SB → PWR → BUY/SELL**, capped at 2. Four flags (tunable module constants, calibrated to fire on ~10–25% of the qualified YEAR pool):
+- **PWR** (`PURPLE`) — power/HR threat: `HR_Probability ≥ _PWR_HRP_MIN` (0.20, the same green tier `_hrp_cell` uses). Title = `_hrp_driver_str(row)`.
+- **SB** (`SILVER`, "Quicksilver") — genuine base-stealer: SB percentile `≥ _SB_PCTILE_MIN` (0.80) via the existing `_cat_pctile`/`build_cat_percentiles` SB pool, AND `SprintSpeed ≥ _SB_SPEED_MIN` (27.0, skipped when SprintSpeed missing). Needs the `hit_pctile` pool — when `None` the SB badge silently doesn't fire.
+- **▲BUY** (`GREEN`) / **▼SELL** (`RED`) — Statcast expected-vs-actual regression read (skill-vs-luck), mutually exclusive: derive `SLG = ISO + AVG`; BUY = `xBA−AVG ≥ _XREG_BA` (0.020) AND `xSLG−SLG ≥ _XREG_SLG` (0.030) (unlucky → positive regression coming); SELL = the same gaps inverted (riding luck → regression risk). Requires `xBA/xSLG/AVG/ISO > 0`.
+
+**Callers pass the `hit_pctile` pool** (built once via `build_cat_percentiles(_hit_pool, _FA_HIT_CATS)` on the qualified YEAR hitter pool — send_digest.py in `build_email`, dashboard.py in `build_context` as `ctx["hit_pctile"]`). **Digest sites:** Roster Hot/Cold (`build_hot_cold_section` takes a `hit_pctile` param), FA Hitters, Positional Breakdown (hitter branch only — gate on `p["ptype"]`). **Dashboard sites:** Hitting Hot/Cold, FA Radar hitters, Weakest Spots (hitter positions only). **When adding a hitter-listing surface**, drop `hitter_badges(row, hit_pctile)` after the name and make sure the caller has a `hit_pctile` pool in scope.
 
 ## Key data fields
 
@@ -239,9 +248,10 @@ Five bands separated by `band_divider()` rules. The Triage divider renders only 
 BG="#080e1c"  SURFACE="#101827"  SURFACE2="#0d1424"  BORDER="#1e2d45"
 TEXT="#e2e8f0"  MUTED="#64748b"  ACCENT="#3b82f6"
 GREEN="#22c55e"  RED="#ef4444"  YELLOW="#f59e0b"  PURPLE="#a855f7"
+CYAN="#22d3ee"  SILVER="#c8d0da"
 ```
 
-`PURPLE` is used only for the `2-START` badge. My team name is always `font-weight:800;color:{ACCENT}` with a ← arrow.
+`PURPLE` is the hitter **PWR** badge (translucent). `CYAN` is the pitcher **2-START** badge (solid fill; also the dashboard `×2` markers) — moved off purple so purple could go to PWR; the two never co-occur (2-START is pitcher-only, PWR hitter-only). `SILVER` is the hitter **SB** ("Quicksilver") badge. My team name is always `font-weight:800;color:{ACCENT}` with a ← arrow.
 
 ## Automation
 
