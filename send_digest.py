@@ -2457,11 +2457,25 @@ def _cats_cell(row, pctile, cats, need_cats):
     return f'<td style="{TDC}white-space:nowrap;">{inner}</td>'
 
 
+def _regression_flag(row):
+    """'buy' (positive regression, buy-low), 'sell' (regression risk, sell-high), or None
+    — Statcast expected-vs-actual, SAME thresholds as the $ / ▼ hitter badges."""
+    avg, iso, xba, xslg = _n(row.get("AVG")), _n(row.get("ISO")), _n(row.get("xBA")), _n(row.get("xSLG"))
+    if avg <= 0 or iso <= 0 or xba <= 0 or xslg <= 0:
+        return None
+    slg = iso + avg
+    d_ba, d_slg = xba - avg, xslg - slg
+    if d_ba >= _XREG_BA and d_slg >= _XREG_SLG:
+        return "buy"
+    if -d_ba >= _XREG_BA and -d_slg >= _XREG_SLG:
+        return "sell"
+    return None
+
+
 # ── TRADE RADAR ───────────────────────────────────────────────────────────────
-# Mutually-beneficial trade finder. Both sides must upgrade a weak category: I send a
-# player strong in a category that is MY surplus and the rival's NEED; they send one
-# strong in a category that is THEIR surplus and MY need. Value-parity gated so offers
-# read as plausible. Season-category-fit ranking (roto ranks x player cat strengths).
+# Cross-team trade finder tilted to MY advantage. The rival accepts because the deal
+# fixes a category NEED of theirs (I send a player strong in a cat that is my surplus and
+# their need); I win on VALUE and on buy-low/sell-high timing. Season-fit ranking.
 #
 # TRADE VALUE is a CROSS-ROLE currency, NOT the role-calibrated 0-100 badge score. A 95
 # closer and a 98 hitter both sit "top of their role," but they are NOT equal trade
@@ -2470,9 +2484,17 @@ def _cats_cell(row, pctile, cats, need_cats):
 # above-median contribution across EVERY category they move (percentiles vs the whole
 # qualified pool, so a reliever's low K/W volume ranks low), with saves discounted since
 # we punt them — so a smasher correctly outweighs a one-category reliever.
-_TRADE_VAL_PARITY   = 0.45  # max cross-role trade-value gap for a fair 1-for-1
+#
+# FAVOR-ME, GOOD-not-GREAT: I never trade an elite bat (give-side value ceiling), EXCEPT
+# a sell-high regression candidate (whom I *want* to move). I never overpay (directional
+# gate) and may extract up to a capped edge. Sell-high out + buy-low in is a double
+# arbitrage: my sell-high guy's actual stats OVERstate his value, their buy-low guy's
+# UNDERstate his — even on paper, I win; they still accept on category need.
 _TRADE_SVHD_W       = 0.35  # punt-saves: discount SV+H contribution in trade value
-_TRADE_MAX_CARDS    = 5     # trades surfaced
+_TRADE_MAX_VAL      = 1.35  # give-side value ceiling — protects my elite bats (sell-high exempt)
+_TRADE_GIVE_SLACK   = 0.15  # most extra value I'll include to sweeten (favor-me: don't overpay)
+_TRADE_MAX_EDGE     = 0.45  # steal ceiling — how much MORE value I may extract (keeps it plausible)
+_TRADE_MAX_CARDS    = 6     # trades surfaced
 _TRADE_PER_TEAM_CAP = 2     # max cards per partner team (variety)
 _TRADE_POOL_WIDTH   = 4     # top-N of each side fed into the 2-for-2 combinations
 # Player category coverage reuses the FA cat lists (QS/B_SO aren't per-player stats, so a
@@ -2539,6 +2561,9 @@ def find_trades(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
             r["_tscore"] = _score_p(r, best_recent_p)
             r["_tcats"]  = set(player_cat_strengths(r, pit_pctile, _FA_RP_CATS, set()))
         r["_tval"]    = _trade_value(r, ptype)
+        _flag = _regression_flag(r) if ptype == "hit" else None  # pitcher buy/sell = future feature
+        r["_tsell"]   = (_flag == "sell")
+        r["_tbuy"]    = (_flag == "buy")
         r["_tgroups"] = _trade_pos_groups(r)
         r["_tptype"]  = ptype
         return r
@@ -2569,8 +2594,11 @@ def find_trades(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
         t_players = ([enrich(r, "hit") for r in roster(hitters, team)] +
                      [enrich(r, "pit") for r in roster(pitchers, team)])
 
+        # Give side: strong in a send cat, at a surplus position, and NOT an elite keeper —
+        # unless he's a sell-high regression candidate, whom I actively want to move.
         out_pool = sorted([r for r in my_players
-                           if (r["_tcats"] & send_cats) and (r["_tgroups"] & surplus_pos)],
+                           if (r["_tcats"] & send_cats) and (r["_tgroups"] & surplus_pos)
+                           and (r["_tval"] <= _TRADE_MAX_VAL or r["_tsell"])],
                           key=lambda r: -r["_tscore"])[:_TRADE_POOL_WIDTH]
         # Incoming: helps a category I need OR upgrades a thin position of mine.
         in_pool  = sorted([r for r in t_players if (r["_tcats"] & get_cats) or _fills_need_pos(r)],
@@ -2580,10 +2608,16 @@ def find_trades(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
         for r in in_pool:
             r["_tfillpos"] = sorted(_fills_need_pos(r))
 
+        def _favor_me(vo, vi, mult=1.0):
+            """I don't overpay (give minus get within a small slack) and I may extract up
+            to a capped edge (get minus give) — so trades tilt to my advantage but stay
+            plausible enough that a rival fixing a category need would accept."""
+            return (vo - vi) <= _TRADE_GIVE_SLACK * mult and (vi - vo) <= _TRADE_MAX_EDGE * mult
+
         packages = []
         for o in out_pool:                                   # 1-for-1
             for i in in_pool:
-                if abs(o["_tval"] - i["_tval"]) <= _TRADE_VAL_PARITY:
+                if _favor_me(o["_tval"], i["_tval"]):
                     packages.append(([o], [i]))
         for oa, ob in itertools.combinations(out_pool, 2):   # 2-for-2
             for ia, ib in itertools.combinations(in_pool, 2):
@@ -2591,7 +2625,7 @@ def find_trades(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
                             | set(ia["_tfillpos"]) | set(ib["_tfillpos"]))
                 if len(benefits) < 2:
                     continue   # a package must address >= 2 distinct needs (cat or position)
-                if abs((oa["_tval"] + ob["_tval"]) - (ia["_tval"] + ib["_tval"])) <= _TRADE_VAL_PARITY * 1.5:
+                if _favor_me(oa["_tval"] + ob["_tval"], ia["_tval"] + ib["_tval"], mult=1.5):
                     packages.append(([oa, ob], [ia, ib]))
 
         for outs, ins in packages:
@@ -2600,15 +2634,25 @@ def find_trades(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
             scov = set().union(*[o["_tcats"] for o in outs]) & send_cats
             if (not gcov and not gpos) or not scov:
                 continue
-            gap = abs(sum(o["_tval"] for o in outs) - sum(i["_tval"] for i in ins))
-            # Season fit: deeper need cats/positions (higher rank number) addressed are
-            # worth more; their-side benefit (weighted 0.5) keeps the offer realistic;
-            # penalize the value gap and, mildly, package size (prefer the simpler deal).
+            net_val  = sum(i["_tval"] for i in ins) - sum(o["_tval"] for o in outs)  # my value edge (+ = I win)
+            # DIRECTIONAL timing: selling-high on the GIVE side and buying-low on the GET
+            # side are the arbitrage (do more of it); giving away a riser or acquiring a
+            # regression candidate is the reverse (penalize — these are traps).
+            sell_out = sum(1 for o in outs if o.get("_tsell"))   # good: move my regressors
+            buy_in   = sum(1 for i in ins  if i.get("_tbuy"))    # good: acquire their risers
+            buy_out  = sum(1 for o in outs if o.get("_tbuy"))    # bad: don't sell my risers low
+            sell_in  = sum(1 for i in ins  if i.get("_tsell"))   # bad: don't buy their regressors
+            timing = sell_out + buy_in - buy_out - sell_in
+            # Season fit + FAVOR-ME: deeper need cats/positions addressed (higher rank number)
+            # score more; their-side benefit is down-weighted (0.3) since we tilt to me; reward
+            # my net value edge and good timing legs; mild package-size penalty.
             my_gain    = sum(ranks[my_key][c] for c in gcov) + sum(need_pos[p][0] for p in gpos)
             their_gain = sum(ranks[team][c]   for c in scov)
-            score = my_gain + 0.5 * their_gain - 2.0 * gap - 0.5 * (len(ins) - 1)
+            score = (my_gain + 0.3 * their_gain + 5.0 * net_val
+                     + 4.0 * timing - 0.5 * (len(ins) - 1))
             trades.append({
-                "team": team, "outs": outs, "ins": ins, "gap": gap, "score": score,
+                "team": team, "outs": outs, "ins": ins, "net_val": net_val, "score": score,
+                "sell_out": sell_out, "buy_in": buy_in,
                 "get_cats":  sorted(gcov, key=lambda c: -ranks[my_key][c]),
                 "get_pos":   sorted(gpos, key=lambda p: -need_pos[p][0]),
                 "send_cats": sorted(scov, key=lambda c: -ranks[team][c]),
@@ -2630,9 +2674,12 @@ def find_trades(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
     return picked
 
 
-def _trade_player_line(r, hi_cats, hi_color, show_pos=False):
+def _trade_player_line(r, hi_cats, hi_color, side, show_pos=False):
     """One player row inside a trade card: MLB logo + name + score badge + cat chips
-    (+ a CYAN position chip for a thin slot the incoming player upgrades)."""
+    (+ a CYAN position chip for a thin slot the incoming player upgrades, + a context-aware
+    buy-low/sell-high timing chip). `side` = 'give' (my player) or 'get' (theirs): selling
+    high is smart on the give side, buying low on the get side; the reverse is a trap and
+    is flagged as a warning (ORANGE)."""
     logo  = team_logo(r.get("Team"), 14)
     nm    = str(r.get("PlayerName") or "")
     chips = "".join(_hit_badge(_CAT_DISPLAY.get(c, c), hi_color, f"strong in {c}")
@@ -2640,6 +2687,14 @@ def _trade_player_line(r, hi_cats, hi_color, show_pos=False):
     if show_pos:
         chips += "".join(_hit_badge(p, CYAN, f"upgrades your thin {p}")
                          for p in r.get("_tfillpos", []))
+    if side == "give" and r.get("_tsell"):
+        chips += _hit_badge("&#9660; sell-high", GREEN, "surface stats over his Statcast expected — regression risk, smart to move him now")
+    elif side == "give" and r.get("_tbuy"):
+        chips += _hit_badge("selling low?", ORANGE, "under his Statcast expected — a rebound candidate; think twice before dealing him")
+    elif side == "get" and r.get("_tbuy"):
+        chips += _hit_badge("$ buy-low", GREEN, "surface stats under his Statcast expected — positive regression likely, acquire cheap")
+    elif side == "get" and r.get("_tsell"):
+        chips += _hit_badge("regression risk", ORANGE, "over his Statcast expected — likely to decline; you'd be buying high")
     return (f'<div style="margin:3px 0;font-size:12px;color:{TEXT};white-space:nowrap;">'
             f'{logo}<span style="font-weight:600;">{nm}</span> '
             f'{badge(int(round(r["_tscore"])))}{chips}</div>')
@@ -2654,15 +2709,20 @@ def build_trade_radar(pitchers, hitters, roto, my_team, best_recent_p, best_rece
     team_logos = team_logos or {}
     cards = []
     for t in trades:
-        give = "".join(_trade_player_line(o, set(t["send_cats"]), MUTED) for o in t["outs"])
-        get_ = "".join(_trade_player_line(i, set(t["get_cats"]), ACCENT, show_pos=True) for i in t["ins"])
+        give = "".join(_trade_player_line(o, set(t["send_cats"]), MUTED, "give") for o in t["outs"])
+        get_ = "".join(_trade_player_line(i, set(t["get_cats"]), ACCENT, "get", show_pos=True) for i in t["ins"])
         gains = ([_CAT_DISPLAY.get(c, c) for c in t["get_cats"]]
                  + [f"{p} slot" for p in t.get("get_pos", [])])
         get_lbl  = ", ".join(gains) or "depth"
         send_lbl = ", ".join(_CAT_DISPLAY.get(c, c) for c in t["send_cats"])
-        net = sum(i["_tval"] for i in t["ins"]) - sum(o["_tval"] for o in t["outs"])
-        value = ("even value" if abs(net) <= 0.15 else
-                 "you gain value" if net > 0.15 else "you pay a premium")
+        net = t.get("net_val", 0.0)
+        value = ("you win the value" if net > 0.1 else
+                 "even value" if net >= -0.1 else "you pay up")
+        thesis = ("sell-high" if t.get("sell_out") else "") + \
+                 (" · " if t.get("sell_out") and t.get("buy_in") else "") + \
+                 ("buy-low" if t.get("buy_in") else "")
+        if thesis:
+            value += f" &middot; {thesis}"
         logo = fantasy_logo(team_logos.get(t["team"], ""), size=20, team_name=t["team"])
         cards.append(
             f'<div style="background:{SURFACE};border:1px solid {BORDER};border-radius:8px;'
@@ -2685,8 +2745,8 @@ def build_trade_radar(pitchers, hitters, roto, my_team, best_recent_p, best_rece
             f'<span style="color:{MUTED};"> &middot; {value}</span></div>'
             f'</div>'
         )
-    sub = (f'{len(trades)} mutually-beneficial swap{"s" if len(trades) != 1 else ""} '
-           f'&middot; both sides address a real need (category or roster hole)')
+    sub = (f'{len(trades)} swap{"s" if len(trades) != 1 else ""} that fix a rival&rsquo;s '
+           f'category need while tilting value your way (buy-low / sell-high where possible)')
     return section_head("Trade Radar", sub) + "".join(cards)
 
 
@@ -3779,16 +3839,18 @@ def build_glossary_section():
                "spread in that stat and shrinks for counting cats as the matchup ends; a category with no "
                "history yet falls back to its close-threshold. The % always agrees in direction with the "
                "“proj” value on the same card."),
-        _entry("Trade Radar", "Mutually-beneficial trade ideas with rival teams. Each card is a swap where "
-               "<b>both</b> sides address a real need — you send a player strong in a category you're deep in "
-               "and they're weak in, and get back one who fills a category <i>or a thin roster position</i> "
-               "you need. Only players at a position where you have <b>surplus</b> are offered (so no trade "
-               "opens a hole). Fairness is judged on <b>true trade value</b>, not the role-score badge: a "
-               "closer and an everyday hitter can both post a 90+ score, but the bat moves five categories "
-               "daily while the closer touches one punt category (SV+H) in ~60 innings — so an everyday "
-               "smasher won't be offered straight up for a reliever. Ranked by how well it addresses your "
-               "deepest season-long needs. 1-for-1 and 2-for-2 shapes; the “you get” chips are highlighted "
-               "(blue = category gained, cyan = a thin position upgraded)."),
+        _entry("Trade Radar", "Trade ideas that <b>fix a rival's category need</b> (their reason to accept) "
+               "while <b>tilting value to you</b>. You send a player strong in a category you're deep in and "
+               "they're weak in; you get back one who fills a category <i>or a thin roster position</i> you "
+               "need. Only players at a position where you have <b>surplus</b> are offered (no hole opened), "
+               "and your <b>elite bats are protected</b> — never offered unless they're a sell-high regression "
+               "candidate you'd want to move anyway. Value is judged on <b>true category contribution</b>, not "
+               "the role-score badge (a closer and an everyday bat can both post a 90+ score, but the bat "
+               "moves five categories daily vs one punt category in ~60 innings), and deals are tuned to "
+               "<b>favor you</b> rather than land even. Where possible it leverages <b>buy-low / sell-high</b> "
+               "timing (Statcast expected vs actual): move a bat whose surface stats are about to regress, "
+               "acquire one due to rebound. Chips on “you get” players: blue = category gained, cyan = thin "
+               "position upgraded, green = good buy-low/sell-high timing, orange = a timing warning."),
         _entry("Luck (standings)", "Roto rank minus record rank. Positive = your W-L is better than your "
                "category performance suggests (running lucky); negative = unlucky."),
         _entry("Season Trajectory", "Every team's matchup result (W/L/T) across the whole season, "
