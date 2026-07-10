@@ -281,13 +281,13 @@ Your rostered pitchers sorted hottest → coldest. Compares **last-15-day ERA** 
 ### Roster Hot/Cold
 Your rostered **hitters** sorted hottest → coldest. Compares last-7-day OPS to season OPS. Includes an **HR%** column (modeled per-game home-run probability, hover for drivers — also listed inside the expanded Score panel for touch devices) and a **Score** badge. Tapping the Score badge shows a breakdown whose recent-form line names its window (e.g. "30-day form") — a broader window than this L7 column, so a bat can be 🔥 here yet read "cold" on the composite.
 
-**Hitter badges** (next to the name, hover for the justifying stat) flag tactical edges — display-only, never part of the score, up to two per player:
+**Hitter badges** (next to the name, hover for the justifying stat) flag tactical edges — display-only, never part of the score; every applicable badge shows (no cap):
 - 🟣 **PWR** — power/HR threat (top-tier modeled HR probability)
 - ⚪ **SB** ("Quicksilver", silver) — a genuine base-stealer (top-20% SB producer, speed-corroborated)
-- 🟢 **▲BUY** — under-performing his Statcast expected stats (positive regression coming — buy/hold)
-- 🔴 **▼SELL** — over-performing his expected stats (regression risk — sell-high / don't chase)
+- 🟢 **$** — buy-low: under-performing his Statcast expected stats (positive regression coming)
+- 🔴 **▼** — sell-high: over-performing his expected stats (regression risk — don't chase)
 
-These also appear on FA Hitters, the Positional Breakdown, and across the dashboard (Hitting, FA Radar, Weakest Spots). **Tapping the Score badge** explains each chip the player earned, with the exact stat that triggered it (e.g. "SB — 26 SB, top 1% of the league · 28.5 ft/s sprint"). The pitcher Score dropdown does the same for the **QS / 5K+ / 2-START / ⚠ RISK** badges (e.g. "QS — projected 6.1 IP · 3 ER is a quality start"; "5K+ — projected 7 strikeouts, backed by a 30% whiff rate"; "⚠ RISK — low floor, blowup-prone: 1.48 WHIP · 5.18 eff. ERA · 6.94 L15 ERA (cold)"). The 5K+ and ⚠ RISK badges' hover tooltips carry those same stats.
+These also appear on FA Hitters, the Positional Breakdown, and across the dashboard (Hitting, FA Radar, Weakest Spots). **Tapping the Score badge** explains each chip the player earned, with the exact stat that triggered it (e.g. "SB — 26 SB, top 1% of the league · 28.5 ft/s sprint"). The pitcher Score dropdown does the same for the **QS / 5K+ / 2 / ⚠** badges (e.g. "QS — projected 6.1 IP · 3 ER is a quality start"; "5K+ — projected 7 strikeouts, backed by a 30% whiff rate"; "⚠ — low floor, blowup-prone: 1.48 WHIP · 5.18 eff. ERA · 6.94 L15 ERA (cold)"). The 5K+ and ⚠ badges' hover tooltips carry those same stats.
 - 🔥 = OPS up +0.050 or more
 - ↑ = OPS up +0.015 to +0.050
 - ↓ = OPS down -0.015 to -0.050
@@ -309,7 +309,7 @@ A compact callout that audits your **daily** lineup for the matchup so far (its 
 Only still-actionable misses appear — it's silent on a clean matchup. The Monday recap carries the fuller completed-matchup version (**Lineup Efficiency**). Deep-dive / opponent comparison: run `python bench_leakage.py`.
 
 ### FA Pickup — Starting Pitchers
-Free agent starters with a confirmed or projected upcoming start, grouped by date with day headers. Sorted by composite SP score within each day. Starts past Sunday get a `NEXT WK` badge; a pitcher with ≥ 2 starts in the matchup week gets a cyan `2-START` chip. **Only starters with an SP score of 30 or higher are shown** — streamer-tier arms below that are filtered out (tunable via `_FA_SP_MIN_SCORE`).
+Free agent starters with a confirmed or projected upcoming start, grouped by date with day headers. Sorted by composite SP score within each day. Starts past Sunday get a `NEXT WK` badge; a pitcher with ≥ 2 starts in the matchup week gets a cyan `2` chip. **Only starters with an SP score of 30 or higher are shown** — streamer-tier arms below that are filtered out (tunable via `_FA_SP_MIN_SCORE`).
 
 **Columns:** Pitcher · **Proj. Line** · Matchup (with opponent OPS on a second line) · QS% · ERA · **L15 ERA** (hot/cold colored) · K% · Score
 
@@ -321,7 +321,7 @@ Free agent starters with a confirmed or projected upcoming start, grouped by dat
 - 🟢 **QS** badge (green left border) — the projected line is a quality start (6+ IP & ≤3 ER)
 - 🟡 **5K+** badge (yellow left border) — the projected line is 5+ K
 - When both fire: left border is green (top half) / yellow (bottom half)
-- 🔴 **⚠ RISK** badge — a **low-floor** (blowup-prone) skill profile: high WHIP + weak strikeout escape hatch + poor effective run prevention (ERA regressed toward xERA) + loud contact allowed, escalated when the arm is cold lately (high L15 ERA). Hover for the worst 2–3 drivers. It's a floor *warning* only — it never lowers the Score, and the digest steers pickup recommendations away from flagged arms. Blowups are largely random (validated in `backtest_projections.py`: ~1.25× top-decile lift, AUC ≈ 0.52), so treat it as "stream with caution," not a guarantee.
+- 🟠 **⚠** badge (orange, glyph only) — a **low-floor** (blowup-prone) skill profile: high WHIP + weak strikeout escape hatch + poor effective run prevention (ERA regressed toward xERA) + loud contact allowed, escalated when the arm is cold lately (high L15 ERA). Hover for the worst 2–3 drivers. It's a floor *warning* only — it never lowers the Score, and the digest steers pickup recommendations away from flagged arms. Blowups are largely random (validated in `backtest_projections.py`: ~1.25× top-decile lift, AUC ≈ 0.52), so treat it as "stream with caution," not a guarantee.
 
 The **QS% column** shows the season quality-start *probability* separately.
 
@@ -333,14 +333,14 @@ The **QS% column** shows the season quality-start *probability* separately.
 Top available relievers (must have ≥ 1 SV+H on the season), ranked by RP score (SV+H · K · W · ERA · WHIP — skill-weighted, see [Composite Scores](#composite-scores)). A **Cats** column lists up to 3 roto categories the reliever is strong in, with your currently-contested categories highlighted. Includes a **Save-Role Watch** callout flagging emerging FA closers and fading rostered closers.
 
 ### FA Pickup — Hitters
-Top available hitters sorted by composite score. Columns: R · HR · RBI · SB · OPS · **Cats** (up to 3 strong roto categories, your contested ones highlighted) · **HR%** (modeled per-game HR probability) · Score. Includes a hot/cold recent-form indicator and the **PWR / SB / ▲BUY / ▼SELL** tactical badges next to the name (see [Roster Hot/Cold](#roster-hotcold)).
+Top available hitters sorted by composite score. Columns: R · HR · RBI · SB · OPS · **Cats** (up to 3 strong roto categories, your contested ones highlighted) · **HR%** (modeled per-game HR probability) · Score. Includes a hot/cold recent-form indicator and the **PWR / SB / $ / ▼** tactical badges next to the name (see [Roster Hot/Cold](#roster-hotcold)).
 
 ### My Upcoming Starts
 Your pitchers with confirmed or projected starts, grouped by date.
 
 **Columns:** Pitcher · **Proj. Line** · Matchup (with opponent OPS on a second line) · QS% · ERA · **L15 ERA** (hot/cold colored) · K% · Score
 
-Badges next to the name: `2-START` (cyan), `QS` (green — projected quality start, 6+ IP & ≤3 ER), `5K+` (yellow — projected 5+ K). Both annotate the **Proj. Line** shown for that start (they never contradict it), identical to FA Starting Pitchers. `(proj.)` = rotation estimate, not yet confirmed by MLB. **K% highlight** — top 3 K% values across the table are highlighted yellow.
+Badges next to the name: `2` (cyan — two starts this matchup week), `QS` (green — projected quality start, 6+ IP & ≤3 ER), `5K+` (yellow — projected 5+ K). Both annotate the **Proj. Line** shown for that start (they never contradict it), identical to FA Starting Pitchers. `(proj.)` = rotation estimate, not yet confirmed by MLB. **K% highlight** — top 3 K% values across the table are highlighted yellow.
 
 ### My Season Category Rankings
 Season-to-date roto rank across all 12 categories. Same color coding as the weekly version at the top, but for the full season.
