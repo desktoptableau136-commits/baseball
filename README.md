@@ -204,7 +204,7 @@ KPI row: **Record** · **Current Matchup** (W-L-T + win%) · **Roster** (whole-t
 
 **⚑ MY ROSTER**
 7. **Roster Alerts** — *(only if you have injured players)*
-7b. **Lineup Watch** — *(current-week bench leakage / active-slot pitcher blowups; silent on a clean week)*
+7b. **Lineup Watch** — *(matchup-to-date bench leakage / active-slot pitcher blowups / idle "wasting space" hitters; silent on a clean matchup)*
 8. **Positional Breakdown**
 9. **My Upcoming Starts**
 10. **My Relief Pitchers**
@@ -300,12 +300,13 @@ For each position (C, 1B, 2B, 3B, SS, OF, SP, RP): your weakest rostered player 
 Any injured players on your roster. Only shown if there are active alerts. Color: yellow = DTD, red = IL/OUT.
 
 ### Lineup Watch
-A compact callout that audits your **daily** lineup for the week so far (Monday → yesterday), reconstructed from ESPN's historical per-day slots. It surfaces two kinds of start/sit mistakes:
+A compact callout that audits your **daily** lineup for the matchup so far (its first day → yesterday — the **full matchup period**, so a 14-day All-Star/playoff matchup is covered end-to-end, not just the current calendar week), reconstructed from ESPN's historical per-day slots. It surfaces three kinds of start/sit mistakes:
 
 - **Bench leakage** — counting-stat production (R/HR/RBI/SB) a hitter racked up while sitting in a bench slot, so it never counted. Shown **net of the bat you'd have benched to start him** — if your active lineup was full at his eligible positions, playing him meant sitting someone, so the tool subtracts that player's line (a feasibility check on your lineup slots + each player's position eligibility decides whether an open slot even existed). This is the honest "money left on the table," not raw bench stats.
 - **Active-slot blowups** — a starter who imploded (5+ ER, or 4+ ER in <3 IP) *in your active lineup*, so the ERA/WHIP damage counted. Flagged with a note if you then dropped him ("imploded then cut").
+- **Wasting active space** — a hitter sitting in an active slot but not accumulating stats (0 AB), **only counting games his MLB team actually played** (a scheduled off day is never held against him). Surfaced only when it's a pattern — idle **3 games in a row**, or an AB in **under half** the games he was slotted active — so an occasional rest day stays silent while a genuinely stranded roster spot gets flagged.
 
-Only still-actionable, net-positive misses appear — it's silent on a clean week. The Monday recap carries the fuller completed-week version (**Lineup Efficiency**). Deep-dive / opponent comparison: run `python bench_leakage.py`.
+Only still-actionable misses appear — it's silent on a clean matchup. The Monday recap carries the fuller completed-matchup version (**Lineup Efficiency**). Deep-dive / opponent comparison: run `python bench_leakage.py`.
 
 ### FA Pickup — Starting Pitchers
 Free agent starters with a confirmed or projected upcoming start, grouped by date with day headers. Sorted by composite SP score within each day. Starts past Sunday get a `NEXT WK` badge; a pitcher with ≥ 2 starts in the matchup week gets a cyan `2-START` chip. **Only starters with an SP score of 30 or higher are shown** — streamer-tier arms below that are filtered out (tunable via `_FA_SP_MIN_SCORE`).
