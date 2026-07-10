@@ -15,6 +15,7 @@ Dry run:        python send_digest.py --dry-run   (saves digest_preview.html, no
 Skip refresh:   python send_digest.py --no-refresh
 """
 
+import itertools
 import json
 import math
 import os
@@ -831,6 +832,59 @@ def blowup_badge(r, recent_era=None):
     return _hit_badge("&#9888;", ORANGE, tip)
 
 
+# ── Pitcher buy-low / sell-high (ERA vs xERA) — the pitcher analog of the hitter $ / ▼ ──
+# MEAN-regression / luck read, DISTINCT from the ⚠ low-floor flag (single-start TAIL risk):
+# a pitcher can be sell-high without being blowup-prone (a soft-contact arm riding a low
+# BABIP) or blowup-prone without being sell-high (ugly ERA that already matches an ugly
+# xERA). They share the ERA/xERA signal so they sometimes co-fire — a strong "move him" cue.
+_XREG_ERA    = 1.00   # de-biased |xERA − ERA| gap for a pitcher regression flag (~12% each side)
+_XREG_ERA_IP = 20     # min IP so the gap is a real signal, not small-sample noise
+# xERA runs systematically ABOVE ERA in this data (~+0.33 median), so a raw threshold would
+# over-fire "sell". De-bias against the league median gap → the flag means luckier/unluckier
+# than TYPICAL. Set live from the snapshot (like _LG / _SCORE_CALIB); 0.0 cold-start default.
+_XERA_OFFSET = 0.0
+
+
+def compute_xera_offset(pitchers):
+    """Set the module `_XERA_OFFSET` = league median (xERA − ERA) over the qualified YEAR
+    pool, so `pitcher_regression_flag` measures luck RELATIVE to the systematic offset."""
+    global _XERA_OFFSET
+    gaps = sorted(_n(r.get("xERA")) - _n(r.get("ERA")) for r in pitchers
+                  if int(_n(r.get("Dataset")) or 0) == YEAR
+                  and _n(r.get("ERA")) > 0 and _n(r.get("xERA")) > 0 and _n(r.get("IP")) >= _XREG_ERA_IP)
+    if len(gaps) >= 20:
+        _XERA_OFFSET = gaps[len(gaps) // 2]
+
+
+def pitcher_regression_flag(row):
+    """'buy' (ERA unluckier than typical — positive regression likely), 'sell' (ERA luckier
+    than typical — regression risk), or None. Pitcher analog of `_regression_flag`, de-biased
+    by `_XERA_OFFSET` so it flags relative luck, not the league-wide xERA/ERA offset."""
+    era, xera, ip = _n(row.get("ERA")), _n(row.get("xERA")), _n(row.get("IP"))
+    if era <= 0 or xera <= 0 or ip < _XREG_ERA_IP:
+        return None
+    adj = (xera - era) - _XERA_OFFSET   # + = luckier than typical, − = unluckier
+    if adj >= _XREG_ERA:
+        return "sell"
+    if adj <= -_XREG_ERA:
+        return "buy"
+    return None
+
+
+def pitcher_regression_badge(row):
+    """Green $ (buy-low) / red ▼ (sell-high) chip for a pitcher whose ERA has diverged from
+    xERA, or '' when neither. Display-only (never folded into any score); hover names the
+    ERA vs xERA gap. SEPARATE from ⚠ (tail risk) — see the note above."""
+    flag = pitcher_regression_flag(row)
+    if not flag:
+        return ""
+    era, xera = _n(row.get("ERA")), _n(row.get("xERA"))
+    gap = f"ERA {era:.2f} vs xERA {xera:.2f}"
+    if flag == "buy":
+        return _hit_badge("$", GREEN, gap + " &mdash; ERA above expected, positive regression likely (buy-low)")
+    return _hit_badge("&#9660;", RED, gap + " &mdash; ERA below expected, regression risk (sell-high)")
+
+
 def hitter_badges(row, hit_pctile=None, cap=None):
     """Concatenated tactical badge HTML for a hitter row (priority SB→PWR→BUY/SELL; `cap=None`
     shows every applicable badge). `hit_pctile` is the league SB percentile pool
@@ -983,6 +1037,29 @@ def category_ranks(roto_rows, my_team):
             if t == my_key:
                 my_ranks[c] = rank
     return my_ranks, len(teams)
+
+
+def team_category_ranks(roto_rows):
+    """{team_key: {cat: rank}}, n_teams — rank 1 = best in that category. Generalizes
+    category_ranks (which returns my team only) to EVERY team, for Trade Radar. Same
+    {cat}_Points aggregation, so _LOWER_BETTER is already baked into the points."""
+    CATS = ["R", "HR", "RBI", "SB", "OPS", "B_SO", "K", "QS", "W", "ERA", "WHIP", "SVHD"]
+    totals = {}
+    for row in roto_rows:
+        t = " ".join((row.get("Team") or "").split())
+        if not t:
+            continue
+        if t not in totals:
+            totals[t] = {c: 0.0 for c in CATS}
+        for c in CATS:
+            totals[t][c] += float(row.get(f"{c}_Points") or 0)
+    teams = list(totals.keys())
+    ranks = {t: {} for t in teams}
+    for c in CATS:
+        ranked = sorted(teams, key=lambda t: -totals[t][c])
+        for rank, t in enumerate(ranked, 1):
+            ranks[t][c] = rank
+    return ranks, len(teams)
 
 
 POS_GROUPS = [
@@ -1456,6 +1533,16 @@ def _sp_badge_context(row, qs_fires, k_fires, two_start_n, recent_era=None):
         tail = ": " + " &middot; ".join(drivers) if drivers else ""
         lines.append(f'{blowup_badge(row, recent_era)} low floor &mdash; blowup-prone{tail}. '
                      f'A floor warning only; it doesn&rsquo;t lower the score.')
+    _rflag = pitcher_regression_flag(row)
+    if _rflag:
+        era, xera = _n(row.get("ERA")), _n(row.get("xERA"))
+        if _rflag == "sell":
+            lines.append(f'{pitcher_regression_badge(row)} ERA {era:.2f} is running below his '
+                         f'{xera:.2f} xERA &mdash; getting lucky, regression risk (sell-high). '
+                         f'Separate from &#9888;: this is mean regression, not blowup floor.')
+        else:
+            lines.append(f'{pitcher_regression_badge(row)} ERA {era:.2f} is running above his '
+                         f'{xera:.2f} xERA &mdash; unlucky, positive regression likely (buy-low).')
     return _badge_ctx_wrap(lines)
 
 
@@ -2321,7 +2408,7 @@ def build_pitcher_hot_cold_section(pitchers, my_team, rec_p=None, best_recent_p=
             _bd_uid("phc", r["name"]), 7)
         rows_html += (
             f'<tr style="{bg}">'
-            f'<td style="{TD_S}font-weight:600;">{team_logo(r["team"])}{r["name"]}{r["inj"]}</td>'
+            f'<td style="{TD_S}font-weight:600;">{team_logo(r["team"])}{r["name"]}{r["inj"]}{pitcher_regression_badge(r["srow"])}</td>'
             f'<td style="{TDC}color:{MUTED};">{r["pos"]}</td>'
             f'<td style="{TDC}">{r["season_era"]:.2f}</td>'
             f'<td style="{TDC}">{recent_str}</td>'
@@ -2431,6 +2518,301 @@ def _cats_cell(row, pctile, cats, need_cats):
         chips.append(f'<span style="color:{col};font-weight:{wt};font-size:11px;">{_CAT_DISPLAY.get(c, c)}</span>')
     inner = '<span style="color:#334155;"> · </span>'.join(chips)
     return f'<td style="{TDC}white-space:nowrap;">{inner}</td>'
+
+
+def _regression_flag(row):
+    """'buy' (positive regression, buy-low), 'sell' (regression risk, sell-high), or None
+    — Statcast expected-vs-actual, SAME thresholds as the $ / ▼ hitter badges."""
+    avg, iso, xba, xslg = _n(row.get("AVG")), _n(row.get("ISO")), _n(row.get("xBA")), _n(row.get("xSLG"))
+    if avg <= 0 or iso <= 0 or xba <= 0 or xslg <= 0:
+        return None
+    slg = iso + avg
+    d_ba, d_slg = xba - avg, xslg - slg
+    if d_ba >= _XREG_BA and d_slg >= _XREG_SLG:
+        return "buy"
+    if -d_ba >= _XREG_BA and -d_slg >= _XREG_SLG:
+        return "sell"
+    return None
+
+
+# ── TRADE RADAR ───────────────────────────────────────────────────────────────
+# Cross-team trade finder tilted to MY advantage. The rival accepts because the deal
+# fixes a category NEED of theirs (I send a player strong in a cat that is my surplus and
+# their need); I win on VALUE and on buy-low/sell-high timing. Season-fit ranking.
+#
+# TRADE VALUE is a CROSS-ROLE currency, NOT the role-calibrated 0-100 badge score. A 95
+# closer and a 98 hitter both sit "top of their role," but they are NOT equal trade
+# chips: an everyday bat moves 5 categories every day while a closer touches one punt
+# category (SV+H) plus a sliver of K/ERA/WHIP in ~60 IP. `_trade_value` sums a player's
+# above-median contribution across EVERY category they move (percentiles vs the whole
+# qualified pool, so a reliever's low K/W volume ranks low), with saves discounted since
+# we punt them — so a smasher correctly outweighs a one-category reliever.
+#
+# FAVOR-ME, GOOD-not-GREAT: I never trade an elite bat (give-side value ceiling), EXCEPT
+# a sell-high regression candidate (whom I *want* to move). I never overpay (directional
+# gate) and may extract up to a capped edge. Sell-high out + buy-low in is a double
+# arbitrage: my sell-high guy's actual stats OVERstate his value, their buy-low guy's
+# UNDERstate his — even on paper, I win; they still accept on category need.
+_TRADE_SVHD_W       = 0.35  # punt-saves: discount SV+H contribution in trade value
+_TRADE_MAX_VAL      = 1.35  # give-side value ceiling — protects my elite bats (sell-high exempt)
+_TRADE_GIVE_SLACK   = 0.15  # most extra value I'll include to sweeten (favor-me: don't overpay)
+_TRADE_MAX_EDGE     = 0.45  # steal ceiling — how much MORE value I may extract (keeps it plausible)
+_TRADE_MAX_CARDS    = 6     # trades surfaced
+_TRADE_PER_TEAM_CAP = 2     # max cards per partner team (variety)
+_TRADE_POOL_WIDTH   = 4     # top-N of each side fed into the 2-for-2 combinations
+# Player category coverage reuses the FA cat lists (QS/B_SO aren't per-player stats, so a
+# team need in those simply finds no matching player — intentional, same as the FA "Cats").
+
+
+def _trade_pos_groups(r):
+    """POS_GROUPS labels this player fills (OF covers LF/CF/RF)."""
+    tags = {p.strip() for p in str(r.get("Position") or "").upper().replace("/", ",").split(",") if p.strip()}
+    return {label for label, slots, _ in POS_GROUPS if tags & slots}
+
+
+def find_trades(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
+                pos_data, hit_pctile, pit_pctile):
+    """Ranked list of mutually-beneficial trades between my_team and each rival.
+    Perspective-driven via my_team (works under --team for free). See CLAUDE.md."""
+    ranks, n = team_category_ranks(roto)
+    my_key = " ".join(my_team.split())
+    if n < 2 or my_key not in ranks:
+        return []
+    third = max(1, round(n / 3.0))
+    needs_of   = lambda team: {c for c, rk in ranks[team].items() if rk >= n - third + 1}
+    surplus_of = lambda team: {c for c, rk in ranks[team].items() if rk <= third}
+
+    my_needs, my_surplus = needs_of(my_key), surplus_of(my_key)
+    if not my_needs:
+        return []
+
+    # Position groups I'm deep in (top-third rank) — safe to trade FROM without a hole.
+    _nt    = lambda p: (p.get("n_teams") or n)
+    _third = lambda p: max(1, round(_nt(p) / 3.0))
+    surplus_pos = {p["pos"] for p in pos_data if (p.get("rank") or _nt(p)) <= _third(p)}
+    # HITTER positions I'm thin at (bottom-third rank) → {pos: (rank, my_avg_score)}. The
+    # hitting game is filling roster holes across C/1B/2B/3B/SS/OF, so a hitter who
+    # UPGRADES a thin position is worth acquiring even when my category totals there
+    # aren't bottom-third — positional scarcity is its own need. (Pitching need is
+    # category-shaped — QS/SP vs SV+H/K balance — so it stays category-driven.)
+    need_pos = {p["pos"]: ((p.get("rank") or _nt(p)), (p.get("my_avg") or 0))
+                for p in pos_data if p.get("ptype") == "hit"
+                and (p.get("rank") or _nt(p)) >= _nt(p) - _third(p) + 1}
+
+    def roster(source, team):
+        return [r for r in source
+                if " ".join((r.get("FantasyTeam") or "").split()) == team
+                and int(r.get("Dataset", 0) or 0) == YEAR]
+
+    def _trade_value(r, ptype):
+        """Cross-role trade currency: summed above-median category contribution. Hitters
+        span 5 everyday cats; a reliever's counting stats (K/W) rank low vs the whole
+        pitcher pool (volume-aware) and SV+H is punt-discounted — so an everyday bat
+        outweighs a one-category closer even when both post a top role-score badge."""
+        cats, pctile = (_FA_HIT_CATS, hit_pctile) if ptype == "hit" else (_FA_RP_CATS, pit_pctile)
+        v = 0.0
+        for c in cats:
+            p = _cat_pctile(pctile, c, _cat_value(r, c))
+            v += max(0.0, p - 0.5) * (_TRADE_SVHD_W if c == "SVHD" else 1.0)
+        return v
+
+    def enrich(r, ptype):
+        if ptype == "hit":
+            r["_tscore"] = _blend(r, hitter_score, best_recent_h)
+            r["_tcats"]  = set(player_cat_strengths(r, hit_pctile, _FA_HIT_CATS, set()))
+        else:
+            r["_tscore"] = _score_p(r, best_recent_p)
+            r["_tcats"]  = set(player_cat_strengths(r, pit_pctile, _FA_RP_CATS, set()))
+        r["_tval"]    = _trade_value(r, ptype)
+        _flag = _regression_flag(r) if ptype == "hit" else pitcher_regression_flag(r)
+        r["_tsell"]   = (_flag == "sell")
+        r["_tbuy"]    = (_flag == "buy")
+        r["_tgroups"] = _trade_pos_groups(r)
+        r["_tptype"]  = ptype
+        return r
+
+    my_players = ([enrich(r, "hit") for r in roster(hitters, my_key)] +
+                  [enrich(r, "pit") for r in roster(pitchers, my_key)])
+
+    all_teams = {" ".join((r.get("FantasyTeam") or "").split())
+                 for r in itertools.chain(hitters, pitchers)
+                 if (r.get("FantasyTeam") or "").strip()}
+
+    def _fills_need_pos(r):
+        """Need positions this player upgrades — a hitter at a thin position of mine whose
+        value clears my current average there (a genuine upgrade, not a lateral move)."""
+        if r["_tptype"] != "hit":
+            return set()
+        return {pos for pos in (r["_tgroups"] & set(need_pos))
+                if r["_tscore"] > need_pos[pos][1]}
+
+    trades = []
+    for team in all_teams:
+        if team == my_key or team not in ranks:
+            continue
+        send_cats = my_surplus & needs_of(team)   # cats I can help THEM in (they must benefit)
+        get_cats  = surplus_of(team) & my_needs    # cats they can help ME in
+        if not send_cats:                          # no mutual benefit possible → skip
+            continue
+        t_players = ([enrich(r, "hit") for r in roster(hitters, team)] +
+                     [enrich(r, "pit") for r in roster(pitchers, team)])
+
+        # Give side: strong in a send cat, at a surplus position, and NOT an elite keeper —
+        # unless he's a sell-high regression candidate, whom I actively want to move.
+        out_pool = sorted([r for r in my_players
+                           if (r["_tcats"] & send_cats) and (r["_tgroups"] & surplus_pos)
+                           and (r["_tval"] <= _TRADE_MAX_VAL or r["_tsell"])],
+                          key=lambda r: -r["_tscore"])[:_TRADE_POOL_WIDTH]
+        # Incoming: helps a category I need OR upgrades a thin position of mine.
+        in_pool  = sorted([r for r in t_players if (r["_tcats"] & get_cats) or _fills_need_pos(r)],
+                          key=lambda r: -r["_tscore"])[:_TRADE_POOL_WIDTH]
+        if not out_pool or not in_pool:
+            continue
+        for r in in_pool:
+            r["_tfillpos"] = sorted(_fills_need_pos(r))
+
+        def _favor_me(vo, vi, mult=1.0):
+            """I don't overpay (give minus get within a small slack) and I may extract up
+            to a capped edge (get minus give) — so trades tilt to my advantage but stay
+            plausible enough that a rival fixing a category need would accept."""
+            return (vo - vi) <= _TRADE_GIVE_SLACK * mult and (vi - vo) <= _TRADE_MAX_EDGE * mult
+
+        packages = []
+        for o in out_pool:                                   # 1-for-1
+            for i in in_pool:
+                if _favor_me(o["_tval"], i["_tval"]):
+                    packages.append(([o], [i]))
+        for oa, ob in itertools.combinations(out_pool, 2):   # 2-for-2
+            for ia, ib in itertools.combinations(in_pool, 2):
+                benefits = (((ia["_tcats"] | ib["_tcats"]) & get_cats)
+                            | set(ia["_tfillpos"]) | set(ib["_tfillpos"]))
+                if len(benefits) < 2:
+                    continue   # a package must address >= 2 distinct needs (cat or position)
+                if _favor_me(oa["_tval"] + ob["_tval"], ia["_tval"] + ib["_tval"], mult=1.5):
+                    packages.append(([oa, ob], [ia, ib]))
+
+        for outs, ins in packages:
+            gcov = set().union(*[i["_tcats"] for i in ins]) & get_cats   # category needs met
+            gpos = set().union(*[set(i["_tfillpos"]) for i in ins])       # positional holes filled
+            scov = set().union(*[o["_tcats"] for o in outs]) & send_cats
+            if (not gcov and not gpos) or not scov:
+                continue
+            net_val  = sum(i["_tval"] for i in ins) - sum(o["_tval"] for o in outs)  # my value edge (+ = I win)
+            # DIRECTIONAL timing: selling-high on the GIVE side and buying-low on the GET
+            # side are the arbitrage (do more of it); giving away a riser or acquiring a
+            # regression candidate is the reverse (penalize — these are traps).
+            sell_out = sum(1 for o in outs if o.get("_tsell"))   # good: move my regressors
+            buy_in   = sum(1 for i in ins  if i.get("_tbuy"))    # good: acquire their risers
+            buy_out  = sum(1 for o in outs if o.get("_tbuy"))    # bad: don't sell my risers low
+            sell_in  = sum(1 for i in ins  if i.get("_tsell"))   # bad: don't buy their regressors
+            timing = sell_out + buy_in - buy_out - sell_in
+            # Season fit + FAVOR-ME: deeper need cats/positions addressed (higher rank number)
+            # score more; their-side benefit is down-weighted (0.3) since we tilt to me; reward
+            # my net value edge and good timing legs; mild package-size penalty.
+            my_gain    = sum(ranks[my_key][c] for c in gcov) + sum(need_pos[p][0] for p in gpos)
+            their_gain = sum(ranks[team][c]   for c in scov)
+            score = (my_gain + 0.3 * their_gain + 5.0 * net_val
+                     + 4.0 * timing - 0.5 * (len(ins) - 1))
+            trades.append({
+                "team": team, "outs": outs, "ins": ins, "net_val": net_val, "score": score,
+                "sell_out": sell_out, "buy_in": buy_in,
+                "get_cats":  sorted(gcov, key=lambda c: -ranks[my_key][c]),
+                "get_pos":   sorted(gpos, key=lambda p: -need_pos[p][0]),
+                "send_cats": sorted(scov, key=lambda c: -ranks[team][c]),
+            })
+
+    trades.sort(key=lambda t: -t["score"])
+    picked, per_team, seen = [], {}, set()
+    for t in trades:
+        sig = (t["team"],
+               tuple(sorted(o.get("PlayerName", "") for o in t["outs"])),
+               tuple(sorted(i.get("PlayerName", "") for i in t["ins"])))
+        if sig in seen or per_team.get(t["team"], 0) >= _TRADE_PER_TEAM_CAP:
+            continue
+        seen.add(sig)
+        per_team[t["team"]] = per_team.get(t["team"], 0) + 1
+        picked.append(t)
+        if len(picked) >= _TRADE_MAX_CARDS:
+            break
+    return picked
+
+
+def _trade_player_line(r, hi_cats, hi_color, side, show_pos=False):
+    """One player row inside a trade card: MLB logo + name + score badge + cat chips
+    (+ a CYAN position chip for a thin slot the incoming player upgrades, + the CANONICAL
+    buy-low/sell-high chip — same glyph-only `$`/`▼` (green/red) as everywhere else in the
+    digest, so the visual language stays consistent). `side` ('give'/'get') only tunes the
+    hover tooltip; the whole-trade framing lives in the footer's sell-high/buy-low tag."""
+    logo  = team_logo(r.get("Team"), 14)
+    nm    = str(r.get("PlayerName") or "")
+    chips = "".join(_hit_badge(_CAT_DISPLAY.get(c, c), hi_color, f"strong in {c}")
+                    for c in sorted(r["_tcats"] & hi_cats))
+    if show_pos:
+        chips += "".join(_hit_badge(p, CYAN, f"upgrades your thin {p}")
+                         for p in r.get("_tfillpos", []))
+    if r.get("_tsell"):
+        tip = ("results ahead of his Statcast expected — sell him high"
+               if side == "give" else
+               "results ahead of his Statcast expected — regression risk (you'd be buying high)")
+        chips += _hit_badge("&#9660;", RED, tip)
+    elif r.get("_tbuy"):
+        tip = ("results behind his Statcast expected — a rebound candidate (think twice before dealing him)"
+               if side == "give" else
+               "results behind his Statcast expected — positive regression likely, acquire cheap")
+        chips += _hit_badge("$", GREEN, tip)
+    return (f'<div style="margin:3px 0;font-size:12px;color:{TEXT};white-space:nowrap;">'
+            f'{logo}<span style="font-weight:600;">{nm}</span> '
+            f'{badge(int(round(r["_tscore"])))}{chips}</div>')
+
+
+def build_trade_radar(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
+                      pos_data, hit_pctile, pit_pctile, team_logos=None):
+    trades = find_trades(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
+                         pos_data, hit_pctile, pit_pctile)
+    if not trades:
+        return ""
+    team_logos = team_logos or {}
+    cards = []
+    for t in trades:
+        give = "".join(_trade_player_line(o, set(t["send_cats"]), MUTED, "give") for o in t["outs"])
+        get_ = "".join(_trade_player_line(i, set(t["get_cats"]), ACCENT, "get", show_pos=True) for i in t["ins"])
+        gains = ([_CAT_DISPLAY.get(c, c) for c in t["get_cats"]]
+                 + [f"{p} slot" for p in t.get("get_pos", [])])
+        get_lbl  = ", ".join(gains) or "depth"
+        send_lbl = ", ".join(_CAT_DISPLAY.get(c, c) for c in t["send_cats"])
+        net = t.get("net_val", 0.0)
+        value = ("you win the value" if net > 0.1 else
+                 "even value" if net >= -0.1 else "you pay up")
+        thesis = ("sell-high" if t.get("sell_out") else "") + \
+                 (" · " if t.get("sell_out") and t.get("buy_in") else "") + \
+                 ("buy-low" if t.get("buy_in") else "")
+        if thesis:
+            value += f" &middot; {thesis}"
+        logo = fantasy_logo(team_logos.get(t["team"], ""), size=20, team_name=t["team"])
+        cards.append(
+            f'<div style="background:{SURFACE};border:1px solid {BORDER};border-radius:8px;'
+            f'padding:12px 14px;margin-bottom:12px;">'
+            f'<div style="font-size:11px;color:{MUTED};margin-bottom:8px;">with {logo}'
+            f'<span style="color:{TEXT};font-weight:700;">{t["team"]}</span></div>'
+            f'<table style="width:100%;border-collapse:collapse;"><tr>'
+            f'<td style="width:47%;vertical-align:top;">'
+            f'<div style="font-size:9px;font-weight:700;color:{RED};text-transform:uppercase;'
+            f'letter-spacing:.5px;margin-bottom:3px;">You give</div>{give}</td>'
+            f'<td style="width:6%;text-align:center;color:{MUTED};font-size:17px;vertical-align:middle;">&#8644;</td>'
+            f'<td style="width:47%;vertical-align:top;">'
+            f'<div style="font-size:9px;font-weight:700;color:{GREEN};text-transform:uppercase;'
+            f'letter-spacing:.5px;margin-bottom:3px;">You get</div>{get_}</td>'
+            f'</tr></table>'
+            f'<div style="font-size:11px;color:{MUTED};margin-top:8px;border-top:1px solid {BORDER};'
+            f'padding-top:7px;">Upgrades your '
+            f'<span style="color:{ACCENT};font-weight:700;">{get_lbl}</span>; they shore up '
+            f'<span style="color:{TEXT};">{send_lbl}</span>'
+            f'<span style="color:{MUTED};"> &middot; {value}</span></div>'
+            f'</div>'
+        )
+    sub = (f'{len(trades)} swap{"s" if len(trades) != 1 else ""} that fix a rival&rsquo;s '
+           f'category need while tilting value your way (buy-low / sell-high where possible)')
+    return section_head("Trade Radar", sub) + "".join(cards)
 
 
 def compute_weekly_avgs(roto, current_week):
@@ -3467,7 +3849,17 @@ def build_glossary_section():
                "when the arm is <b>cold lately</b> (high L15 ERA). <b>Hover</b> for the worst 2–3 drivers. It's "
                "a floor warning only — it never lowers a pitcher's Score, and the digest steers free-agent "
                "pickups away from flagged arms. Blowups are largely random, so treat it as “stream with "
-               "caution,” not a guarantee."),
+               "caution,” not a guarantee. <b>Distinct from the ▼ sell-high chip below</b> — ⚠ is single-start "
+               "<i>tail</i> risk; ▼ is <i>mean</i> regression (a lucky ERA due to rise)."),
+        _entry("Pitcher $ / ▼ (buy-low / sell-high)",
+               "The pitcher version of the hitter regression badges. <b>$</b> (green) = <b>buy-low</b>: his ERA "
+               "is running <i>above</i> his Statcast expected ERA (xERA), i.e. unlucky — positive regression "
+               "likely, a good acquire-cheap target. <b>▼</b> (red) = <b>sell-high</b>: ERA running <i>below</i> "
+               "xERA, i.e. getting lucky — regression risk, move him while the surface stats look great. The "
+               "gap is measured <b>relative to the league's typical xERA-vs-ERA offset</b> (xERA runs a bit "
+               "high across the board, so we de-bias) and needs a real innings sample. Display-only — never "
+               "changes a Score — and it also powers the buy-low / sell-high timing in Trade Radar. <b>Hover</b> "
+               "for the ERA-vs-xERA numbers."),
     ])
     pitching = _group("Pitching metrics", [
         _entry("xERA / xwOBA-against", "Baseball Savant “deserved” run prevention from contact quality — "
@@ -3522,6 +3914,19 @@ def build_glossary_section():
                "spread in that stat and shrinks for counting cats as the matchup ends; a category with no "
                "history yet falls back to its close-threshold. The % always agrees in direction with the "
                "“proj” value on the same card."),
+        _entry("Trade Radar", "Trade ideas that <b>fix a rival's category need</b> (their reason to accept) "
+               "while <b>tilting value to you</b>. You send a player strong in a category you're deep in and "
+               "they're weak in; you get back one who fills a category <i>or a thin roster position</i> you "
+               "need. Only players at a position where you have <b>surplus</b> are offered (no hole opened), "
+               "and your <b>elite bats are protected</b> — never offered unless they're a sell-high regression "
+               "candidate you'd want to move anyway. Value is judged on <b>true category contribution</b>, not "
+               "the role-score badge (a closer and an everyday bat can both post a 90+ score, but the bat "
+               "moves five categories daily vs one punt category in ~60 innings), and deals are tuned to "
+               "<b>favor you</b> rather than land even. Where possible it leverages <b>buy-low / sell-high</b> "
+               "timing (Statcast expected vs actual): move a bat whose surface stats are about to regress, "
+               "acquire one due to rebound. Chips: blue = category gained, cyan = thin position upgraded, and "
+               "the same <b>$</b> (buy-low) / <b>▼</b> (sell-high) glyphs used everywhere else in the digest — "
+               "the footer tag tells you which way the timing helps you."),
         _entry("Luck (standings)", "Roto rank minus record rank. Positive = your W-L is better than your "
                "category performance suggests (running lucky); negative = unlucky."),
         _entry("Season Trajectory", "Every team's matchup result (W/L/T) across the whole season, "
@@ -3917,6 +4322,7 @@ def build_email(snap, override_team=None):
     compute_pitcher_benchmarks(pitchers)
     compute_score_calibration(pitchers)          # re-anchor SP/RP score scale (after benchmarks)
     compute_league_averages(hitters, pitchers)   # league-avg reference points → _LG
+    compute_xera_offset(pitchers)                # de-bias the pitcher buy/sell (ERA vs xERA) flag
 
     # Map Baseball Ref recent rows to add fields pitcher_score expects
     rec_p_fp = {}
@@ -4032,6 +4438,10 @@ def build_email(snap, override_team=None):
     _rp_pool  = [r for r in pitchers if int(_n(r.get("Dataset")) or 0) == YEAR and not _is_sp(r)]
     hit_pctile = build_cat_percentiles(_hit_pool, _FA_HIT_CATS)
     rp_pctile  = build_cat_percentiles(_rp_pool,  _FA_RP_CATS)
+    # Trade Radar rates pitcher category strength across ALL starters+relievers (a
+    # traded arm's K/W/ERA/WHIP/SV+H is measured vs the whole pitcher pool).
+    _pit_pool_all = [r for r in pitchers if int(_n(r.get("Dataset")) or 0) == YEAR]
+    pit_pctile = build_cat_percentiles(_pit_pool_all, _FA_RP_CATS)
     # Current Matchup subtitle uses the SAME stored Roto_Score the Week N Roto
     # Rankings table renders (ESPN's method, which splits points on ties) so the
     # two panels agree. A pseudo rank-sum (n - rank + 1) would over-count ties
@@ -4357,6 +4767,7 @@ def build_email(snap, override_team=None):
                 if k_fires_s:
                     start_badges.append(k5_badge(_pjs_k, r))
                 start_badges.append(blowup_badge(r, p15r.get("ERA")))
+                start_badges.append(pitcher_regression_badge(r))
                 start_badge = "".join(start_badges)
                 proj_line_s = _proj_line_html(r)
                 _mus_bd = (_pitcher_score_breakdown(r, best_recent_p)
@@ -4450,7 +4861,7 @@ def build_email(snap, override_team=None):
                 _bd_uid("myrp", r.get("PlayerName", "")), 8)
             return (
                 f'<tr style="{bg}">'
-                f'<td style="{TD_S}font-weight:600;">{team_logo(r.get("Team"))}{r.get("PlayerName","")}{inj_tag(r)}{ds_badge}</td>'
+                f'<td style="{TD_S}font-weight:600;">{team_logo(r.get("Team"))}{r.get("PlayerName","")}{inj_tag(r)}{ds_badge}{pitcher_regression_badge(r)}</td>'
                 f'<td style="{TDC}color:{MUTED};">{r.get("Position","")}</td>'
                 f'<td style="{TDC}">{v(svhd, 0)}</td>'
                 f'<td style="{TDC}">{v(k, 0)}</td>'
@@ -4578,6 +4989,7 @@ def build_email(snap, override_team=None):
                 elif k_fires:
                     name_border = f"border-left:3px solid {YELLOW};"
                 pickup_badges.append(blowup_badge(r, p15r.get("ERA")))
+                pickup_badges.append(pitcher_regression_badge(r))
                 pickup_badge = "".join(pickup_badges)
                 # Two-start flag always shows — a 2-start FA is a top streaming target
                 _n_starts_fa = _starts_this_week(r, today_str, week_end_str)
@@ -4654,7 +5066,7 @@ def build_email(snap, override_team=None):
                 _bd_uid("farp", r.get("PlayerName", "")), 9)
             return (
                 f'<tr style="{bg}">'
-                f'<td style="{TD_S}font-weight:600;">{team_logo(r.get("Team"))}{r.get("PlayerName","")}{inj_tag(r)}{ds_badge}</td>'
+                f'<td style="{TD_S}font-weight:600;">{team_logo(r.get("Team"))}{r.get("PlayerName","")}{inj_tag(r)}{ds_badge}{pitcher_regression_badge(r)}</td>'
                 f'<td style="{TDC}color:{MUTED};">{r.get("Position","")}</td>'
                 f'<td style="{TDC}">{v(svhd, 0)}</td>'
                 f'<td style="{TDC}">{v(k, 0)}</td>'
@@ -4969,7 +5381,7 @@ def build_email(snap, override_team=None):
                 f'{team_logo(worst.get("Team"), 16)}'
                 f'<span style="font-weight:600;">{worst["PlayerName"]}</span>'
                 f'{inj_tag(worst)}'
-                f'{"" if _is_pit_pos else hitter_badges(worst, hit_pctile)}'
+                f'{pitcher_regression_badge(worst) if _is_pit_pos else hitter_badges(worst, hit_pctile)}'
                 f' {_worst_badge}'
                 f'{pos_stat_line(worst, p["pos"])}'
             )
@@ -5000,7 +5412,7 @@ def build_email(snap, override_team=None):
                 f'<span style="{"font-weight:600;" if upgrade else ""}'
                 f'color:{GREEN if upgrade else MUTED};">'
                 f'{top_fa["PlayerName"]}</span>'
-                f'{"" if _is_pit_pos else hitter_badges(top_fa, hit_pctile)}'
+                f'{pitcher_regression_badge(top_fa) if _is_pit_pos else hitter_badges(top_fa, hit_pctile)}'
                 f' {_fa_badge}'
                 f'{"&nbsp;&#8593;" if upgrade else ""}'
                 f'{pos_stat_line(top_fa, p["pos"])}'
@@ -5187,6 +5599,8 @@ def build_email(snap, override_team=None):
         fa_sp_section,                                                                    # 11
         fa_rp_section,                                                                    # 12
         fa_hit_section,                                                                   # 13
+        build_trade_radar(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
+                          pos_data, hit_pctile, pit_pctile, team_logos=team_logos),       # 13b Trade Radar
         band_divider("SEASON", anchor="band-season"),                                     # SEASON CONTEXT band header
         cat_section,                                                                      # 14
         luck_section,                                                                     # 15

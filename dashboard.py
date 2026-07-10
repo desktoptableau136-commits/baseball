@@ -66,6 +66,7 @@ def build_context(snap, my_team):
     sd.compute_pitcher_benchmarks(pitchers)
     sd.compute_score_calibration(pitchers)
     sd.compute_league_averages(hitters, pitchers)
+    sd.compute_xera_offset(pitchers)   # de-bias the pitcher buy/sell (ERA vs xERA) flag
 
     rec_p_fp = {}
     for name, r in rec_p.items():
@@ -168,6 +169,11 @@ def build_context(snap, my_team):
     _ab_pool_floor = (sd._AB_BENCH.get(YEAR) or sd._FULLTIME_AB[YEAR]) * 0.30
     _hit_pool = [r for r in hitters if int(_n(r.get("Dataset")) or 0) == YEAR and _n(r.get("AB")) >= _ab_pool_floor]
     hit_pctile = sd.build_cat_percentiles(_hit_pool, sd._FA_HIT_CATS)
+    # Trade Radar (abbreviated on the dashboard — just the top couple of suggestions).
+    _pit_pool = [r for r in pitchers if int(_n(r.get("Dataset")) or 0) == YEAR]
+    pit_pctile = sd.build_cat_percentiles(_pit_pool, sd._FA_RP_CATS)
+    trades = sd.find_trades(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
+                            pos_data, hit_pctile, pit_pctile)
 
     # Per-week roto scores → sparkline + weekly finishes + KPI averages
     my_key = " ".join(my_team.split())
@@ -219,6 +225,7 @@ def build_context(snap, my_team):
         fa_sp=fa_sp, fa_rp=fa_rp, fa_hit=fa_hit, luck=luck, my_row=my_row, cats=cats, n_teams=n,
         weekly_avgs=weekly_avgs, weekly_std=weekly_std, classification=classification, pit_proj=pit_proj,
         pos_data=pos_data, starts=starts, alerts=alerts, opp_intel=opp_intel, hit_pctile=hit_pctile,
+        trades=trades,
         lineup_eff_current=lineup_eff_current, roster_sugg=roster_sugg, emerging=emerging, fading=fading,
         sparkline=sparkline, peak_label=peak_label, roto_week_results=roto_week_results,
         weekly_results=weekly_results, wk_ranks=wk_ranks, wk_pts=wk_pts,
@@ -236,6 +243,23 @@ def _fv(v, dec=0):
     """Format a category value; strip the leading zero for OPS/rate sub-1 values."""
     s = f"{v:.{dec}f}"
     return s[1:] if (dec >= 2 and 0 <= v < 1) else s
+
+
+def _reg_chip8(r):
+    """Tiny 8px pitcher buy-low ($) / sell-high (▼) chip, matching the QS/5K+/⚠ chips in
+    My Pitching. Same $/▼ glyph + green/red as everywhere else (sd.pitcher_regression_*)."""
+    flag = sd.pitcher_regression_flag(r)
+    if not flag:
+        return ""
+    era, xera = _n(r.get("ERA")), _n(r.get("xERA"))
+    if flag == "buy":
+        col, glyph, tip = GREEN, "$", f"ERA {era:.2f} vs xERA {xera:.2f} &mdash; buy-low (unlucky, positive regression likely)"
+    else:
+        col, glyph, tip = RED, "&#9660;", f"ERA {era:.2f} vs xERA {xera:.2f} &mdash; sell-high (lucky, regression risk)"
+    rr, gg, bb = int(col[1:3], 16), int(col[3:5], 16), int(col[5:7], 16)
+    return (f' <span title="{tip}" style="font-size:8px;font-weight:700;color:{col};'
+            f'background:rgba({rr},{gg},{bb},0.12);border:1px solid rgba({rr},{gg},{bb},0.35);'
+            f'border-radius:3px;padding:0 3px;vertical-align:middle;">{glyph}</span>')
 
 
 def _tile(title, body, flex=1.0, accent=ACCENT, sub=""):
@@ -554,6 +578,7 @@ def render_pitching(ctx):
             badges += (f' <span title="{_rt}" style="font-size:8px;font-weight:700;color:{ORANGE};'
                        f'background:rgba(234,88,12,0.12);border:1px solid rgba(234,88,12,0.35);'
                        f'border-radius:3px;padding:0 3px;vertical-align:middle;">&#9888;</span>')
+        badges += _reg_chip8(r)   # $ buy-low / ▼ sell-high (ERA vs xERA)
         rows.append(
             f'<div style="display:flex;justify-content:space-between;gap:6px;padding:2px 0;white-space:nowrap;border-bottom:1px solid {BORDER};">'
             f'<span style="overflow:hidden;text-overflow:ellipsis;">{sd.team_logo(r.get("Team"), 14)}<span style="color:{TEXT};font-weight:600;">{r.get("PlayerName")}</span>{two} '
@@ -637,12 +662,12 @@ def render_holes(ctx):
         wname = worst.get("PlayerName", "—") if worst else "—"
         wlogo = sd.team_logo(worst.get("Team"), 13) if worst else ""
         wsc = int(worst.get("_pscore", 0)) if worst else 0
-        wbadge = sd.hitter_badges(worst, ctx["hit_pctile"]) if (worst and _hit_pos) else ""
+        wbadge = (sd.hitter_badges(worst, ctx["hit_pctile"]) if _hit_pos else sd.pitcher_regression_badge(worst)) if worst else ""
         fa_s = ""
         if fa:
             fsc = int(fa.get("_pscore", 0))
             gain = fsc - wsc
-            fbadge = sd.hitter_badges(fa, ctx["hit_pctile"]) if _hit_pos else ""
+            fbadge = sd.hitter_badges(fa, ctx["hit_pctile"]) if _hit_pos else sd.pitcher_regression_badge(fa)
             fa_s = (f' &rarr; {sd.team_logo(fa.get("Team"), 13)}<span style="color:{GREEN if gain>0 else MUTED};">{fa.get("PlayerName")}</span>{fbadge} {_mini_badge(fsc)}')
         rows.append(
             f'<div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:2px 0;border-bottom:1px solid {BORDER};">'
@@ -656,6 +681,59 @@ def render_holes(ctx):
         # tighten the reused callout for the compact tile
         watch = f'<div style="margin-top:5px;font-size:10.5px;">{watch}</div>'
     return _tile("Weakest Spots &middot; Lineup Watch", holes + watch, flex=1.25, sub="rank / worst &rarr; best FA")
+
+
+def render_trade_radar(ctx):
+    """Abbreviated Trade Radar — just the top couple of swaps (the full list lives in the
+    daily digest). Two lines per trade (give / get), canonical $/▼ + position chips."""
+    trades = ctx.get("trades") or []
+
+    def pl(p, is_get):
+        chips = ""
+        if p.get("_tsell"):
+            chips += f' <span style="color:{RED};font-weight:700;font-size:9px;">&#9660;</span>'
+        elif p.get("_tbuy"):
+            chips += f' <span style="color:{GREEN};font-weight:700;font-size:9px;">$</span>'
+        if is_get and p.get("_tfillpos"):
+            chips += f' <span style="color:{CYAN};font-size:9px;">({",".join(p["_tfillpos"])})</span>'
+        return f'{sd.team_logo(p.get("Team"), 12)}<span style="color:{TEXT};">{p.get("PlayerName")}</span>{chips}'
+
+    # Abbreviated view: prefer TWO DISTINCT partners (a 2-item panel showing two deals with
+    # the same team wastes the space); backfill from the full ranked list if only one team fits.
+    top, _seen = [], set()
+    for t in trades:
+        if t["team"] in _seen:
+            continue
+        _seen.add(t["team"]); top.append(t)
+        if len(top) >= 2:
+            break
+    for t in trades:               # backfill if fewer than 2 distinct partners exist
+        if len(top) >= 2:
+            break
+        if t not in top:
+            top.append(t)
+
+    rows = []
+    for t in top:
+        give = " + ".join(pl(o, False) for o in t["outs"])
+        get_ = " + ".join(pl(i, True) for i in t["ins"])
+        net = t.get("net_val", 0)
+        val = "you win" if net > 0.1 else "even" if net >= -0.1 else "you pay up"
+        thesis = "sell-high" if t.get("sell_out") else ""
+        thesis += ("/buy-low" if thesis and t.get("buy_in") else ("buy-low" if t.get("buy_in") else ""))
+        tag = val + (f" &middot; {thesis}" if thesis else "")
+        logo = sd.fantasy_logo(ctx["team_logos"].get(t["team"], ""), 12, t["team"])
+        _clip = "overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"
+        rows.append(
+            f'<div style="padding:3px 0;border-bottom:1px solid {BORDER};">'
+            f'<div style="font-size:10px;color:{MUTED};{_clip}">&#8644; {logo}'
+            f'<span style="color:{TEXT};font-weight:600;">{t["team"]}</span> &middot; {tag}</div>'
+            f'<div style="font-size:11px;{_clip}"><span style="color:{RED};font-size:9px;font-weight:700;">GIVE</span> {give}</div>'
+            f'<div style="font-size:11px;{_clip}"><span style="color:{GREEN};font-size:9px;font-weight:700;">GET</span> {get_}</div>'
+            f'</div>')
+    if not rows:
+        rows = [f'<div style="color:{MUTED};">No trade fits right now.</div>']
+    return _tile("Trade Radar", "".join(rows), flex=0.9, sub="top mutual-benefit swaps")
 
 
 # ── Column 3: Moves, FA Radar, Season ───────────────────────────────────────────
@@ -691,10 +769,11 @@ def render_fa_radar(ctx):
         qs = sd.qs_probability(r)
         _l15 = (ctx["p15"].get(r.get("PlayerName", "")) or ctx["rec_p"].get(r.get("PlayerName", ""), {})).get("ERA")
         parts.append(spline(r, r.get("_score", 0), f'{_n(r.get("ERA")):.2f} ERA &middot; QS{qs}%',
-                            badges=sd.blowup_badge(r, _l15)))
+                            badges=sd.blowup_badge(r, _l15) + sd.pitcher_regression_badge(r)))
     parts.append(hdr("Relievers"))
     for r in ctx["fa_rp"][:2]:
-        parts.append(spline(r, r.get("_rp_score", 0), f'{int(_n(r.get("ESPN_SVHD")) or _n(r.get("SVHD")))} SV+H &middot; {_n(r.get("ERA")):.2f}'))
+        parts.append(spline(r, r.get("_rp_score", 0), f'{int(_n(r.get("ESPN_SVHD")) or _n(r.get("SVHD")))} SV+H &middot; {_n(r.get("ERA")):.2f}',
+                            badges=sd.pitcher_regression_badge(r)))
     parts.append(hdr("Hitters"))
     for r in ctx["fa_hit"][:2]:
         parts.append(spline(r, r.get("_score", 0), f'{_fv(_n(r.get("OPS")),3)} OPS', badges=sd.hitter_badges(r, ctx["hit_pctile"])))
@@ -816,13 +895,14 @@ def build_dashboard(snap, my_team):
     t_moves  = render_moves(ctx)
     t_fa     = render_fa_radar(ctx)
     t_season = render_season(ctx)
+    t_trade  = render_trade_radar(ctx)
 
-    # Desktop 3-col (unchanged): col1 = Pulse + Weakest Spots/Lineup (heavy tile
-    # shares height with only one other), col2 = Pitching·Hitting·Opponent,
-    # col3 = Moves·FA·Season.
+    # Desktop 3-col: col1 = Pulse + Weakest Spots/Lineup, col2 = Pitching·Hitting·Opponent,
+    # col3 = Moves·FA·Trade Radar·Season (the abbreviated trade panel sits right after FA
+    # Radar — both are acquisition/action panels, so they read together).
     col1 = f'<div class="col">{t_pulse}{t_holes}</div>'
     col2 = f'<div class="col">{t_pitch}{t_hit}{t_opp}</div>'
-    col3 = f'<div class="col">{t_moves}{t_fa}{t_season}</div>'
+    col3 = f'<div class="col">{t_moves}{t_fa}{t_trade}{t_season}</div>'
     grid_desktop = f'<div id="grid">{col1}{col2}{col3}</div>'
 
     # Tablet 2-col, user-chosen order, HEIGHT-BALANCED: DOWN the left column =
@@ -831,7 +911,7 @@ def build_dashboard(snap, my_team):
     # tall tiles (Pulse + Weakest Spots) are split one-per-column so the columns end
     # at roughly the same height (Weakest<->Season swapped vs the raw 1,6,7,2/3,4,8,5
     # order for balance). On a phone the two columns stack top-to-bottom.
-    colt_l = f'<div class="colt">{t_pulse}{t_moves}{t_fa}{t_season}</div>'
+    colt_l = f'<div class="colt">{t_pulse}{t_moves}{t_fa}{t_trade}{t_season}</div>'
     colt_r = f'<div class="colt">{t_pitch}{t_hit}{t_holes}{t_opp}</div>'
     grid_tablet = f'<div id="gridt">{colt_l}{colt_r}</div>'
 

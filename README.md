@@ -116,7 +116,7 @@ After `--dry-run`, open `previews/recap_week_N.html` in any browser.
 
 ### Single-Viewport Dashboard
 
-A glance-able "command dashboard" that condenses the entire digest onto **one 1440×900 laptop screen with zero scrolling** — even coverage of every topic (matchup, category pulse, opponent, pitching, hitting hot/cold, weakest spots, moves, free agents, season). It reuses the digest's exact scoring so every number matches.
+A glance-able "command dashboard" that condenses the entire digest onto **one 1440×900 laptop screen with zero scrolling** — even coverage of every topic (matchup, category pulse, opponent, pitching, hitting hot/cold, weakest spots, moves, free agents, trade radar, season). It reuses the digest's exact scoring so every number matches.
 
 ```bash
 # Write previews/dashboard_{team}.html from the existing snapshot (fast, no email)
@@ -134,9 +134,9 @@ python dashboard.py --email
 
 Open the file maximized in a browser — it's tuned for a 1440×900 viewport and should show no scrollbars.
 
-The **My Pitching** tile lists each upcoming start with its projected `IP·ER·K` line, a purple `×2` marker for two-start pitchers, green **QS** / yellow **5K+** badges, and a red **⚠** low-floor (blowup-risk) chip after the matchup date (same projected-line and risk rules as the digest's My Upcoming Starts — a quality-start projection of 6+ IP & ≤3 ER, 5+ projected K, or a blowup-prone skill profile). The **Free-Agent Radar** starters carry the same ⚠ chip. **MLB team logos** appear next to player names throughout the dashboard (My Pitching, Hitting Hot/Cold, Opponent, Weakest Spots, Free-Agent Radar). The browser tab title reads **"Dashboard — {team}"** (and the daily digest reads **"Daily Digest — {team}"**) so the type is identifiable at a glance.
+The **My Pitching** tile lists each upcoming start with its projected `IP·ER·K` line, a purple `×2` marker for two-start pitchers, green **QS** / yellow **5K+** badges, a red **⚠** low-floor (blowup-risk) chip, and the **$ / ▼** buy-low / sell-high chip after the matchup date (same projected-line, risk, and regression rules as the digest). The **Free-Agent Radar** (starters and relievers) and **Weakest Spots** (pitcher rows) carry the ⚠ and $ / ▼ chips too. A compact **Trade Radar** tile shows the top couple of mutually-beneficial trade suggestions (two distinct partners), each as a give / get line with the same $ / ▼ and position chips as the digest — the full list lives in the daily digest. **MLB team logos** appear next to player names throughout the dashboard (My Pitching, Hitting Hot/Cold, Opponent, Weakest Spots, Free-Agent Radar, Trade Radar). The browser tab title reads **"Dashboard — {team}"** (and the daily digest reads **"Daily Digest — {team}"**) so the type is identifiable at a glance.
 
-It's also **responsive**: on a tablet (≤1100px) the tiles reflow into two height-balanced columns — Category Pulse → Recommended Moves → Free-Agent Radar → Season down the left, then My Pitching → Hitting Hot/Cold → Weakest Spots → Opponent down the right — and on a phone (≤700px) into a single column, un-pinning the fixed pane so the page scrolls normally with larger, readable text. The desktop no-scroll layout is unchanged above 1100px.
+It's also **responsive**: on a tablet (≤1100px) the tiles reflow into two height-balanced columns — Category Pulse → Recommended Moves → Free-Agent Radar → Trade Radar → Season down the left, then My Pitching → Hitting Hot/Cold → Weakest Spots → Opponent down the right — and on a phone (≤700px) into a single column, un-pinning the fixed pane so the page scrolls normally with larger, readable text. The desktop no-scroll layout is unchanged above 1100px.
 
 **Viewing on a phone/tablet:** use `--email` (or attach `previews/dashboard_{team}.html` to an email yourself) and open the **attachment** in your device browser — email apps strip the `<style>` block that holds the layout, so the attached file works but a pasted-in body won't.
 
@@ -215,6 +215,7 @@ KPI row: **Record** · **Current Matchup** (W-L-T + win%) · **Roster** (whole-t
 13. **FA Pickup — Starting Pitchers**
 14. **FA Pickup — Relief Pitchers**
 15. **FA Pickup — Hitters**
+15b. **Trade Radar** — mutually-beneficial trade ideas with rival teams *(shown only when candidates exist)*
 
 **SEASON**
 16. **My Season Category Rankings**
@@ -276,7 +277,7 @@ Score banner (team logos + overall W-L-T, with a projected final record) followe
 Your rostered relievers, showing season SV+H / K / W (from ESPN) plus ERA/WHIP from the best available dataset, with a role-aware **Score** badge. RP scoring is **skill-weighted (punt-saves)** — see [Composite Scores](#composite-scores).
 
 ### Pitcher Hot/Cold
-Your rostered pitchers sorted hottest → coldest. Compares **last-15-day ERA** to season ERA (15 days, not 7 — starters pitch too infrequently for a 7-day window to be meaningful). Includes a **Whiff%** column (raw swing-and-miss rate, green ≥ 30%) and a role-aware **Score** badge.
+Your rostered pitchers sorted hottest → coldest. Compares **last-15-day ERA** to season ERA (15 days, not 7 — starters pitch too infrequently for a 7-day window to be meaningful). Includes a **Whiff%** column (raw swing-and-miss rate, green ≥ 30%) and a role-aware **Score** badge. Pitcher names can carry a **$ / ▼** buy-low / sell-high chip (the pitcher version of the hitter regression badge): **$** = ERA running *above* his Statcast expected ERA (xERA) → unlucky, buy-low; **▼** = ERA *below* xERA → lucky, sell-high. It's measured relative to the league's typical xERA-vs-ERA offset, and it's **distinct from the ⚠ blowup-risk flag** — ▼ is mean regression (a lucky ERA), ⚠ is single-start disaster risk. Also appears in My Upcoming Starts, My Relief Pitchers, the FA pitcher lists, and Positional Breakdown, and it powers the buy-low / sell-high timing in Trade Radar.
 
 ### Roster Hot/Cold
 Your rostered **hitters** sorted hottest → coldest. Compares last-7-day OPS to season OPS. Includes an **HR%** column (modeled per-game home-run probability, hover for drivers — also listed inside the expanded Score panel for touch devices) and a **Score** badge. Tapping the Score badge shows a breakdown whose recent-form line names its window (e.g. "30-day form") — a broader window than this L7 column, so a bat can be 🔥 here yet read "cold" on the composite.
@@ -334,6 +335,13 @@ Top available relievers (must have ≥ 1 SV+H on the season), ranked by RP score
 
 ### FA Pickup — Hitters
 Top available hitters sorted by composite score. Columns: R · HR · RBI · SB · OPS · **Cats** (up to 3 strong roto categories, your contested ones highlighted) · **HR%** (modeled per-game HR probability) · Score. Includes a hot/cold recent-form indicator and the **PWR / SB / $ / ▼** tactical badges next to the name (see [Roster Hot/Cold](#roster-hotcold)).
+
+### Trade Radar
+Trade ideas with rival teams — the one lever the digest can act on beyond your own roster and the free-agent pool. Each card **fixes a rival's category need** (their reason to accept the deal) while **tilting value to you**. You send a player strong in a category you're deep in and the rival is weak in, and get back one who fills a category **or a thin roster position** you need. Only players at a position where you have **surplus** are offered (so no trade ever opens a hole), and your **elite bats are protected** — the radar won't put a genuine masher on the block unless he's a sell-high regression candidate you'd want to move anyway.
+
+Value is judged on **true category contribution**, not the role-score badge: a closer and an everyday hitter can both post a 90+ score, but the hitter contributes to five categories every day while the closer touches one *punt* category (SV+H) plus a sliver of ERA/WHIP/K in ~60 innings — so an everyday smasher won't be offered straight up for a reliever (saves are discounted since we punt them). Because the hitting game is filling roster holes across C/1B/2B/SS/OF, the radar also surfaces hitters who **upgrade a thin position** even when that position isn't a bottom-third *category*.
+
+Deals are tuned to **favor you** rather than land even (the rival accepts on category need, so the value can tilt your way), and where possible they exploit **buy-low / sell-high** timing from Statcast expected-vs-actual stats: move a bat whose surface numbers are about to regress, acquire one due to rebound. Chips flag what's in play — blue = category gained, cyan = a thin position filled, and the same **$** (buy-low) / **▼** (sell-high) glyphs used everywhere else in the digest; the footer tag tells you which way the timing helps you. Both 1-for-1 and 2-for-2 shapes appear; the section only shows when real candidates exist.
 
 ### My Upcoming Starts
 Your pitchers with confirmed or projected starts, grouped by date.
