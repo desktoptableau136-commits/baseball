@@ -287,7 +287,7 @@ Your rostered **hitters** sorted hottest → coldest. Compares last-7-day OPS to
 - 🟢 **▲BUY** — under-performing his Statcast expected stats (positive regression coming — buy/hold)
 - 🔴 **▼SELL** — over-performing his expected stats (regression risk — sell-high / don't chase)
 
-These also appear on FA Hitters, the Positional Breakdown, and across the dashboard (Hitting, FA Radar, Weakest Spots). **Tapping the Score badge** explains each chip the player earned, with the exact stat that triggered it (e.g. "SB — 26 SB, top 1% of the league · 28.5 ft/s sprint"). The pitcher Score dropdown does the same for the **QS / 5K+ / 2-START** badges (e.g. "QS — projected 6.1 IP · 3 ER is a quality start").
+These also appear on FA Hitters, the Positional Breakdown, and across the dashboard (Hitting, FA Radar, Weakest Spots). **Tapping the Score badge** explains each chip the player earned, with the exact stat that triggered it (e.g. "SB — 26 SB, top 1% of the league · 28.5 ft/s sprint"). The pitcher Score dropdown does the same for the **QS / 5K+ / 2-START** badges (e.g. "QS — projected 6.1 IP · 3 ER is a quality start"; "5K+ — projected 7 strikeouts, backed by a 30% whiff rate"). The 5K+ badge's hover tooltip carries that same whiff-rate stat.
 - 🔥 = OPS up +0.050 or more
 - ↑ = OPS up +0.015 to +0.050
 - ↓ = OPS down -0.015 to -0.050

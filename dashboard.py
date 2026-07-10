@@ -540,7 +540,9 @@ def render_pitching(ctx):
                        f'background:rgba(34,197,94,0.12);border:1px solid rgba(34,197,94,0.35);'
                        f'border-radius:3px;padding:0 3px;vertical-align:middle;">QS</span>')
         if vals and _pk >= 5:
-            badges += (f' <span title="Projected {_pk} strikeouts (&ge; 5)" style="font-size:8px;font-weight:700;color:{YELLOW};'
+            _kstat = sd._k5_stat_clause(r)
+            _kt = f'Projected {_pk} strikeouts (&ge; 5)' + (f' &mdash; {_kstat}' if _kstat else '')
+            badges += (f' <span title="{_kt}" style="font-size:8px;font-weight:700;color:{YELLOW};'
                        f'background:rgba(245,158,11,0.12);border:1px solid rgba(245,158,11,0.35);'
                        f'border-radius:3px;padding:0 3px;vertical-align:middle;">5K+</span>')
         rows.append(

@@ -2,6 +2,14 @@
 
 Forensic detail and "why we did it this way" narrative moved out of `CLAUDE.md` to keep that file to actionable rules. Nothing here is required to follow the rules; consult it only when you need the history behind a decision. Rules live in `CLAUDE.md`; this is the "why".
 
+## 5K+ badge names the K-skill advanced stat (2026-07-09)
+
+The 5K+ badge already carried a hover tooltip and a score-pill dropdown line, but both only restated the projection ("Projected N strikeouts (≥ 5)"). User asked the *reason* to also cite an advanced stat — i.e. *why* is 5+ K plausible, not just that it's projected. The natural answer is the pitcher's swing-and-miss skill, which is exactly what the 5K+ projection leans on.
+
+New shared helper `_k5_stat_clause(row)` in `send_digest.py` returns the K-skill stat, first-available-wins: raw `WhiffPct` whiff rate → `WhiffPctile` percentile → `Kpct_P` K% (empty when none, so fringe arms with no Statcast just get the old text). `k5_badge` grew an optional `row` arg and appends the clause to the title ("…— 30% whiff rate"); `_sp_badge_context` appends it to the dropdown prose ("…backed by a 30% whiff rate"). **Both surfaces read the same helper**, so the *content* can't diverge — only the connective wording does (em-dash vs. "backed by a"), which the user explicitly OK'd when he asked whether the two were identical. Both digest render sites (My Upcoming Starts, FA SP) pass `r` into `k5_badge`; the dashboard My Pitching tile mirrors it via `sd._k5_stat_clause` on its 8px chip.
+
+It stays **display-only** — deliberately not fed into `pitcher_score`, since `WhiffPctile` already drives the K component there and surfacing raw whiff% as a scored input would double-count (same rule that keeps `WhiffPct` display-only elsewhere). Small enough that the user waived the feature-branch/PR flow and had it committed straight to `main`.
+
 ## Hitter tactical badges + score-pill context + badge tooltips (2026-07-09)
 
 The pitcher side already had glance badges (QS/5K+/2-START). User asked what the hitter analog should be; after a brainstorm across three strategic axes (production threats, value/regression, schedule volume) he picked **PWR / SB / BUY-LOW / SELL-HIGH** — deliberately skipping a 7-game-slate badge (needed new schedule plumbing) — to ship on both the digest and the dashboard.

@@ -682,9 +682,29 @@ def qs_badge(ip_g, er):
     return _hit_badge("QS", GREEN, f"Projected {_fmt_ip(ip_g)} IP &middot; {er} ER &mdash; quality start (6+ IP, &le; 3 ER)")
 
 
-def k5_badge(k):
-    """Yellow 5K+ chip with a hover `title` naming the projected strikeouts."""
-    return _hit_badge("5K+", YELLOW, f"Projected {k} strikeouts (&ge; 5)")
+def _k5_stat_clause(row):
+    """The K-skill 'advanced stat' behind a 5K+ projection: raw whiff (swing-and-miss)
+    rate preferred, then whiff percentile, then K%. Empty when none is available."""
+    if row is None:
+        return ""
+    whiff = _n(row.get("WhiffPct"))
+    if whiff > 0:
+        return f"{whiff:.0f}% whiff rate"
+    wpct = _n(row.get("WhiffPctile"))
+    if wpct > 0:
+        return f"{wpct:.0f}th-pctile whiff"
+    kpct = _n(row.get("Kpct_P"))
+    if kpct > 0:
+        return f"{kpct * 100:.0f}% K rate"
+    return ""
+
+
+def k5_badge(k, row=None):
+    """Yellow 5K+ chip with a hover `title` naming the projected strikeouts, plus the
+    swing-and-miss skill (whiff rate) that backs the projection when available."""
+    stat = _k5_stat_clause(row)
+    tail = f" &mdash; {stat}" if stat else ""
+    return _hit_badge("5K+", YELLOW, f"Projected {k} strikeouts (&ge; 5){tail}")
 
 
 def hitter_badges(row, hit_pctile=None, cap=2):
@@ -1300,7 +1320,9 @@ def _sp_badge_context(row, qs_fires, k_fires, two_start_n):
         lines.append(f'{qs_badge(ip_g, er)} projected {_fmt_ip(ip_g)} IP &middot; {er} ER '
                      f'is a quality start (6+ IP, &le; 3 ER).')
     if k_fires:
-        lines.append(f'{k5_badge(k)} projected {k} strikeouts (&ge; 5).')
+        stat = _k5_stat_clause(row)
+        tail = f", backed by a {stat}" if stat else ""
+        lines.append(f'{k5_badge(k, row)} projected {k} strikeouts (&ge; 5){tail}.')
     return _badge_ctx_wrap(lines)
 
 
@@ -3302,8 +3324,9 @@ def build_glossary_section():
                "(6+ IP & ≤3 ER); yellow 5K+ shows when it projects 5+ strikeouts; a cyan 2-START flags "
                "two starts inside the matchup week. They match the Proj. Line exactly (no 5K+ badge next "
                "to a 4 K line) and appear regardless of your rotation that day. <b>Hover</b> (or tap the "
-               "Score pill) for the projected line that earned each one. The QS% column shows the season "
-               "quality-start probability separately."),
+               "Score pill) for the projected line that earned each one — the 5K+ tooltip and its Score-pill "
+               "line also name the K-skill behind the projection (whiff rate, whiff percentile, or K%). The "
+               "QS% column shows the season quality-start probability separately."),
     ])
     pitching = _group("Pitching metrics", [
         _entry("xERA / xwOBA-against", "Baseball Savant “deserved” run prevention from contact quality — "
@@ -4178,7 +4201,7 @@ def build_email(snap, override_team=None):
                 if qs_fires_s:
                     start_badges.append(qs_badge(_pjs_ip, _pjs_er))
                 if k_fires_s:
-                    start_badges.append(k5_badge(_pjs_k))
+                    start_badges.append(k5_badge(_pjs_k, r))
                 start_badge = "".join(start_badges)
                 proj_line_s = _proj_line_html(r)
                 _mus_bd = (_pitcher_score_breakdown(r, best_recent_p)
@@ -4388,7 +4411,7 @@ def build_email(snap, override_team=None):
                 if qs_fires:
                     pickup_badges.append(qs_badge(_pj_ip, _pj_er))
                 if k_fires:
-                    pickup_badges.append(k5_badge(_pj_k))
+                    pickup_badges.append(k5_badge(_pj_k, r))
                 if qs_fires and k_fires:
                     # Half green (top) / half yellow (bottom)
                     name_border = (
