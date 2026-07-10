@@ -1428,6 +1428,7 @@ def _fmt_ip(ip_decimal):
 
 
 _LEAGUE_AVG_OPS = 0.717  # fallback only — league team-OPS is derived per snapshot into _LG
+_ERA_REG_PRIOR_IP = 40.0  # ER-projection ERA-regression strength (see _proj_line_vals)
 
 def _proj_line_vals(r):
     """Numeric projected single-game line → (ip_per_start, ER, K), or None when
@@ -1439,6 +1440,16 @@ def _proj_line_vals(r):
         return None
     era = _n(r.get("ERA"))
     kip = _n(r.get("K/IP"))
+
+    # Regress the ERA the ER projection is built on toward the pitcher's expected ERA
+    # (xERA — luck-stripped skill) or, when xERA is missing, the league starter ERA,
+    # weighted by season IP. A 1607-start walk-forward backtest showed raw ERA
+    # systematically UNDER-projects per-start ER (bias -0.33); this shrinkage removes
+    # most of that bias (-> -0.25) and lowers RMSE without touching the K/IP terms.
+    if era > 0:
+        _reg_target = _n(r.get("xERA")) or (_LG.get("era") or 4.00)
+        _ip_season = _n(r.get("IP"))
+        era = (era * _ip_season + _reg_target * _ERA_REG_PRIOR_IP) / (_ip_season + _ERA_REG_PRIOR_IP)
 
     # Adjust ER for opponent OPS vs league average, and home/away park effect
     opp_ops  = _n(r.get("Team_OPS_Value"))
@@ -3321,9 +3332,10 @@ def build_glossary_section():
         _entry("Whiff%", "Raw swing-and-miss rate — share of swings that miss, across all pitch types "
                "(pitches-weighted, from Baseball Savant). A pitch-skill read on strikeout upside; ~25% is "
                "league average, 30%+ is elite. Shown for reference only — not folded into the Score."),
-        _entry("Proj. Line (IP · ER · K)", "Projected stat line for one upcoming start. ER adjusts the "
-               "pitcher's ERA for opponent lineup strength (their OPS vs the league mean) and a home/away "
-               "park factor; K uses his K/IP rate. IP is his per-start average."),
+        _entry("Proj. Line (IP · ER · K)", "Projected stat line for one upcoming start. ER builds off the "
+               "pitcher's ERA — regressed toward his expected ERA (xERA, luck-stripped) by sample size — then "
+               "adjusts for opponent lineup strength (their OPS vs the league mean) and a home/away park factor; "
+               "K uses his K/IP rate. IP is his per-start average."),
     ])
     hitting = _group("Hitting metrics", [
         _entry("wRC+", "Total offensive value indexed so 100 = league average; 150 = 50% better than "
