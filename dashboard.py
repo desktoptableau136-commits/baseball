@@ -691,11 +691,16 @@ def render_trade_radar(ctx):
     def pl(p, is_get):
         chips = ""
         if p.get("_tsell"):
-            chips += f' <span style="color:{RED};font-weight:700;font-size:10px;">&#9660;</span>'
+            tip = ("results ahead of his Statcast expected — regression risk, you'd be buying high"
+                   if is_get else "results ahead of his Statcast expected — sell him high")
+            chips += f' <span title="{tip}" style="color:{RED};font-weight:700;font-size:11px;cursor:help;">&#9660;</span>'
         elif p.get("_tbuy"):
-            chips += f' <span style="color:{GREEN};font-weight:700;font-size:10px;">$</span>'
+            tip = ("results behind his Statcast expected — positive regression likely, acquire cheap"
+                   if is_get else "results behind his Statcast expected — a rebound candidate, think twice before dealing him")
+            chips += f' <span title="{tip}" style="color:{GREEN};font-weight:700;font-size:11px;cursor:help;">$</span>'
         if is_get and p.get("_tfillpos"):
-            chips += f' <span style="color:{CYAN};font-size:10px;">({",".join(p["_tfillpos"])})</span>'
+            _pp = ",".join(p["_tfillpos"])
+            chips += f' <span title="upgrades your thin {_pp} — a position you rank near the bottom of the league" style="color:{CYAN};font-size:11px;cursor:help;">({_pp})</span>'
         return f'{sd.team_logo(p.get("Team"), 13)}<span style="color:{TEXT};">{p.get("PlayerName")}</span>{chips}'
 
     # Abbreviated view: prefer TWO DISTINCT partners (the dashboard is already dense — two
@@ -715,6 +720,8 @@ def render_trade_radar(ctx):
             top.append(t)
 
     rows = []
+    _clip = "overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"
+    _lbl = "display:inline-block;width:36px;font-size:10px;font-weight:700;letter-spacing:.5px;"
     for t in top:
         give = " + ".join(pl(o, False) for o in t["outs"])
         get_ = " + ".join(pl(i, True) for i in t["ins"])
@@ -723,18 +730,21 @@ def render_trade_radar(ctx):
         thesis = "sell-high" if t.get("sell_out") else ""
         thesis += ("/buy-low" if thesis and t.get("buy_in") else ("buy-low" if t.get("buy_in") else ""))
         tag = val + (f" &middot; {thesis}" if thesis else "")
-        logo = sd.fantasy_logo(ctx["team_logos"].get(t["team"], ""), 13, t["team"])
-        _clip = "overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"
+        logo = sd.fantasy_logo(ctx["team_logos"].get(t["team"], ""), 14, t["team"])
+        accent = GREEN if net > 0.1 else MUTED
+        # Each trade is a padded full-width mini-card (uses the width + breathes vertically,
+        # so the panel doesn't feel cramped); left accent green when the value tilts to me.
         rows.append(
-            f'<div style="padding:3px 0;border-bottom:1px solid {BORDER};">'
-            f'<div style="font-size:11px;color:{MUTED};{_clip}">&#8644; {logo}'
+            f'<div style="background:{SURFACE2};border-left:3px solid {accent};border-radius:6px;'
+            f'padding:7px 11px;margin-bottom:8px;">'
+            f'<div style="font-size:11px;color:{MUTED};margin-bottom:3px;{_clip}">&#8644; {logo}'
             f'<span style="color:{TEXT};font-weight:600;">{t["team"]}</span> &middot; {tag}</div>'
-            f'<div style="font-size:12.5px;{_clip}"><span style="color:{RED};font-size:10px;font-weight:700;">GIVE</span> {give}</div>'
-            f'<div style="font-size:12.5px;{_clip}"><span style="color:{GREEN};font-size:10px;font-weight:700;">GET</span> {get_}</div>'
+            f'<div style="font-size:12.5px;line-height:1.6;{_clip}"><span style="{_lbl}color:{RED};">GIVE</span>{give}</div>'
+            f'<div style="font-size:12.5px;line-height:1.6;{_clip}"><span style="{_lbl}color:{GREEN};">GET</span>{get_}</div>'
             f'</div>')
     if not rows:
         rows = [f'<div style="color:{MUTED};">No trade fits right now.</div>']
-    return _tile("Trade Radar", "".join(rows), flex=0.95, sub="top mutual-benefit swaps")
+    return _tile("Trade Radar", "".join(rows), flex=1.05, sub="top mutual-benefit swaps &middot; hover a badge for why")
 
 
 # ── Column 3: Moves, FA Radar, Season ───────────────────────────────────────────
