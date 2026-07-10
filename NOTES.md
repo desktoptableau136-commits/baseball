@@ -2,6 +2,18 @@
 
 Forensic detail and "why we did it this way" narrative moved out of `CLAUDE.md` to keep that file to actionable rules. Nothing here is required to follow the rules; consult it only when you need the history behind a decision. Rules live in `CLAUDE.md`; this is the "why".
 
+## Trade Radar — design rationale (2026-07-10)
+
+New FREE-AGENTS-band section (`find_trades` + `build_trade_radar`, send_digest.py). The digest was already exhaustive on the two levers a manager pulls solo — roster moves and FA pickups — but blind to trades, even though every input a trade finder needs was already in the snapshot (all 12 rosters via `FantasyTeam`, `season_cat_totals`/`roto`, and team-agnostic scoring/percentile helpers). Trade Radar mines that.
+
+Design choices (all confirmed with the user before building):
+- **Mutual-benefit only, not "helps me."** A one-sided "give me your closer" list is noise — nobody accepts it. Requiring `my_surplus ∩ their_need` AND `their_surplus ∩ my_need` both non-empty means every card is a deal the other manager has a reason to say yes to. Fewer cards, but each is proposable. This is the whole point of the feature.
+- **Season-category-fit ranking, not current-matchup win-prob.** A trade is a season-long asset move; ranking by the `_project`/`_cat_win_prob` swing vs *this week's* opponent would over-fit to a single matchup and flip week to week. Instead: need-depth (the roto rank number itself — rank 12 = deepest need = highest weight) of the cats the deal addresses, plus a half-weighted their-side term to enforce realism, minus a value-gap and a mild package-size penalty.
+- **Surplus-POSITION gate on the outgoing side.** Value parity alone would happily suggest trading a stud you can't afford to lose. Gating outgoing players to positions where I rank top-third (reusing `pos_data` — same surplus test as `_roster_suggestion`) means a trade never opens a hole. This is why the engine correctly refused to trade from teams whose only surplus category had no strong player at a deep position.
+- **QS and B_SO can't be traded for.** Neither is a per-player stat (QS is a team pitching cat; B_SO is team batter-strikeouts), so `player_cat_strengths` has nothing to match — a team need in those simply finds no candidate. Same intentional limitation as the FA "Cats" column, not a bug.
+- **Value parity via the canonical role scores** (`_blend(hitter_score)` / `_score_p`, stashed as `_tscore`) so a swap reads as fair by the same 0–100 number shown everywhere else. `_TRADE_PARITY=12` for 1-for-1, ×1.5 on the 2-for-2 sum (packages tolerate more slack).
+- **Validation (2026-07-10 snapshot):** produced tight, sensible 1-for-1s (e.g. Ashby 95 ⇄ Morejon 95, both "even value") and correctly emitted zero trades for the four teams with no needs, no surplus, or no deep-position asset in a surplus category — every empty case explained by the gates, not a failure. My team's only addressable need was SV+H, so all five of my cards route to acquiring a closer — honest, not monotone-by-bug.
+
 ## Single-viewport dashboard — layout rationale (2026-07-09)
 
 Why the desktop layout is pinned the way it is (`dashboard.py`):

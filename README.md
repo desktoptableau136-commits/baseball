@@ -215,6 +215,7 @@ KPI row: **Record** · **Current Matchup** (W-L-T + win%) · **Roster** (whole-t
 13. **FA Pickup — Starting Pitchers**
 14. **FA Pickup — Relief Pitchers**
 15. **FA Pickup — Hitters**
+15b. **Trade Radar** — mutually-beneficial trade ideas with rival teams *(shown only when candidates exist)*
 
 **SEASON**
 16. **My Season Category Rankings**
@@ -334,6 +335,9 @@ Top available relievers (must have ≥ 1 SV+H on the season), ranked by RP score
 
 ### FA Pickup — Hitters
 Top available hitters sorted by composite score. Columns: R · HR · RBI · SB · OPS · **Cats** (up to 3 strong roto categories, your contested ones highlighted) · **HR%** (modeled per-game HR probability) · Score. Includes a hot/cold recent-form indicator and the **PWR / SB / $ / ▼** tactical badges next to the name (see [Roster Hot/Cold](#roster-hotcold)).
+
+### Trade Radar
+Mutually-beneficial trade ideas with rival teams — the one lever the digest can act on beyond your own roster and the free-agent pool. Each card is a swap where **both** sides upgrade a weak category: you send a player strong in a category you're deep in and the rival is weak in, and get back one strong in a category they're deep in and you're weak in. Only players at a position where you have **surplus** are offered (so no trade ever opens a hole in your lineup), and both sides are gated to **similar player value** (composite-score parity) so the offer is realistic enough to actually propose. Cards are ranked by how well the deal addresses your **deepest season-long category needs**; both 1-for-1 and 2-for-2 shapes appear, and the categories you *gain* are highlighted. The section only shows when real candidates exist — an empty trade market simply omits it.
 
 ### My Upcoming Starts
 Your pitchers with confirmed or projected starts, grouped by date.
