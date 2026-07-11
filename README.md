@@ -1,6 +1,6 @@
 # Fantasy Baseball — Daily Digest
 
-Automated email digest for ESPN fantasy league 277836 (Guerrero Warfare). Runs once each morning via GitHub Actions (digest and single-viewport dashboard both fire 06:00 UTC / 2 AM EDT; GitHub's scheduler typically adds ~6h, so they land ~8 AM ET) — no laptop required.
+Automated email digest for ESPN fantasy league 277836 (Guerrero Warfare). Runs once each morning via GitHub Actions (fires 06:00 UTC / 2 AM EDT; GitHub's scheduler typically adds ~6h, so it lands ~8 AM ET) — no laptop required. A single email carries a short skimmable **Briefing** in the body plus the full digest and the single-viewport dashboard as HTML attachments.
 
 ---
 
@@ -29,11 +29,11 @@ fetch_data.py  →  data/snapshot.json  →  send_digest.py   →  daily email
 
 1. **`fetch_data.py`** pulls data from ESPN, FantasyPros, MLB Stats API, and Baseball Savant / Baseball Reference (via `pybaseball`). Takes ~60–90 seconds. Saves everything to `data/snapshot.json`. *(FanGraphs is never called directly — it returns 403; `pybaseball` handles the headers.)*
 
-2. **`send_digest.py`** reads the snapshot, builds a single HTML email, and sends it via Gmail SMTP. The email includes both an inline HTML body and an attached `digest_YYYY-MM-DD.html` file — the attachment bypasses Gmail's 102 KB inline clip limit so the full digest is always accessible by opening the attachment in a browser. Alternatively saves `digest_preview.html` for local browser preview (no email).
+2. **`send_digest.py`** reads the snapshot, builds the email, and sends it via Gmail SMTP. The **inline body** is a short plain-English **Briefing** (time-sensitive actions, then a one-line matchup and season read) meant to be skimmed before you dig in; the **full digest** rides along as an attached `digest_YYYY-MM-DD.html` you open in a browser. Run with `--with-dashboard` (the daily job does) and the single-viewport dashboard is attached too, so one email carries everything. Alternatively saves previews under `previews/` for local viewing (no email).
 
 3. **`weekly_recap.py`** reads the same snapshot every Monday and emails a full-league recap: **Matchup N Highlights** (commissioner-style prose + stat sidebar — roto winner, hitter/pitcher/FA of the matchup with MLB team logos and named historical benchmarks), your matchup result, **Lineup Efficiency** (last matchup's start/sit opportunity cost — bench leakage + active-slot pitcher blowups), all 6 scoreboard matchups, Matchup Roto Rankings (all 12 categories, 5-tier heat-map coloring), Top Performers (hitters and pitchers side-by-side), Standings & Luck, Season Trajectory, and Season Roto Rankings (the same 12-category grid aggregated over every matchup — ranked by cumulative roto points, each category showing its true season-to-date value from ESPN). Saves `previews/recap_week_N.html` on dry runs. GitHub Actions: `.github/workflows/weekly-recap.yml` (Monday 15:30 UTC).
 
-4. **GitHub Actions** runs both scripts automatically using credentials stored as repository secrets — no laptop needed.
+4. **GitHub Actions** runs the daily job (`send_digest.py --with-dashboard`, one email with both attachments) and the Monday recap automatically, using credentials stored as repository secrets — no laptop needed.
 
 `snapshot_schema.py` validates `data/snapshot.json` against the contract the readers depend on. `fetch_data.py` runs it automatically before saving — if the fetch produced a broken snapshot (a missing key, an empty roster, an upstream column drop) the run fails loudly and the previous good snapshot is left in place, rather than silently emailing a garbled digest. Run it by hand anytime with `python snapshot_schema.py`.
 
