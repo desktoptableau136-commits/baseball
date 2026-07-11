@@ -1491,6 +1491,101 @@ _ESPN_PROID_TO_MLBID = {
 }
 
 
+def fetch_todays_games(league) -> list:
+    """Today's real MLB games, enriched with which ROSTERED players (any fantasy team)
+    are involved -- so send_digest can surface the games that most overlap the current
+    matchup ("which broadcasts actually move my week"). Roster -> game join is on MLB
+    team id (robust vs FantasyPros/StatsAPI abbrev quirks): each rostered player's ESPN
+    proTeamId maps to an MLB StatsAPI team id via _ESPN_PROID_TO_MLBID, then bucketed to
+    the game whose home/away team id matches. Each involved player carries its
+    FantasyTeam so the renderer can apply my/opponent perspective (keeps --team working).
+    A rostered pitcher is flagged is_sp when he's the game's confirmed probable starter
+    (guaranteed to pitch; a bat may sit -- we have no posted MLB batting lineups). Games
+    with zero rostered involvement are dropped to keep the snapshot lean. Broad
+    try/except -> [] so a StatsAPI hiccup never blocks the snapshot write."""
+    try:
+        date_str = datetime.now().strftime("%Y-%m-%d")
+        try:
+            sched = requests.get(
+                f"https://statsapi.mlb.com/api/v1/schedule"
+                f"?sportId=1&date={date_str}&gameType=R"
+                f"&hydrate=probablePitcher,broadcasts(all)",
+                timeout=15,
+            ).json()
+        except Exception as e:
+            log(f"  Today's games schedule fetch failed: {e}")
+            return []
+
+        # Bucket every rostered player by the MLB team id he plays for. espn_api exposes
+        # the player's MLB club as a proTeam abbrev ('Sea'), not the numeric proTeamId, so
+        # recover the ESPN id via PRO_TEAM_MAP then map ESPN id -> MLB StatsAPI id.
+        try:
+            from espn_api.baseball.constant import PRO_TEAM_MAP
+            _abbrev_to_espn = {v: k for k, v in PRO_TEAM_MAP.items()}
+        except Exception:
+            _abbrev_to_espn = {}
+        roster_by_mlbid = {}  # mlb_team_id -> [ {name, FantasyTeam, is_pitcher} ]
+        for tm in league.teams:
+            for pl in tm.roster:
+                espn_id = _abbrev_to_espn.get(getattr(pl, "proTeam", None))
+                mlbid = _ESPN_PROID_TO_MLBID.get(espn_id)
+                if not mlbid:
+                    continue
+                roster_by_mlbid.setdefault(mlbid, []).append({
+                    "name":        pl.name,
+                    "FantasyTeam": tm.team_name,
+                    "is_pitcher":  is_pitcher(pl),
+                })
+
+        games = []
+        for d in sched.get("dates", []):
+            for g in d.get("games", []):
+                home = g["teams"]["home"]
+                away = g["teams"]["away"]
+                home_id = home["team"].get("id")
+                away_id = away["team"].get("id")
+
+                # Confirmed probable starter names per side (accent-stripped for matching).
+                probables = set()
+                for side in (home, away):
+                    sp = side.get("probablePitcher") or {}
+                    nm = sp.get("fullName", "")
+                    if nm and nm != "TBD":
+                        probables.add(_strip_accents(nm))
+
+                involved = []
+                for tid in (home_id, away_id):
+                    for pl in roster_by_mlbid.get(tid, []):
+                        involved.append({
+                            "name":        pl["name"],
+                            "FantasyTeam": pl["FantasyTeam"],
+                            "is_sp":       bool(pl["is_pitcher"]
+                                                and _strip_accents(pl["name"]) in probables),
+                        })
+                if not involved:
+                    continue
+
+                # National TV broadcasts only (regional/blackout coverage is noisy).
+                nets = []
+                for b in (g.get("broadcasts") or []):
+                    if b.get("type") == "TV" and b.get("isNational") and b.get("name"):
+                        if b["name"] not in nets:
+                            nets.append(b["name"])
+
+                games.append({
+                    "gamePk":        g.get("gamePk"),
+                    "game_time_utc": g.get("gameDate", ""),
+                    "home_name":     home["team"].get("name", ""),
+                    "away_name":     away["team"].get("name", ""),
+                    "networks":      nets,
+                    "involved":      involved,
+                })
+        return games
+    except Exception as e:
+        log(f"  fetch_todays_games failed: {e}")
+        return []
+
+
 def get_lineup_efficiency(league, my_team_name: str, mode: str = "prev") -> dict:
     """Reconstruct MY team's DAILY lineup and quantify the opportunity cost of my
     start/sit calls. BOTH modes span the FULL matchup period (the exact daily scoring
@@ -1955,6 +2050,10 @@ def main():
     prev_week_pitching = fetch_recent_pitcher_stats(start_dt=_pw_start, end_dt=_pw_end)
     print(f"       {len(prev_week_pitching)} pitchers in prev-week window")
 
+    print("       Fetching today's MLB games (matchup overlap)...")
+    todays_games = fetch_todays_games(league)
+    print(f"       {len(todays_games)} games with rostered-player involvement")
+
     # Total roster cap = max total players (active + IL) on any team. The fullest team is at the cap.
     # send_digest uses: open_spots = league_total_roster_max - my_total → free pickup if > 0.
     from collections import Counter as _Counter
@@ -1989,6 +2088,7 @@ def main():
         "prev_week_pitching": prev_week_pitching,
         "lineup_efficiency":         lineup_efficiency,
         "lineup_efficiency_current": lineup_efficiency_current,
+        "todays_games":              todays_games,
     }
 
     # Validate the reader contract BEFORE persisting -- a broken snapshot fails LOUD here

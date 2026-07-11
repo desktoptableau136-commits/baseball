@@ -75,6 +75,7 @@ _EXPECTED = {
     "prev_week_pitching":        list,
     "lineup_efficiency":         dict,
     "lineup_efficiency_current": dict,
+    "todays_games":              list,   # legitimately empty on an off-day / off-season
 }
 
 # Fields a well-formed row of each list carries. WARN if coverage drops below the floor

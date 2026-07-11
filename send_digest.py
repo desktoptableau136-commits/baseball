@@ -49,6 +49,22 @@ def _fmt_refresh_time(iso_str):
     ampm = "AM" if dt.hour < 12 else "PM"
     return f"{h}:{dt.minute:02d} {ampm} ET"
 
+
+def _fmt_game_time_et(iso_str):
+    """Format an MLB StatsAPI game UTC time (ISO, e.g. '2026-07-11T23:10:00Z') as a
+    compact ET clock like '7:10p ET'. Returns '' on any parse failure."""
+    if not iso_str:
+        return ""
+    try:
+        dt = datetime.fromisoformat(str(iso_str).replace("Z", "+00:00"))
+    except Exception:
+        return ""
+    if dt.tzinfo is not None and _ET is not None:
+        dt = dt.astimezone(_ET)
+    h = dt.hour % 12 or 12
+    ap = "a" if dt.hour < 12 else "p"
+    return f"{h}:{dt.minute:02d}{ap} ET"
+
 try:
     from dotenv import load_dotenv
     load_dotenv(Path(__file__).parent / ".env")
@@ -4052,7 +4068,11 @@ def build_glossary_section():
         _entry("ESPN Fantasy", "Rosters, free agents, weekly roto box scores, standings, transactions, "
                "and season counting totals (SV/K/W/IP) for pitchers."),
         _entry("MLB Stats API", "Probable starters (confirmed, plus a rotation-order projection that walks "
-               "each team's rotation through its upcoming games) and the opponent lineup OPS each starter faces."),
+               "each team's rotation through its upcoming games), the opponent lineup OPS each starter faces, "
+               "and today's game schedule + national TV broadcasts for the Today's MLB Games panel."),
+        _entry("Today's MLB Games", "Real games today ranked by how many of your and your opponent's rostered "
+               "players they carry (a confirmed starting pitcher counts double). Hitters count as involved even "
+               "if their real manager sits them — only starting pitchers are confirmed via probables."),
         _entry("Baseball Savant (via pybaseball)", "Statcast: contact quality, expected stats (xERA, "
                "xwOBA, xBA/xSLG), sprint speed and whiff percentiles."),
     ])
@@ -4417,7 +4437,7 @@ def _brief_cat_list(cats, limit=3):
 
 
 def render_briefing(my_team, today, matchup, classification, starts, today_str,
-                    week_end_str, sr_emerging, alerts, my_row, n_teams):
+                    week_end_str, sr_emerging, alerts, my_row, n_teams, tune_in=""):
     """Short, skimmable inline email body ("The Briefing"). Returns an HTML string."""
     my_team = " ".join((my_team or "").split())    # collapse ESPN's double-space for display
     # %-d is not portable (Windows), so build the day number by hand.
@@ -4507,6 +4527,9 @@ def render_briefing(my_team, today, matchup, classification, starts, today_str,
             more = f" +{len(alerts) - len(nms)}" if len(alerts) > len(nms) else ""
             items.append((RED, f"Injury watch: <b>{', '.join(nms)}</b>{more} — check your lineup"))
 
+    if tune_in:
+        items.append((ACCENT, tune_in))
+
     if items:
         rows = "".join(
             f'<div style="padding:3px 0;font-size:13px;line-height:1.5;color:{TEXT};">'
@@ -4573,6 +4596,93 @@ def render_briefing(my_team, today, matchup, classification, starts, today_str,
         f'padding-top:11px;line-height:1.5;">Skim the <b style="color:{TEXT};">dashboard</b> attachment for the '
         f'glance, then open the <b style="color:{TEXT};">digest</b> attachment for the full breakdown.</div>'
         '</div>'
+    )
+
+
+# ── TODAY'S MLB GAMES ─────────────────────────────────────────────────────────
+
+def _rank_todays_games(todays_games, my_key, opp_key):
+    """Rank today's games by how much they overlap the current matchup. Each returned
+    item = {g, mine, opp, score}; `mine`/`opp` are the involved rostered players for my
+    team / the opponent. A confirmed starting pitcher counts double (guaranteed to pitch
+    and touches ~5 pitching cats; a bat may sit). Games with fewer than 2 combined
+    involved players and no probable SP are dropped. Sorted by score desc, then earliest
+    first pitch."""
+    ranked = []
+    for g in (todays_games or []):
+        mine, opp = [], []
+        for p in g.get("involved", []):
+            fk = " ".join((p.get("FantasyTeam") or "").split())
+            if fk == my_key:
+                mine.append(p)
+            elif fk == opp_key:
+                opp.append(p)
+        if not mine and not opp:
+            continue
+        n_sp = sum(1 for p in mine + opp if p.get("is_sp"))
+        if (len(mine) + len(opp)) < 2 and n_sp == 0:
+            continue
+        score = len(mine) + len(opp) + 2 * n_sp
+        ranked.append({"g": g, "mine": mine, "opp": opp, "score": score})
+    ranked.sort(key=lambda x: (-x["score"], x["g"].get("game_time_utc", "")))
+    return ranked
+
+
+def build_todays_games_section(todays_games, my_team, opp_team, max_games=4):
+    """The 'Today's MLB Games' panel — the real games worth tuning into because they
+    carry the most of my and my opponent's rostered players. Returns '' when nothing
+    qualifies (off-day / no overlap). Perspective is applied here from each involved
+    player's FantasyTeam, so it works under --team for free."""
+    my_key  = " ".join((my_team or "").split())
+    opp_key = " ".join((opp_team or "").split())
+    ranked = _rank_todays_games(todays_games, my_key, opp_key)
+    if not ranked:
+        return ""
+
+    def _side(players, label, color):
+        if not players:
+            return f'<span style="color:{MUTED};">{label}: 0</span>'
+        names = ", ".join(
+            f'<span style="color:{MUTED};">{p.get("name","")}'
+            + (f'<span style="color:{CYAN};font-weight:700;"> ⚾</span>' if p.get("is_sp") else "")
+            + '</span>'
+            for p in players
+        )
+        return (f'<span style="color:{color};font-weight:700;">{label}: {len(players)}</span> '
+                f'<span style="color:{MUTED};">({names})</span>')
+
+    cards = []
+    for item in ranked[:max_games]:
+        g = item["g"]
+        away_ab = _FULLNAME_TO_ABBREV.get(g.get("away_name", ""), "")
+        home_ab = _FULLNAME_TO_ABBREV.get(g.get("home_name", ""), "")
+        matchup_html = (
+            f'{team_logo(away_ab, 16)}<span style="color:{TEXT};font-weight:700;">{away_ab or g.get("away_name","")}</span>'
+            f'<span style="color:{MUTED};"> @ </span>'
+            f'{team_logo(home_ab, 16)}<span style="color:{TEXT};font-weight:700;">{home_ab or g.get("home_name","")}</span>'
+        )
+        meta = []
+        gt = _fmt_game_time_et(g.get("game_time_utc", ""))
+        if gt:
+            meta.append(f'<span style="color:{MUTED};">{gt}</span>')
+        nets = ", ".join(g.get("networks", []))
+        if nets:
+            meta.append(f'<span style="color:{CYAN};font-weight:600;">\U0001f4fa {nets}</span>')
+        meta_html = ('<span style="color:' + MUTED + ';"> — </span>' + " · ".join(meta)) if meta else ""
+        cards.append(
+            f'<div style="background:{SURFACE2};border:1px solid {BORDER};border-radius:8px;'
+            f'padding:9px 13px;margin-bottom:8px;font-size:12px;">'
+            f'<div style="margin-bottom:4px;">{matchup_html}{meta_html}</div>'
+            f'<div style="margin:2px 0;">{_side(item["mine"], "You", ACCENT)}</div>'
+            f'<div style="margin:2px 0;">{_side(item["opp"], "Opp", TEXT)}</div>'
+            f'</div>'
+        )
+    return (
+        section_head("\U0001f4fa Today's MLB Games",
+                     "Where your matchup overlaps today — games with the most of your and your opponent's "
+                     "players (⚾ = confirmed starting pitcher; hitters count even if their real manager sits them)")
+        + "".join(cards)
+        + '<div style="margin-bottom:24px;"></div>'
     )
 
 
@@ -5855,6 +5965,24 @@ def build_email(snap, override_team=None):
             + f'<div style="background:{SURFACE2};border:1px solid {BORDER};border-radius:8px;'
               f'padding:10px 14px;margin-bottom:24px;font-size:12px;">{"".join(_lines)}</div>'
         )
+    # Today's MLB games that most overlap the matchup (the games worth tuning into),
+    # plus a one-line "tune in" teaser for the Briefing. Defensive: any failure just
+    # drops both (section '' + teaser '').
+    todays_games_section = ""
+    _tune_in = ""
+    try:
+        _tg_list = snap.get("todays_games") or []
+        todays_games_section = build_todays_games_section(_tg_list, my_team, _opp_name)
+        _ranked_tg = _rank_todays_games(_tg_list, " ".join(my_team.split()), " ".join(_opp_name.split()))
+        if _ranked_tg:
+            _top = _ranked_tg[0]
+            _aw = _FULLNAME_TO_ABBREV.get(_top["g"].get("away_name", ""), _top["g"].get("away_name", ""))
+            _hm = _FULLNAME_TO_ABBREV.get(_top["g"].get("home_name", ""), _top["g"].get("home_name", ""))
+            _tune_in = (f'\U0001f4fa Tune in: <b>{_aw}–{_hm}</b> — '
+                        f'{len(_top["mine"])} of yours + {len(_top["opp"])} of theirs')
+    except Exception as _e:
+        print(f"  WARNING: today's-games panel failed ({_e}); skipping it.")
+
     league_total_roster_max = int(snap.get("league_total_roster_max") or 28)
     roster_suggestion = _roster_suggestion(
         matchup, pitchers, hitters, fa_sp, fa_rp, fa_hit,
@@ -5874,6 +6002,7 @@ def build_email(snap, override_team=None):
         week_overview,                                                                    # 2  WEEK INTELLIGENCE
         build_category_pulse(matchup, weekly_avgs=weekly_avgs, days_elapsed=days_elapsed, remaining_proj=pit_proj, is_sunday=is_sunday, weekly_std=weekly_std, matchup_days=matchup_period_days, game_days_elapsed=game_days_elapsed, matchup_game_days=matchup_game_days), # 3
         opp_preview_section,                                                              # 3b OPPONENT SCOUTING (below Category Pulse)
+        todays_games_section,                                                             # 3c TODAY'S MLB GAMES (matchup overlap — what to tune into)
         week_cat_section,                                                                 # 4  (before matchup panel)
         week_roto_rankings_section,                                                       # 4b league-wide roto (hidden Monday before stats accumulate)
         build_matchup_section(matchup, logos=team_logos, my_team=my_team,
@@ -5915,7 +6044,7 @@ def build_email(snap, override_team=None):
             classification=category_classification, starts=starts,
             today_str=today_str, week_end_str=week_end_str,
             sr_emerging=_sr_emerging, alerts=alerts, my_row=my_row,
-            n_teams=len(standings),
+            n_teams=len(standings), tune_in=_tune_in,
         )
     except Exception as _e:
         print(f"  WARNING: briefing build failed ({_e}); body falls back to full digest.")
