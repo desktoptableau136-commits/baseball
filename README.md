@@ -35,6 +35,8 @@ fetch_data.py  →  data/snapshot.json  →  send_digest.py   →  daily email
 
 4. **GitHub Actions** runs both scripts automatically using credentials stored as repository secrets — no laptop needed.
 
+`snapshot_schema.py` validates `data/snapshot.json` against the contract the readers depend on. `fetch_data.py` runs it automatically before saving — if the fetch produced a broken snapshot (a missing key, an empty roster, an upstream column drop) the run fails loudly and the previous good snapshot is left in place, rather than silently emailing a garbled digest. Run it by hand anytime with `python snapshot_schema.py`.
+
 ---
 
 ## One-time Setup

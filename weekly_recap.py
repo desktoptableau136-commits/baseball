@@ -1837,6 +1837,15 @@ def main():
     with open(SNAPSHOT, encoding="utf-8") as f:
         snap = json.load(f)
 
+    # Non-blocking schema check: surface a drifted snapshot, never crash a working reader.
+    try:
+        from snapshot_schema import validate_snapshot, report as _snap_report
+        _errs, _warns = validate_snapshot(snap)
+        if _errs or _warns:
+            _snap_report(_errs, _warns)
+    except ImportError:
+        pass
+
     html = build_recap(snap)
 
     # Derive week number and my result for subject line

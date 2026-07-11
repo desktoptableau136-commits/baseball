@@ -983,6 +983,15 @@ def main():
     with open(SNAPSHOT, encoding="utf-8") as f:
         snap = json.load(f)
 
+    # Non-blocking schema check: surface a drifted snapshot, never crash a working reader.
+    try:
+        from snapshot_schema import validate_snapshot, report as _snap_report
+        _errs, _warns = validate_snapshot(snap)
+        if _errs or _warns:
+            _snap_report(_errs, _warns)
+    except ImportError:
+        pass
+
     my_team = args.team or snap.get("my_team", MY_TEAM)
     html = build_dashboard(snap, my_team)
 
