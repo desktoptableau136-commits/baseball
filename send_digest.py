@@ -4388,6 +4388,194 @@ def build_bench_watch(eff):
     )
 
 
+# ── EMAIL BODY: "THE BRIEFING" ────────────────────────────────────────────────
+# The inline email body is NOT the full digest anymore (that ships as the attachment).
+# It's a short, plain-English skim — time-sensitive actions up top, then a one-line
+# matchup and season read with a touch of prose — meant to be glanced at before opening
+# the dashboard and diving into the digest. All values come from the same computed
+# artifacts the digest uses. Inline-styled only (Gmail strips <style>), so it renders
+# in any mail client. Kept defensive: any missing piece is simply skipped.
+
+_BRIEF_HIT_CATS = {"R", "HR", "RBI", "SB", "OPS", "B_SO"}
+_BRIEF_CAT_LABEL = {"B_SO": "few strikeouts", "SVHD": "SV+H", "QS": "QS", "OPS": "OPS",
+                    "ERA": "ERA", "WHIP": "WHIP", "HR": "HR", "RBI": "RBI",
+                    "SB": "SB", "R": "runs", "K": "K", "W": "wins"}
+
+
+def _brief_lab(c):
+    return _BRIEF_CAT_LABEL.get(c, c)
+
+
+def _brief_cat_list(cats, limit=3):
+    """Join up to `limit` category labels as friendly prose ('runs, HR and RBI')."""
+    labs = [_brief_lab(c) for c in cats[:limit]]
+    if not labs:
+        return ""
+    if len(labs) == 1:
+        return labs[0]
+    return ", ".join(labs[:-1]) + " and " + labs[-1]
+
+
+def render_briefing(my_team, today, matchup, classification, starts, today_str,
+                    week_end_str, sr_emerging, alerts, my_row, n_teams):
+    """Short, skimmable inline email body ("The Briefing"). Returns an HTML string."""
+    my_team = " ".join((my_team or "").split())    # collapse ESPN's double-space for display
+    # %-d is not portable (Windows), so build the day number by hand.
+    try:
+        date_str = today.strftime("%a %b ") + str(today.day)
+    except Exception:
+        date_str = ""
+
+    # ── Matchup: current record (ESPN) + projected record (classification) ──────
+    cw = (matchup or {}).get("wins", 0); cl = (matchup or {}).get("losses", 0); ct = (matchup or {}).get("ties", 0)
+    pw = sum(1 for (res, _t) in classification.values() if res == "W")
+    pl = sum(1 for (res, _t) in classification.values() if res == "L")
+    ptt = sum(1 for (res, _t) in classification.values() if res == "T")
+    if pw > pl:
+        mk, mc, verb = "▲", GREEN, "on track to win"
+    elif pl > pw:
+        mk, mc, verb = "▼", RED, "trailing"
+    else:
+        mk, mc, verb = "◆", TEXT, "dead even"
+
+    lead_cats = [c for c, (res, tier) in classification.items() if res == "W" and tier != "tossup"]
+    toss_cats = [c for c, (res, tier) in classification.items() if tier == "tossup"]
+    lose_cats = [c for c, (res, tier) in classification.items() if res == "L" and tier != "tossup"]
+    lead_hit = [c for c in lead_cats if c in _BRIEF_HIT_CATS]
+    lead_pit = [c for c in lead_cats if c not in _BRIEF_HIT_CATS]
+
+    # ── Analyst-voice narrative of the matchup (connected sentences) ────────────
+    margin = pw - pl
+    n_toss = len(toss_cats)
+    if pw > pl:
+        lead_in = ("You're firmly in control of this matchup" if (margin >= 4 and n_toss <= 3)
+                   else "You're ahead here, though it isn't locked away")
+    elif pl > pw:
+        lead_in = ("You're in a real hole this matchup" if (pl - pw) >= 4
+                   else "You're behind, but it's within striking distance")
+    else:
+        lead_in = "This one's a dead heat"
+
+    where = []
+    if lead_hit:
+        where.append(f"the bats are doing the heavy lifting ({_brief_cat_list(lead_hit)})")
+    if lead_pit:
+        where.append(f"the arms have {_brief_cat_list(lead_pit)} well in hand")
+    where_clause = (" — " + " and ".join(where)) if where else ""
+
+    if n_toss:
+        need = n_toss // 2 + 1
+        cats_txt = _brief_cat_list(toss_cats, limit=4)
+        swing_clause = (f" It hinges on a single coin-flip: {cats_txt}."
+                        if n_toss == 1 else
+                        f" It turns on {n_toss} coin-flips ({cats_txt}) — take {need} and the week is yours.")
+    elif lose_cats:
+        swing_clause = f" The ground to make up is in {_brief_cat_list(lose_cats)}."
+    else:
+        swing_clause = ""
+
+    matchup_prose = f"{lead_in}{where_clause}.{swing_clause}".strip()
+
+    opp = (matchup or {}).get("opp_team", "")
+    opp_str = f" vs {opp}" if opp else ""
+
+    # ── ACT TODAY: time-sensitive items ─────────────────────────────────────────
+    items = []
+    upcoming = [s for s in (starts or [])
+                if today_str <= s.get("PSP_Date", "") <= week_end_str]
+    two_start = [s for s in upcoming if _starts_this_week(s, today_str, week_end_str) >= 2]
+    if two_start:
+        nm = two_start[0].get("PlayerName", "an arm")
+        extra = f" (+{len(two_start) - 1} more)" if len(two_start) > 1 else ""
+        items.append((ACCENT, f"<b>{nm}</b> starts twice this matchup{extra} — lock him in"))
+    elif upcoming:
+        items.append((MUTED, f"{len(upcoming)} start{'s' if len(upcoming) != 1 else ''} coming this matchup — set your rotation"))
+
+    risky = [s for s in upcoming if _is_blowup_risk(s)]
+    if risky:
+        nm = risky[0].get("PlayerName", "an arm")
+        items.append((ORANGE, f"⚠ <b>{nm}</b> is a low-floor start — weigh sitting him"))
+
+    if sr_emerging:
+        e = sr_emerging[0]
+        items.append((GREEN, f"FA closer heating up: <b>{e.get('name','')}</b> "
+                             f"({int(e.get('recent',0))} saves last 15d) — worth a claim"))
+
+    if alerts:
+        nms = [a.get("name", "") for a in alerts[:2] if a.get("name")]
+        if nms:
+            more = f" +{len(alerts) - len(nms)}" if len(alerts) > len(nms) else ""
+            items.append((RED, f"Injury watch: <b>{', '.join(nms)}</b>{more} — check your lineup"))
+
+    if items:
+        rows = "".join(
+            f'<div style="padding:3px 0;font-size:13px;line-height:1.5;color:{TEXT};">'
+            f'<span style="color:{col};">•</span> {txt}</div>'
+            for col, txt in items
+        )
+        act_html = (
+            f'<div style="background:{SURFACE};border:1px solid {BORDER};border-left:3px solid {ORANGE};'
+            f'border-radius:6px;padding:11px 13px;margin-bottom:16px;">'
+            f'<div style="color:{ORANGE};font-size:10px;font-weight:700;letter-spacing:.7px;'
+            f'text-transform:uppercase;margin-bottom:5px;">⚡ Act today</div>{rows}</div>'
+        )
+    else:
+        act_html = (
+            f'<div style="font-size:12px;color:{MUTED};margin-bottom:16px;">'
+            f'✓ Nothing urgent — lineup looks set.</div>'
+        )
+
+    # ── Season read ─────────────────────────────────────────────────────────────
+    standing = my_row.get("standing", "—")
+    roto_rank = my_row.get("roto_rank", "—")
+    luck = my_row.get("luck", 0)
+    lk = luck if isinstance(luck, (int, float)) else 0
+    strong = abs(lk) >= 3
+    if lk < 0:
+        season_prose = (f"You're outplaying your record — #{roto_rank} in roto quality against a #{standing} "
+                        f"standing. That gap is {'largely ' if strong else ''}bad luck, and it tends to correct "
+                        f"in your favor over a full season.")
+    elif lk > 0:
+        season_prose = (f"You're a step ahead of your process — #{standing} in the standings on a #{roto_rank} "
+                        f"roto profile. {'A fair bit of' if strong else 'A little'} variance is padding the "
+                        f"record, so keep banking wins while it lasts.")
+    else:
+        season_prose = (f"Record and roto quality line up cleanly (both around #{roto_rank}) — you're right "
+                        f"where you've earned to be, with no luck correction looming either way.")
+
+    # ── Assemble ────────────────────────────────────────────────────────────────
+    return (
+        f'<div style="max-width:640px;margin:0 auto 20px;font-family:-apple-system,BlinkMacSystemFont,'
+        f'\'Segoe UI\',Roboto,sans-serif;background:{SURFACE2};border:1px solid {BORDER};'
+        f'border-radius:10px;padding:20px 22px;color:{TEXT};">'
+        f'<div style="font-size:17px;font-weight:800;color:{TEXT};">⚾ {my_team}</div>'
+        f'<div style="font-size:11px;color:{MUTED};margin-bottom:15px;letter-spacing:.3px;">'
+        f'The Briefing · {date_str}</div>'
+        f'{act_html}'
+        # Matchup
+        f'<div style="margin-bottom:13px;">'
+        f'<div style="font-size:10px;font-weight:700;letter-spacing:.7px;color:{MUTED};'
+        f'text-transform:uppercase;margin-bottom:3px;">This matchup{opp_str}</div>'
+        f'<div style="font-size:15px;color:{mc};font-weight:700;">{mk} {cw}–{cl}–{ct} '
+        f'<span style="color:{MUTED};font-weight:400;font-size:13px;">now · '
+        f'{verb} {pw}–{pl}–{ptt}</span></div>'
+        + (f'<div style="font-size:12.5px;color:#cbd5e1;margin-top:4px;line-height:1.5;">{matchup_prose}</div>' if matchup_prose else "")
+        + '</div>'
+        # Season
+        f'<div style="margin-bottom:4px;">'
+        f'<div style="font-size:10px;font-weight:700;letter-spacing:.7px;color:{MUTED};'
+        f'text-transform:uppercase;margin-bottom:3px;">Season</div>'
+        f'<div style="font-size:15px;color:{TEXT};font-weight:700;">#{standing} of {n_teams}</div>'
+        f'<div style="font-size:12.5px;color:#cbd5e1;margin-top:4px;line-height:1.5;">{season_prose}</div>'
+        '</div>'
+        # Footer
+        f'<div style="font-size:11.5px;color:{MUTED};margin-top:16px;border-top:1px solid {BORDER};'
+        f'padding-top:11px;line-height:1.5;">Skim the <b style="color:{TEXT};">dashboard</b> attachment for the '
+        f'glance, then open the <b style="color:{TEXT};">digest</b> attachment for the full breakdown.</div>'
+        '</div>'
+    )
+
+
 # ── EMAIL BUILDER ─────────────────────────────────────────────────────────────
 
 def build_email(snap, override_team=None):
@@ -5718,7 +5906,22 @@ def build_email(snap, override_team=None):
     ]
     body = "\n".join(p for p in body_parts if p)
 
-    return f"""<!DOCTYPE html>
+    # The skimmable inline email body ("The Briefing") — the full digest below ships
+    # as the attachment. Defensive: any failure just falls back to no briefing (main
+    # then uses the full digest as the body, exactly as before this feature).
+    try:
+        briefing_html = render_briefing(
+            my_team=my_team, today=_today, matchup=matchup,
+            classification=category_classification, starts=starts,
+            today_str=today_str, week_end_str=week_end_str,
+            sr_emerging=_sr_emerging, alerts=alerts, my_row=my_row,
+            n_teams=len(standings),
+        )
+    except Exception as _e:
+        print(f"  WARNING: briefing build failed ({_e}); body falls back to full digest.")
+        briefing_html = ""
+
+    full_html = f"""<!DOCTYPE html>
 <html>
 <head>
   <meta charset="utf-8">
@@ -5767,13 +5970,17 @@ def build_email(snap, override_team=None):
 </body>
 </html>"""
 
+    return full_html, briefing_html
+
 
 # ── SEND ──────────────────────────────────────────────────────────────────────
 
-def send_email(html, subject, filename=None, extra_attachments=None):
-    """Send the digest. `extra_attachments` is an optional list of (html, filename)
-    tuples appended as further .html attachments (e.g. the dashboard rides along as a
-    second attachment under --with-dashboard) so both deliverables arrive in ONE email."""
+def send_email(body_html, attachment_html, subject, filename=None, extra_attachments=None):
+    """Send the email. `body_html` is the skimmable inline body ("The Briefing");
+    `attachment_html` is the full digest, attached so it always renders in a browser.
+    `extra_attachments` is an optional list of (html, filename) tuples appended as
+    further .html attachments (e.g. the dashboard rides along under --with-dashboard)
+    so both deliverables arrive in ONE email."""
     import smtplib
     from email.mime.multipart import MIMEMultipart
     from email.mime.text import MIMEText
@@ -5788,11 +5995,11 @@ def send_email(html, subject, filename=None, extra_attachments=None):
     msg["To"]      = TO_EMAIL
     msg["Cc"]      = CC_EMAIL
 
-    # Inline body — Gmail clips this at 102KB; attachment below is the full render
-    msg.attach(MIMEText(html, "html"))
+    # Inline body — the short Briefing (Gmail renders it; the full digest is attached below)
+    msg.attach(MIMEText(body_html, "html"))
 
     # HTML attachment so the full digest is always accessible (open in browser)
-    attachment = MIMEText(html, "html", "utf-8")
+    attachment = MIMEText(attachment_html, "html", "utf-8")
     attachment.add_header(
         "Content-Disposition", "attachment",
         filename=filename or f"digest_{datetime.now().strftime('%Y-%m-%d')}.html",
@@ -5865,11 +6072,14 @@ def main():
     except ImportError:
         pass
 
-    html      = build_email(snap, override_team=override_team)
+    html, briefing = build_email(snap, override_team=override_team)
+    body_html = briefing or html          # fall back to the full digest if the briefing failed
     team_slug = team_label.replace(" ", "_")
     date_str   = datetime.now().strftime('%Y-%m-%d')
     _is_sun    = datetime.now().weekday() == 6
-    subject    = f"⚾ {team_label} {'Lookahead' if _is_sun else 'Digest'} — {datetime.now().strftime('%b %d')}"
+    _kind      = "Lookahead" if _is_sun else "Digest"
+    _kind_sub  = f"{_kind} + Dashboard" if with_dashboard else _kind
+    subject    = f"⚾ {team_label} {_kind_sub} — {datetime.now().strftime('%b %d')}"
 
     # Optionally build the dashboard and attach it to THIS email (one delivery for both).
     # Isolated so a dashboard failure only drops the attachment — the digest still sends.
@@ -5894,6 +6104,10 @@ def main():
         out = previews_dir / fname
         out.write_text(html, encoding="utf-8")
         print(f"\n  Dry run — saved to {out}")
+        # Also drop the inline Briefing body so it can be eyeballed on its own.
+        bout = previews_dir / f"briefing_preview_{team_slug}.html"
+        bout.write_text(body_html, encoding="utf-8")
+        print(f"  Dry run — briefing (email body) saved to {bout}")
         if dash_html is not None:
             dout = previews_dir / f"dashboard_{team_slug}.html"
             dout.write_text(dash_html, encoding="utf-8")
@@ -5903,8 +6117,8 @@ def main():
 
     print(f"\n[3/3] Sending to {TO_EMAIL}...")
     attach_name = f"digest_{date_str}_{team_slug}.html" if override_team else f"digest_{date_str}.html"
-    send_email(html, subject, filename=attach_name, extra_attachments=extra_attachments)
-    print("  Sent." + (" (digest + dashboard)" if extra_attachments else ""))
+    send_email(body_html, html, subject, filename=attach_name, extra_attachments=extra_attachments)
+    print("  Sent." + (" (briefing body + digest + dashboard)" if extra_attachments else " (briefing body + digest)"))
 
     # Structured send-history line. Wrapped so a locked/unwritable log never
     # crashes a run whose email already went out. run_digest.bat captures full
