@@ -426,7 +426,7 @@ def _pulse_cell(c, ctx, my_avgs, opp_avgs, my_std, opp_std, elapsed_frac, remain
         proj_line = (f'<div style="color:{MUTED};font-size:10px;">proj '
                      f'<span style="color:{TEXT};">{_fv(pm,dec)}</span> / {_fv(po,dec)}</div>')
 
-    return (
+    html = (
         f'<div style="position:relative;background:{SURFACE2};border:1px solid {BORDER};border-left:3px solid {bar_c};'
         f'border-radius:4px;padding:6px 8px;display:flex;flex-direction:column;justify-content:space-between;min-height:0;">'
         f'<div style="position:absolute;top:5px;right:6px;display:flex;gap:3px;align-items:center;line-height:1;">{corner}{mark}</div>'
@@ -438,6 +438,7 @@ def _pulse_cell(c, ctx, my_avgs, opp_avgs, my_std, opp_std, elapsed_frac, remain
         f'<div style="width:{pct:.0f}%;height:100%;background:{bar_c};border-radius:2px;"></div></div>'
         f'</div>'
     )
+    return html, is_close
 
 
 def render_category_pulse(ctx):
@@ -454,10 +455,11 @@ def render_category_pulse(ctx):
         elapsed_frac = min(1.0, max(0.0, ctx["days_elapsed"] / ctx["matchup_period_days"]))
     remaining_frac = 1.0 - elapsed_frac
 
-    cells = "".join(
+    rendered = [
         _pulse_cell(c, ctx, my_avgs, opp_avgs, my_std, opp_std, elapsed_frac, remaining_frac, has_proj)
         for c in matchup["categories"]
-    )
+    ]
+    cells = "".join(h for h, _ in rendered)
     grid = (
         f'<div class="pulse-grid" style="display:grid;grid-template-columns:repeat(4,1fr);gap:4px;height:100%;'
         f'grid-auto-rows:1fr;">{cells}</div>'
@@ -467,7 +469,11 @@ def render_category_pulse(ctx):
     ct = sum(1 for c in matchup["categories"] if c["result"] == "T")
     cls = ctx["classification"]
     pw = sum(1 for (r, _) in cls.values() if r == "W"); pl = sum(1 for (r, _) in cls.values() if r == "L"); pt = sum(1 for (r, _) in cls.values() if r == "T")
-    close = sum(1 for (r, tier) in cls.values() if tier == "tossup")
+    # ⚡N close counts the cards actually showing the ⚡ toss-up glyph (win-% band /
+    # projected tie) — the SAME source as the per-card flag, so the count and the
+    # visible bolts always agree (matches the digest's close_flags summary). NOT the
+    # margin-based classify_categories "tossup" tier, which disagrees with the cards.
+    close = sum(1 for _, ic in rendered if ic)
     sub = (f'{cw}W&middot;{cl}L&middot;{ct}T &rarr; proj {pw}-{pl}-{pt}'
            + (f' &middot; &#9889;{close}' if close else ''))
     return _tile(f"Category Pulse", grid, flex=1.45, sub=sub)
@@ -491,7 +497,7 @@ def render_pitching(ctx):
         qs = sd.qs_probability(r)
         hva = str(r.get("PSP_HomeVAway") or "")
         _n_starts = _starts_this_week(r, datetime.now().strftime("%Y-%m-%d"), ctx["week_end_str"])
-        two = (' <span title="%d starts this matchup week" style="color:%s;font-weight:700;">&#215;2</span>' % (_n_starts, CYAN)) if _n_starts >= 2 else ""
+        two = (' <span title="%d starts this matchup week" style="color:%s;font-weight:700;">&#215;2</span>' % (_n_starts, ACCENT)) if _n_starts >= 2 else ""
         # QS / 5K+ badges annotate the projected line (same rule as the digest's My
         # Upcoming Starts, so they never contradict the Proj. Line shown here). Hover
         # titles mirror the digest badges.
@@ -499,8 +505,8 @@ def render_pitching(ctx):
         badges = ""
         if vals and sd._proj_is_qs(_pip, _per):
             _qt = f'Projected {_fmt_ip(_pip)} IP&middot;{_per} ER &mdash; quality start (6+ IP, &le; 3 ER)'
-            badges += (f' <span title="{_qt}" style="font-size:8px;font-weight:700;color:{GREEN};'
-                       f'background:rgba(34,197,94,0.12);border:1px solid rgba(34,197,94,0.35);'
+            badges += (f' <span title="{_qt}" style="font-size:8px;font-weight:700;color:{CYAN};'
+                       f'background:rgba(34,211,238,0.12);border:1px solid rgba(34,211,238,0.35);'
                        f'border-radius:3px;padding:0 3px;vertical-align:middle;">QS</span>')
         if vals and _pk >= 5:
             _kstat = sd._k5_stat_clause(r)
@@ -775,6 +781,51 @@ def render_season(ctx):
 # ASSEMBLE
 # ══════════════════════════════════════════════════════════════════════════════
 
+# ── Legend / key ────────────────────────────────────────────────────────────────
+
+def _legend_chip(glyph, color, size=8):
+    """A tinted badge chip matching the QS/5K+/PWR visual style, for the legend."""
+    r, g, b = int(color[1:3], 16), int(color[3:5], 16), int(color[5:7], 16)
+    return (f'<span style="font-size:{size}px;font-weight:700;color:{color};'
+            f'background:rgba({r},{g},{b},0.12);border:1px solid rgba({r},{g},{b},0.35);'
+            f'border-radius:3px;padding:0 3px;vertical-align:middle;">{glyph}</span>')
+
+
+def render_legend():
+    """A slim key strip pinned to the bottom of the pane, defining every badge/marker
+    on the dashboard. Sits outside both grids (flex:0 0 auto), so it shows in the
+    desktop no-scroll pane and at the foot of the scrolling tablet/phone view alike."""
+    def plain(g, c, sz=10):
+        return f'<span style="color:{c};font-weight:700;font-size:{sz}px;">{g}</span>'
+
+    def item(badge, desc):
+        return (f'<span style="display:inline-flex;align-items:center;gap:3px;white-space:nowrap;">'
+                f'{badge}<span style="color:{MUTED};font-size:9px;">{desc}</span></span>')
+
+    items = [
+        item(_mini_badge(80), "role score 0&ndash;100"),
+        item(f'{plain("&#9650;",GREEN,9)}{plain("&#9660;",RED,9)}{plain("&#9670;",TEXT,9)}', "proj W / L / T"),
+        item(plain("&#9889;", YELLOW), "toss-up cat"),
+        item(f'<span style="color:{GREEN};font-size:9px;font-weight:700;">62%</span>', "cat win %"),
+        item(plain("&#215;2", ACCENT), "two starts / wk"),
+        item(_legend_chip("QS", CYAN), "proj quality start"),
+        item(_legend_chip("5K+", YELLOW), "proj 5+ K"),
+        item(_legend_chip("&#9888;", ORANGE), "low floor / blowup risk"),
+        item(_legend_chip("$", GREEN), "buy-low (unlucky)"),
+        item(_legend_chip("&#9660;", RED), "sell-high (lucky)"),
+        item(_legend_chip("PWR", sd.PURPLE), "power / HR threat"),
+        item(_legend_chip("SB", sd.SILVER), "speed / steals"),
+        item(f'{plain("&#128293;",GREEN)}{plain("&#10052;",ACCENT)}', "hot / cold vs season"),
+    ]
+    return (
+        f'<div id="legend" style="flex:0 0 auto;background:{SURFACE};border:1px solid {BORDER};'
+        f'border-radius:6px;padding:4px 10px;display:flex;flex-wrap:wrap;align-items:center;gap:5px 12px;">'
+        f'<span style="color:{TEXT};font-weight:800;text-transform:uppercase;letter-spacing:.6px;font-size:9px;">Key</span>'
+        + "".join(items) +
+        f'</div>'
+    )
+
+
 STYLE = """
   * { box-sizing:border-box; }
   html,body { margin:0; padding:0; height:100%; }
@@ -862,11 +913,13 @@ def build_dashboard(snap, my_team):
     colt_r = f'<div class="colt">{t_pitch}{t_hit}{t_holes}{t_trade}</div>'
     grid_tablet = f'<div id="gridt">{colt_l}{colt_r}</div>'
 
+    legend = render_legend()
+
     return (
         f'<!DOCTYPE html><html><head><meta charset="utf-8">'
         f'<meta name="viewport" content="width=device-width,initial-scale=1">'
         f'<title>Dashboard — {my_team}</title><style>{STYLE}</style></head>'
-        f'<body><div id="wrap">{topbar}{grid_desktop}{grid_tablet}</div></body></html>'
+        f'<body><div id="wrap">{topbar}{grid_desktop}{grid_tablet}{legend}</div></body></html>'
     )
 
 

@@ -649,8 +649,8 @@ def two_start_badge(title=""):
     """Bold chip flagging a pitcher with two starts inside the matchup week."""
     tt = f' title="{title}"' if title else ""
     return (
-        f'<span{tt} style="font-size:9px;font-weight:800;color:#04121a;'
-        f'background:{CYAN};border-radius:3px;padding:1px 5px;margin-left:5px;'
+        f'<span{tt} style="font-size:9px;font-weight:800;color:#fff;'
+        f'background:{ACCENT};border-radius:3px;padding:1px 5px;margin-left:5px;'
         f'vertical-align:middle;letter-spacing:.3px;">2</span>'
     )
 
@@ -678,8 +678,8 @@ def _hit_badge(text, color, title=""):
 
 
 def qs_badge(ip_g, er):
-    """Green QS chip with a hover `title` naming the projected line that earned it."""
-    return _hit_badge("QS", GREEN, f"Projected {_fmt_ip(ip_g)} IP &middot; {er} ER &mdash; quality start (6+ IP, &le; 3 ER)")
+    """Cyan QS chip with a hover `title` naming the projected line that earned it."""
+    return _hit_badge("QS", CYAN, f"Projected {_fmt_ip(ip_g)} IP &middot; {er} ER &mdash; quality start (6+ IP, &le; 3 ER)")
 
 
 def _k5_stat_clause(row):
@@ -886,10 +886,15 @@ def pitcher_regression_badge(row):
 
 
 def hitter_badges(row, hit_pctile=None, cap=None):
-    """Concatenated tactical badge HTML for a hitter row (priority SB→PWR→BUY/SELL; `cap=None`
+    """Concatenated tactical badge HTML for a hitter row (priority PWR→SB→BUY/SELL; `cap=None`
     shows every applicable badge). `hit_pctile` is the league SB percentile pool
     (build_cat_percentiles) — when None, SB is skipped."""
     badges = []
+
+    # PWR — power/HR threat (modeled per-game HR probability). Highest priority.
+    hrp = _n(row.get("HR_Probability"))
+    if hrp >= _PWR_HRP_MIN:
+        badges.append(_hit_badge("PWR", PURPLE, _hrp_driver_str(row) or f"HR prob {hrp*100:.0f}%"))
 
     # SB — genuine base-stealer (scarce, streamable). Percentile of actual SB, speed-corroborated.
     if hit_pctile is not None:
@@ -898,11 +903,6 @@ def hitter_badges(row, hit_pctile=None, cap=None):
         if sb > 0 and _cat_pctile(hit_pctile, "SB", sb) >= _SB_PCTILE_MIN and (spd <= 0 or spd >= _SB_SPEED_MIN):
             _t = f"SB {sb:.0f}" + (f" · Sprint {spd:.1f} ft/s" if spd > 0 else "")
             badges.append(_hit_badge("SB", SILVER, _t))
-
-    # PWR — power/HR threat (modeled per-game HR probability).
-    hrp = _n(row.get("HR_Probability"))
-    if hrp >= _PWR_HRP_MIN:
-        badges.append(_hit_badge("PWR", PURPLE, _hrp_driver_str(row) or f"HR prob {hrp*100:.0f}%"))
 
     # BUY-LOW / SELL-HIGH — Statcast expected vs actual (skill-vs-luck read). Mutually exclusive.
     avg, iso, xba, xslg = _n(row.get("AVG")), _n(row.get("ISO")), _n(row.get("xBA")), _n(row.get("xSLG"))
@@ -1321,13 +1321,13 @@ SURFACE2 = "#0d1424"
 BORDER   = "#1e2d45"
 TEXT     = "#e2e8f0"
 MUTED    = "#64748b"
-ACCENT   = "#3b82f6"
+ACCENT   = "#3b82f6"   # also the pitcher two-start "2" badge (solid, white text) + dashboard ×2 markers
 GREEN    = "#22c55e"
 RED      = "#ef4444"
 YELLOW   = "#f59e0b"
 ORANGE   = "#ea580c"   # starter low-floor ⚠ badge (burnt orange) — deliberately distinct from the amber YELLOW 5K+ chip
 PURPLE   = "#a855f7"   # hitter PWR badge (translucent) — distinct from green/yellow/red
-CYAN     = "#22d3ee"   # pitcher two-start "2" badge (solid) + dashboard ×2 markers
+CYAN     = "#22d3ee"   # pitcher QS badge (translucent) + Trade Radar position chip — QS + two-start can co-occur, so 2 moved to blue
 SILVER   = "#c8d0da"   # hitter SB "Quicksilver" speed badge (metallic, distinct from TEXT/MUTED)
 
 TH_S = f"padding:8px 10px;background:{SURFACE};color:{MUTED};font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.7px;border-bottom:2px solid {BORDER};white-space:nowrap;"
@@ -1489,16 +1489,16 @@ def _hit_badge_context(row, hit_pctile=None, cap=None):
     hitter_badges (cap=None: every applicable badge) — so the tap-to-expand panel explains
     exactly the chips shown, no more."""
     lines = []
+    hrp = _n(row.get("HR_Probability"))
+    if hrp >= _PWR_HRP_MIN:
+        lines.append(f'{_hit_badge("PWR", PURPLE)} power threat &mdash; modeled HR probability {hrp*100:.0f}% '
+                     f'(&ge; {_PWR_HRP_MIN*100:.0f}%, top power tier).')
     if hit_pctile is not None:
         sb = _n(row.get("SB")); spd = _n(row.get("SprintSpeed"))
         if sb > 0 and _cat_pctile(hit_pctile, "SB", sb) >= _SB_PCTILE_MIN and (spd <= 0 or spd >= _SB_SPEED_MIN):
             top = (1.0 - _cat_pctile(hit_pctile, "SB", sb)) * 100
             spd_s = f' &middot; {spd:.1f} ft/s sprint' if spd > 0 else ''
             lines.append(f'{_hit_badge("SB", SILVER)} base-stealer &mdash; {sb:.0f} SB, top {top:.0f}% of the league{spd_s}.')
-    hrp = _n(row.get("HR_Probability"))
-    if hrp >= _PWR_HRP_MIN:
-        lines.append(f'{_hit_badge("PWR", PURPLE)} power threat &mdash; modeled HR probability {hrp*100:.0f}% '
-                     f'(&ge; {_PWR_HRP_MIN*100:.0f}%, top power tier).')
     avg, iso, xba, xslg = _n(row.get("AVG")), _n(row.get("ISO")), _n(row.get("xBA")), _n(row.get("xSLG"))
     if avg > 0 and iso > 0 and xba > 0 and xslg > 0:
         slg = iso + avg; d_ba = xba - avg; d_slg = xslg - slg
@@ -3800,22 +3800,21 @@ def build_glossary_section():
             f'</details>'
         )
 
+    # A colored glyph marker (▲▼◆ / ⚡), sized to sit inline beside a term next to the
+    # tinted _hit_badge chips. Keeps the reference showing the ACTUAL badge, not just prose.
+    def _mark(g, c):
+        return f'<span style="color:{c};font-weight:700;font-size:13px;margin-left:5px;vertical-align:middle;">{g}</span>'
+
+    # Sub-group label INSIDE a _group (Badges & icons groups its chips by who they apply to).
+    def _subhead(t):
+        return (f'<div style="color:{ACCENT};font-size:10px;font-weight:800;text-transform:uppercase;'
+                f'letter-spacing:.6px;margin:13px 0 3px;padding-top:9px;border-top:1px solid {BORDER};">{t}</div>')
+
     scores = _group("Scores (0–100)", [
         _entry("Role scores are unified",
                "Every player shows the <b>same</b> 0–100 score in every section, calibrated so the "
                "median qualified player ≈ 50 and a top-10% player ≈ 80. Benchmarks are derived from "
                "the live data each run, so “full-time” scales as the season grows."),
-        _entry("Tap a Score badge for the breakdown",
-               "Every Score badge expands on tap into a full-width row below the player that "
-               "explains, in plain English, the 2-3 drivers behind the number (e.g. &ldquo;carried "
-               "by swing-and-miss and a low WHIP; held back by hard contact&rdquo;) plus the "
-               "season-vs-recent blend — so you can see <i>why</i> two similar-looking players score "
-               "differently. The recent-form line names its actual window (e.g. “30-day form (cold)”), "
-               "which is a broader window than the L7/L15 Hot/Cold column beside it — so a bat can be "
-               "🔥 this week yet read “cold” on the longer composite. Hitter panels also list the HR% "
-               "drivers on their own line (so touch users get them without hovering). Works in the "
-               "browser-opened attachment; the ▾ caret marks a tappable "
-               "badge, and the ✕ (or tapping another badge) closes it."),
         _entry("Starting-pitcher score",
                "K% (blended with Baseball Savant whiff percentile) + run prevention (ERA blended with "
                "Savant xERA) + WHIP + contact-quality allowed (barrel%/xwOBA-against) + a start-volume "
@@ -3832,34 +3831,67 @@ def build_glossary_section():
         _entry("QS% (quality-start probability)",
                "Modeled chance a starter throws a quality start (6+ IP, ≤3 ER). League-average ≈ 38%, "
                "an ace ≈ 75%. Driven by innings-per-start, K%, ERA/WHIP and contact allowed."),
-        _entry("QS / 5K+ / 2 badges",
-               "Next to a starter's name in My Upcoming Starts and FA Starting Pitchers. They annotate "
-               "his projected line for that day: green QS shows when the Proj. Line is a quality start "
-               "(6+ IP & ≤3 ER); yellow 5K+ shows when it projects 5+ strikeouts; a cyan 2 flags "
-               "two starts inside the matchup week. They match the Proj. Line exactly (no 5K+ badge next "
-               "to a 4 K line) and appear regardless of your rotation that day. <b>Hover</b> (or tap the "
-               "Score pill) for the projected line that earned each one — the 5K+ tooltip and its Score-pill "
-               "line also name the K-skill behind the projection (whiff rate, whiff percentile, or K%). The "
-               "QS% column shows the season quality-start probability separately."),
-        _entry("⚠ badge (low floor)",
-               "An orange ⚠ chip next to a starter warns of a <b>low floor</b> — a skill profile prone to "
-               "a disaster outing (the 5+ ER start that wrecks your ERA/WHIP and can't be undone once it's "
-               "in your lineup). It blends baserunner traffic (WHIP), a strikeout escape hatch (K% / whiff), "
-               "effective run prevention (ERA regressed toward xERA), and hard contact allowed, then escalates "
-               "when the arm is <b>cold lately</b> (high L15 ERA). <b>Hover</b> for the worst 2–3 drivers. It's "
-               "a floor warning only — it never lowers a pitcher's Score, and the digest steers free-agent "
-               "pickups away from flagged arms. Blowups are largely random, so treat it as “stream with "
-               "caution,” not a guarantee. <b>Distinct from the ▼ sell-high chip below</b> — ⚠ is single-start "
-               "<i>tail</i> risk; ▼ is <i>mean</i> regression (a lucky ERA due to rise)."),
-        _entry("Pitcher $ / ▼ (buy-low / sell-high)",
-               "The pitcher version of the hitter regression badges. <b>$</b> (green) = <b>buy-low</b>: his ERA "
-               "is running <i>above</i> his Statcast expected ERA (xERA), i.e. unlucky — positive regression "
-               "likely, a good acquire-cheap target. <b>▼</b> (red) = <b>sell-high</b>: ERA running <i>below</i> "
-               "xERA, i.e. getting lucky — regression risk, move him while the surface stats look great. The "
-               "gap is measured <b>relative to the league's typical xERA-vs-ERA offset</b> (xERA runs a bit "
-               "high across the board, so we de-bias) and needs a real innings sample. Display-only — never "
-               "changes a Score — and it also powers the buy-low / sell-high timing in Trade Radar. <b>Hover</b> "
-               "for the ERA-vs-xERA numbers."),
+    ])
+    badges = _group("Badges & icons", [
+        _subhead("Any player"),
+        _entry(f'Score badge (tap to expand){badge(72)}',
+               "The colored pill is the player's 0–100 role score (green ≥ 72, blue ≥ 52, amber ≥ 32, red below). "
+               "In the browser-opened attachment it expands on tap into a full-width row below the player that "
+               "explains, in plain English, the 2-3 drivers behind the number (e.g. &ldquo;carried by "
+               "swing-and-miss and a low WHIP; held back by hard contact&rdquo;) plus the season-vs-recent "
+               "blend. The ▾ caret marks a tappable badge; ✕ (or tapping another badge) closes it."),
+        _entry(f'Hot / cold{_mark("&#128293;", GREEN)}{_mark("&#10052;", ACCENT)}',
+               "In the Hot/Cold columns, 🔥 (or ↑) marks a player running <b>hot</b> vs his season baseline "
+               "over the recent window (7-day OPS for hitters, 15-day ERA for pitchers); ❄ (or ↓) marks "
+               "<b>cold</b>. The colored value beside it is the recent stat; the Δ is the change from season. "
+               "This recent window is narrower than the one named in the Score breakdown, so a bat can read "
+               "🔥 here yet “cold” there."),
+
+        _subhead("Pitchers (starters)"),
+        _entry(f'QS / 5K+ / 2{qs_badge(6.0, 2)}{k5_badge(6)}{two_start_badge()}',
+               "In My Upcoming Starts and FA Starting Pitchers, these annotate a starter's <b>projected line</b> "
+               "for that day: cyan <b>QS</b> = the Proj. Line is a quality start (6+ IP & ≤3 ER); yellow "
+               "<b>5K+</b> = projects 5+ strikeouts; blue <b>2</b> = two starts inside the matchup week. They "
+               "match the Proj. Line exactly (no 5K+ next to a 4 K line) and appear regardless of your rotation "
+               "that day. <b>Hover</b> (or tap the Score pill) for the projected line that earned each one — the "
+               "5K+ tooltip also names the K-skill behind it (whiff rate, whiff percentile, or K%). The QS% "
+               "column shows season quality-start probability separately."),
+        _entry(f'⚠ low floor{_hit_badge("&#9888;", ORANGE)}',
+               "Warns a starter is <b>blowup-prone</b> — a skill profile at risk of the disaster outing (5+ ER) "
+               "that wrecks your ERA/WHIP and can't be undone once it's in your lineup. Blends baserunner traffic "
+               "(WHIP), a strikeout escape hatch (K% / whiff), effective run prevention (ERA regressed toward "
+               "xERA), and hard contact allowed, then escalates when the arm is <b>cold lately</b> (high L15 ERA). "
+               "<b>Hover</b> for the worst 2–3 drivers. A floor warning only — it never lowers the Score, and the "
+               "digest steers pickups away from flagged arms. Distinct from ▼ sell-high — ⚠ is single-start "
+               "<i>tail</i> risk, ▼ is <i>mean</i> regression."),
+
+        _subhead("Hitters"),
+        _entry(f'PWR{_hit_badge("PWR", PURPLE)}',
+               "Next to a hitter's name — a top-tier power/HR threat (highest modeled HR-probability tier). "
+               "Shown first when several badges apply. Hover (or tap the Score pill) for the drivers."),
+        _entry(f'SB{_hit_badge("SB", SILVER)}',
+               "Next to a hitter's name — a genuine base-stealer (top-20% SB producer, corroborated by sprint "
+               "speed)."),
+
+        _subhead("Buy-low / sell-high — pitchers &amp; hitters"),
+        _entry(f'$ / ▼{_hit_badge("$", GREEN)}{_hit_badge("&#9660;", RED)}',
+               "Statcast expected-vs-actual regression flags (mutually exclusive). <b>$</b> (green) = "
+               "<b>buy-low</b>: results running <i>behind</i> the expected stats (unlucky) → positive regression "
+               "likely, a good acquire-cheap target. <b>▼</b> (red) = <b>sell-high</b>: results <i>ahead</i> of "
+               "expected (lucky) → regression risk, move him while the surface looks great. For <b>hitters</b> "
+               "the read is xBA/xSLG vs actual AVG/SLG; for <b>pitchers</b> it's xERA vs ERA (measured relative to "
+               "the league's typical xERA-vs-ERA offset, since xERA runs a bit high). Display-only — never changes "
+               "a Score — and it powers the buy-low / sell-high timing in Trade Radar. <b>Hover</b> for the numbers."),
+
+        _subhead("Category Pulse cards"),
+        _entry(f'Outcome markers{_mark("&#9650;", GREEN)}{_mark("&#9660;", RED)}{_mark("&#9670;", TEXT)}',
+               "On every card, shows the <b>projected</b> end-of-matchup result: <b>▲</b> green = projected win, "
+               "<b>▼</b> red = loss, <b>◆</b> white = tie. When it disagrees with the card's current "
+               "WINNING/LOSING/TIED status, that's a projected flip."),
+        _entry(f'Win % &amp; ⚡ toss-up{_mark("&#9889;", YELLOW)}',
+               "The <b>%</b> in each card corner is your odds of winning that category (normal model of the final "
+               "margin), colored to the projected outcome. On a toss-up — odds near even, or a projected tie — a "
+               "<b>⚡</b> replaces the number instead."),
     ])
     pitching = _group("Pitching metrics", [
         _entry("xERA / xwOBA-against", "Baseball Savant “deserved” run prevention from contact quality — "
@@ -3890,31 +3922,19 @@ def build_glossary_section():
                "(also listed in the hitter's expanded Score panel for touch devices)."),
         _entry("Sprint speed / ISO", "Statcast sprint speed (ft/sec, a steals/​range signal) and Isolated "
                "Power (SLG − AVG, extra-base power)."),
-        _entry("Hitter badges (PWR / SB / $ / ▼)",
-               "Tactical flags next to a hitter's name (all applicable badges show; hover or tap the "
-               "Score pill for why). <b>PWR</b> (purple) = top-tier modeled HR probability. <b>SB</b> "
-               "(silver) = a genuine base-stealer (top-20% SB producer, sprint-speed corroborated). "
-               "<b>$</b> (green) = buy-low — under his Statcast expected stats (xBA/xSLG vs actual), so "
-               "positive regression likely. <b>▼</b> (red) = sell-high — over his expected stats, so "
-               "regression risk. Display-only, never part of the Score."),
     ])
     proj = _group("Projections & matchup", [
         _entry("Category Pulse cards", "Per-category snapshot of the current matchup: your value vs the "
                "opponent, who's winning, and whether the odds are a toss-up (⚡ = win % near even)."),
-        _entry("Projected values & outcome markers", "“proj” is the end-of-matchup estimate — for K/QS/W it uses "
-               "your actual remaining starts × per-start rate; other cats use each team's per-matchup average. "
-               "The projection is colored by its <b>projected</b> outcome (green = projected win, red = loss). "
-               "A marker on every card shows that projected result: ▲ green = projected win, ▼ red = loss, "
-               "◆ white = tie. When it disagrees with the card's current WINNING/LOSING/TIED status, that's "
-               "a projected flip."),
-        _entry("Win % &amp; ⚡", "The <b>%</b> in each card corner is the odds you win that category, from "
-               "a normal model of the final margin, colored to match the projected outcome (green = "
-               "projected win, red = loss, white = tie). On a toss-up (odds near even, or a projected tie) "
-               "a <b>⚡</b> replaces the number instead. Uncertainty comes from each team's matchup-to-matchup "
-               "spread in that stat and shrinks for counting cats as the matchup ends; a category with no "
-               "history yet falls back to its close-threshold. The % always agrees in direction with the "
-               "“proj” value on the same card."),
-        _entry("Trade Radar", "Trade ideas that <b>fix a rival's category need</b> (their reason to accept) "
+        _entry("Projected (proj) values", "The “proj” line on each card is the end-of-matchup estimate — for "
+               "K/QS/W it uses your actual remaining starts × per-start rate; other cats use each team's "
+               "per-matchup average — colored by its <b>projected</b> outcome (green = win, red = loss, white = "
+               "tie). Uncertainty behind the corner win % comes from each team's matchup-to-matchup spread in "
+               "that stat and shrinks for counting cats as the matchup ends; a category with no history yet "
+               "falls back to its close-threshold. The % and the ▲▼◆ marker always agree in direction with "
+               "the “proj” value (see <b>Badges & icons</b> for the markers)."),
+        _entry(f'Trade Radar{_hit_badge("$", GREEN)}{_hit_badge("&#9660;", RED)}',
+               "Trade ideas that <b>fix a rival's category need</b> (their reason to accept) "
                "while <b>tilting value to you</b>. You send a player strong in a category you're deep in and "
                "they're weak in; you get back one who fills a category <i>or a thin roster position</i> you "
                "need. Only players at a position where you have <b>surplus</b> are offered (no hole opened), "
@@ -3946,8 +3966,8 @@ def build_glossary_section():
         _entry("FantasyPros", "Pitcher & hitter stat lines across 4 ranges (last 7/15/30 days + season)."),
         _entry("ESPN Fantasy", "Rosters, free agents, weekly roto box scores, standings, transactions, "
                "and season counting totals (SV/K/W/IP) for pitchers."),
-        _entry("MLB Stats API", "Probable starters (confirmed + a +6-day rotation projection) and the "
-               "opponent lineup OPS each starter faces."),
+        _entry("MLB Stats API", "Probable starters (confirmed, plus a rotation-order projection that walks "
+               "each team's rotation through its upcoming games) and the opponent lineup OPS each starter faces."),
         _entry("Baseball Savant (via pybaseball)", "Statcast: contact quality, expected stats (xERA, "
                "xwOBA, xBA/xSLG), sprint speed and whiff percentiles."),
     ])
@@ -3955,7 +3975,7 @@ def build_glossary_section():
     return (
         section_head("Glossary &amp; Methodology",
                      "How every score and metric is computed, and where the data comes from · tap a section to expand")
-        + f'<div style="margin-bottom:24px;">{scores}{pitching}{hitting}{proj}{sources}</div>'
+        + f'<div style="margin-bottom:24px;">{scores}{badges}{pitching}{hitting}{proj}{sources}</div>'
     )
 
 

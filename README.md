@@ -134,7 +134,7 @@ python dashboard.py --email
 
 Open the file maximized in a browser — it's tuned for a 1440×900 viewport and should show no scrollbars.
 
-The **My Pitching** tile lists each upcoming start with its projected `IP·ER·K` line, a purple `×2` marker for two-start pitchers, green **QS** / yellow **5K+** badges, a red **⚠** low-floor (blowup-risk) chip, and the **$ / ▼** buy-low / sell-high chip after the matchup date (same projected-line, risk, and regression rules as the digest). The **Free-Agent Radar** (starters and relievers) and **Weakest Spots** (pitcher rows) carry the ⚠ and $ / ▼ chips too. A compact **Trade Radar** tile (in place of a standalone opponent tile — opponent scouting lives in the digest) shows the top couple of mutually-beneficial trade suggestions (two distinct partners), each as a give / get line with the same $ / ▼ and position chips as the digest — the full list lives in the daily digest. **MLB team logos** appear next to player names throughout the dashboard (My Pitching, Hitting Hot/Cold, Weakest Spots, Free-Agent Radar, Trade Radar). The browser tab title reads **"Dashboard — {team}"** (and the daily digest reads **"Daily Digest — {team}"**) so the type is identifiable at a glance.
+The **My Pitching** tile lists each upcoming start with its projected `IP·ER·K` line, a blue `×2` marker for two-start pitchers, cyan **QS** / yellow **5K+** badges, an orange **⚠** low-floor (blowup-risk) chip, and the **$ / ▼** buy-low / sell-high chip after the matchup date (same projected-line, risk, and regression rules as the digest). The **Free-Agent Radar** (starters and relievers) and **Weakest Spots** (pitcher rows) carry the ⚠ and $ / ▼ chips too. A compact **Trade Radar** tile (in place of a standalone opponent tile — opponent scouting lives in the digest) shows the top couple of mutually-beneficial trade suggestions (two distinct partners), each as a give / get line with the same $ / ▼ and position chips as the digest — the full list lives in the daily digest. **MLB team logos** appear next to player names throughout the dashboard (My Pitching, Hitting Hot/Cold, Weakest Spots, Free-Agent Radar, Trade Radar). The browser tab title reads **"Dashboard — {team}"** (and the daily digest reads **"Daily Digest — {team}"**) so the type is identifiable at a glance. A slim **legend strip** pinned to the bottom of the pane defines every badge/marker at a glance (score pill, ▲▼◆ projected outcome, ⚡ toss-up, ×2, QS, 5K+, ⚠, $ / ▼, PWR, SB, 🔥/❄).
 
 It's also **responsive**: on a tablet (≤1100px) the tiles reflow into two height-balanced columns — Category Pulse → Recommended Moves → Free-Agent Radar → Season down the left, then My Pitching → Hitting Hot/Cold → Weakest Spots → Trade Radar down the right — and on a phone (≤700px) into a single column, un-pinning the fixed pane so the page scrolls normally with larger, readable text. The desktop no-scroll layout is unchanged above 1100px.
 
@@ -310,7 +310,7 @@ A compact callout that audits your **daily** lineup for the matchup so far (its 
 Only still-actionable misses appear — it's silent on a clean matchup. The Monday recap carries the fuller completed-matchup version (**Lineup Efficiency**). Deep-dive / opponent comparison: run `python bench_leakage.py`.
 
 ### FA Pickup — Starting Pitchers
-Free agent starters with a confirmed or projected upcoming start, grouped by date with day headers. Sorted by composite SP score within each day. Starts past Sunday get a `NEXT WK` badge; a pitcher with ≥ 2 starts in the matchup week gets a cyan `2` chip. **Only starters with an SP score of 30 or higher are shown** — streamer-tier arms below that are filtered out (tunable via `_FA_SP_MIN_SCORE`).
+Free agent starters with a confirmed or projected upcoming start, grouped by date with day headers. Sorted by composite SP score within each day. Starts past Sunday get a `NEXT WK` badge; a pitcher with ≥ 2 starts in the matchup week gets a blue `2` chip. **Only starters with an SP score of 30 or higher are shown** — streamer-tier arms below that are filtered out (tunable via `_FA_SP_MIN_SCORE`).
 
 **Columns:** Pitcher · **Proj. Line** · Matchup (with opponent OPS on a second line) · QS% · ERA · **L15 ERA** (hot/cold colored) · K% · Score
 
@@ -318,11 +318,10 @@ Free agent starters with a confirmed or projected upcoming start, grouped by dat
 
 **Day headers** show a ⚑ badge with your start count for that day: red = 0 my starts, yellow = 1, blue = 2+.
 
-**Pickup badges** annotate the projected line for **every** FA start (not only on thin rotation days), so a badge always matches the **Proj. Line** you see. Both can fire simultaneously:
-- 🟢 **QS** badge (green left border) — the projected line is a quality start (6+ IP & ≤3 ER)
-- 🟡 **5K+** badge (yellow left border) — the projected line is 5+ K
-- When both fire: left border is green (top half) / yellow (bottom half)
-- 🟠 **⚠** badge (orange, glyph only) — a **low-floor** (blowup-prone) skill profile: high WHIP + weak strikeout escape hatch + poor effective run prevention (ERA regressed toward xERA) + loud contact allowed, escalated when the arm is cold lately (high L15 ERA). Hover for the worst 2–3 drivers. It's a floor *warning* only — it never lowers the Score, and the digest steers pickup recommendations away from flagged arms. Blowups are largely random (validated in `backtest_projections.py`: ~1.25× top-decile lift, AUC ≈ 0.52), so treat it as "stream with caution," not a guarantee.
+**Pickup badges** annotate the projected line for **every** FA start (not only on thin rotation days), so a badge always matches the **Proj. Line** you see. Any combination can fire together:
+- **QS** chip (cyan) — the projected line is a quality start (6+ IP & ≤3 ER)
+- **5K+** chip (yellow) — the projected line is 5+ K
+- **⚠** badge (orange, glyph only) — a **low-floor** (blowup-prone) skill profile: high WHIP + weak strikeout escape hatch + poor effective run prevention (ERA regressed toward xERA) + loud contact allowed, escalated when the arm is cold lately (high L15 ERA). Hover for the worst 2–3 drivers. It's a floor *warning* only — it never lowers the Score, and the digest steers pickup recommendations away from flagged arms. Blowups are largely random (validated in `backtest_projections.py`: ~1.25× top-decile lift, AUC ≈ 0.52), so treat it as "stream with caution," not a guarantee.
 
 The **QS% column** shows the season quality-start *probability* separately.
 
@@ -348,7 +347,7 @@ Your pitchers with confirmed or projected starts, grouped by date.
 
 **Columns:** Pitcher · **Proj. Line** · Matchup (with opponent OPS on a second line) · QS% · ERA · **L15 ERA** (hot/cold colored) · K% · Score
 
-Badges next to the name: `2` (cyan — two starts this matchup week), `QS` (green — projected quality start, 6+ IP & ≤3 ER), `5K+` (yellow — projected 5+ K). Both annotate the **Proj. Line** shown for that start (they never contradict it), identical to FA Starting Pitchers. `(proj.)` = rotation estimate, not yet confirmed by MLB. **K% highlight** — top 3 K% values across the table are highlighted yellow.
+Badges next to the name: `2` (blue — two starts this matchup week), `QS` (cyan — projected quality start, 6+ IP & ≤3 ER), `5K+` (yellow — projected 5+ K). Both annotate the **Proj. Line** shown for that start (they never contradict it), identical to FA Starting Pitchers. `(proj.)` = rotation estimate, not yet confirmed by MLB. **K% highlight** — top 3 K% values across the table are highlighted yellow.
 
 ### My Season Category Rankings
 Season-to-date roto rank across all 12 categories. Same color coding as the weekly version at the top, but for the full season.
@@ -366,7 +365,7 @@ A W/L/T grid of the whole season — every team down the rows (in standings orde
 The same 12-category roto grid as the live **Matchup N Roto Rankings** panel, but aggregated over the **entire season to date** rather than one matchup. All 12 teams are **ranked** by cumulative roto score (the sum of each matchup's roto points — i.e. who won each category week by week). Each category cell **displays the true season-to-date figure straight from ESPN** (innings/AB-weighted, so it reconciles with the site to the digit — a season ERA is *not* the average of your weekly ERAs). Ranking and displayed value are independent: a team can show a better season ERA yet sit lower in ERA points if it lost more of the weekly ERA matchups. Cells use the same 5-tier heat-map (bright green = best in cat, light green = 2nd, amber = 2nd-last, red = last, muted = middle). Your team is bold blue; top-3 rows tint green, bottom-3 red. Same panel as the Monday recap (ported so the two share the view).
 
 ### Glossary & Methodology
-A collapsible in-digest reference at the very bottom (also linked from the header nav). Five expandable groups — **Scores**, **Pitching metrics**, **Hitting metrics**, **Projections & matchup**, **Data sources** — explaining how every score and metric is computed and where the data comes from. Kept in sync with the code as part of the save sequence.
+A collapsible in-digest reference at the very bottom (also linked from the header nav). Six expandable groups — **Scores**, **Badges & icons**, **Pitching metrics**, **Hitting metrics**, **Projections & matchup**, **Data sources** — explaining how every score and metric is computed and where the data comes from. The **Badges & icons** group renders each actual badge chip inline beside its definition and is sub-grouped by who it applies to (Any player · Pitchers · Hitters · Buy-low/sell-high · Category Pulse cards), so a shared badge like `$` / `▼` is defined once. Kept in sync with the code as part of the save sequence.
 
 ---
 
