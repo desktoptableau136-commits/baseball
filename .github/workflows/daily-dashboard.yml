@@ -1,12 +1,9 @@
 name: Daily Fantasy Baseball Dashboard
 
 on:
-  schedule:
-    # Once each morning, firing at 2 AM EDT (06:00 UTC) -- same as the digest, so
-    # both land together. GitHub's scheduler typically adds ~6h, so it actually
-    # EXECUTES (--refresh fetch + email) ~8 AM ET, past ESPN's overnight refresh.
-    # Kept in step with the digest cron -- move both together.
-    - cron: '0 6 * * *'
+  # SCHEDULE RETIRED: the dashboard now ships as an attachment on the daily digest
+  # email (daily-digest.yml runs `send_digest.py --with-dashboard`) -- one fetch, one
+  # email. This workflow is kept for MANUAL standalone dashboard sends only.
   workflow_dispatch:       # allows manual trigger from the GitHub Actions UI
 
 jobs:
