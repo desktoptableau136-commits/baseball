@@ -1545,13 +1545,13 @@ def fetch_todays_games(league) -> list:
                 home_id = home["team"].get("id")
                 away_id = away["team"].get("id")
 
-                # Confirmed probable starter names per side (accent-stripped for matching).
-                probables = set()
-                for side in (home, away):
-                    sp = side.get("probablePitcher") or {}
-                    nm = sp.get("fullName", "")
-                    if nm and nm != "TBD":
-                        probables.add(_strip_accents(nm))
+                # Probable starter per side (full name for display; "" when TBD).
+                def _prob(side):
+                    nm = (side.get("probablePitcher") or {}).get("fullName", "")
+                    return "" if nm == "TBD" else nm
+                home_prob = _prob(home)
+                away_prob = _prob(away)
+                probables = {_strip_accents(n) for n in (home_prob, away_prob) if n}
 
                 involved = []
                 for tid in (home_id, away_id):
@@ -1559,25 +1559,38 @@ def fetch_todays_games(league) -> list:
                         involved.append({
                             "name":        pl["name"],
                             "FantasyTeam": pl["FantasyTeam"],
+                            "is_p":        bool(pl["is_pitcher"]),
                             "is_sp":       bool(pl["is_pitcher"]
                                                 and _strip_accents(pl["name"]) in probables),
                         })
                 if not involved:
                     continue
 
-                # National TV broadcasts only (regional/blackout coverage is noisy).
-                nets = []
+                # Broadcasts: national TV (everyone) + each side's local TV feed (RSN),
+                # so the reader always has a channel to tune to, not just the rare
+                # nationally-televised game.
+                national, home_tv, away_tv = [], "", ""
                 for b in (g.get("broadcasts") or []):
-                    if b.get("type") == "TV" and b.get("isNational") and b.get("name"):
-                        if b["name"] not in nets:
-                            nets.append(b["name"])
+                    if b.get("type") != "TV" or not b.get("name"):
+                        continue
+                    if b.get("isNational"):
+                        if b["name"] not in national:
+                            national.append(b["name"])
+                    elif b.get("homeAway") == "home" and not home_tv:
+                        home_tv = b["name"]
+                    elif b.get("homeAway") == "away" and not away_tv:
+                        away_tv = b["name"]
 
                 games.append({
                     "gamePk":        g.get("gamePk"),
                     "game_time_utc": g.get("gameDate", ""),
                     "home_name":     home["team"].get("name", ""),
                     "away_name":     away["team"].get("name", ""),
-                    "networks":      nets,
+                    "home_prob":     home_prob,
+                    "away_prob":     away_prob,
+                    "national_tv":   national,
+                    "home_tv":       home_tv,
+                    "away_tv":       away_tv,
                     "involved":      involved,
                 })
         return games

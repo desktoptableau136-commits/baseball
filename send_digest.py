@@ -65,6 +65,14 @@ def _fmt_game_time_et(iso_str):
     ap = "a" if dt.hour < 12 else "p"
     return f"{h}:{dt.minute:02d}{ap} ET"
 
+
+def _ascii_lower(s):
+    """Accent-stripped, lowercased name for loose cross-source matching (ESPN roster
+    names vs MLB StatsAPI probable-pitcher names differ by accents)."""
+    import unicodedata
+    return "".join(c for c in unicodedata.normalize("NFKD", str(s or ""))
+                   if not unicodedata.combining(c)).lower().strip()
+
 try:
     from dotenv import load_dotenv
     load_dotenv(Path(__file__).parent / ".env")
@@ -4602,16 +4610,21 @@ def render_briefing(my_team, today, matchup, classification, starts, today_str,
 # ── TODAY'S MLB GAMES ─────────────────────────────────────────────────────────
 
 def _rank_todays_games(todays_games, my_key, opp_key):
-    """Rank today's games by how much they overlap the current matchup. Each returned
-    item = {g, mine, opp, score}; `mine`/`opp` are the involved rostered players for my
-    team / the opponent. A confirmed starting pitcher counts double (guaranteed to pitch
-    and touches ~5 pitching cats; a bat may sit). Games with fewer than 2 combined
-    involved players and no probable SP are dropped. Sorted by score desc, then earliest
-    first pitch."""
+    """Rank today's games by how much they overlap the current matchup, biased toward MY
+    roster. Each returned item = {g, mine, opp, score}; `mine`/`opp` are the involved
+    rostered players. Only players likely to actually appear count: HITTERS (probable to
+    play) and CONFIRMED STARTING PITCHERS. A rostered pitcher who isn't tonight's probable
+    (a starter on his off-day, or a reliever whose appearance is speculative) is excluded
+    so he can't inflate the count. Value per player = (2 if starting pitcher else 1) ×
+    (2 for my player, 1 for the opponent's) — my players and starters both weigh more.
+    Games with fewer than 2 counted players and no starter are dropped. Sorted by score
+    desc, then earliest first pitch."""
     ranked = []
     for g in (todays_games or []):
         mine, opp = [], []
         for p in g.get("involved", []):
+            if p.get("is_p") and not p.get("is_sp"):
+                continue   # rostered pitcher not starting tonight -> may not appear
             fk = " ".join((p.get("FantasyTeam") or "").split())
             if fk == my_key:
                 mine.append(p)
@@ -4622,7 +4635,9 @@ def _rank_todays_games(todays_games, my_key, opp_key):
         n_sp = sum(1 for p in mine + opp if p.get("is_sp"))
         if (len(mine) + len(opp)) < 2 and n_sp == 0:
             continue
-        score = len(mine) + len(opp) + 2 * n_sp
+        def _val(players, side_mult):
+            return sum((2 if p.get("is_sp") else 1) * side_mult for p in players)
+        score = _val(mine, 2) + _val(opp, 1)   # my players weighted 2x
         ranked.append({"g": g, "mine": mine, "opp": opp, "score": score})
     ranked.sort(key=lambda x: (-x["score"], x["g"].get("game_time_utc", "")))
     return ranked
@@ -4661,26 +4676,56 @@ def build_todays_games_section(todays_games, my_team, opp_team, max_games=4):
             f'<span style="color:{MUTED};"> @ </span>'
             f'{team_logo(home_ab, 16)}<span style="color:{TEXT};font-weight:700;">{home_ab or g.get("home_name","")}</span>'
         )
+
+        # Header meta: first pitch (ET) + where to watch (national TV bright, local RSNs muted).
         meta = []
         gt = _fmt_game_time_et(g.get("game_time_utc", ""))
         if gt:
             meta.append(f'<span style="color:{MUTED};">{gt}</span>')
-        nets = ", ".join(g.get("networks", []))
-        if nets:
-            meta.append(f'<span style="color:{CYAN};font-weight:600;">\U0001f4fa {nets}</span>')
+        tv = []
+        nat = g.get("national_tv") or []
+        if nat:
+            tv.append(f'<span style="color:{CYAN};font-weight:600;">\U0001f4fa {", ".join(nat)}</span>')
+        locals_ = []
+        if g.get("away_tv"):
+            locals_.append(f'{away_ab or "AWAY"} {g["away_tv"]}')
+        if g.get("home_tv"):
+            locals_.append(f'{home_ab or "HOME"} {g["home_tv"]}')
+        if locals_:
+            pre = "" if nat else "\U0001f4fa "
+            tv.append(f'<span style="color:{MUTED};">{pre}{" · ".join(locals_)}</span>')
+        meta += tv
         meta_html = ('<span style="color:' + MUTED + ';"> — </span>' + " · ".join(meta)) if meta else ""
+
+        # Pitching matchup — the actual probables (colored if rostered: mine ACCENT, opp RED).
+        my_sp  = {_ascii_lower(p["name"]) for p in item["mine"] if p.get("is_sp")}
+        opp_sp = {_ascii_lower(p["name"]) for p in item["opp"] if p.get("is_sp")}
+        def _prob(nm):
+            if not nm:
+                return f'<span style="color:{MUTED};">TBD</span>'
+            a = _ascii_lower(nm)
+            c, w = (ACCENT, "700") if a in my_sp else (RED, "700") if a in opp_sp else (MUTED, "500")
+            return f'<span style="color:{c};font-weight:{w};">{nm}</span>'
+        pitch_html = (
+            f'<div style="margin:1px 0 3px;font-size:11px;">'
+            f'<span style="color:{MUTED};">⚾ SP: </span>{_prob(g.get("away_prob"))}'
+            f'<span style="color:{MUTED};"> vs </span>{_prob(g.get("home_prob"))}</div>'
+        )
+
         cards.append(
             f'<div style="background:{SURFACE2};border:1px solid {BORDER};border-radius:8px;'
             f'padding:9px 13px;margin-bottom:8px;font-size:12px;">'
-            f'<div style="margin-bottom:4px;">{matchup_html}{meta_html}</div>'
+            f'<div style="margin-bottom:2px;">{matchup_html}{meta_html}</div>'
+            f'{pitch_html}'
             f'<div style="margin:2px 0;">{_side(item["mine"], "You", ACCENT)}</div>'
             f'<div style="margin:2px 0;">{_side(item["opp"], "Opp", TEXT)}</div>'
             f'</div>'
         )
     return (
         section_head("\U0001f4fa Today's MLB Games",
-                     "Where your matchup overlaps today — games with the most of your and your opponent's "
-                     "players (⚾ = confirmed starting pitcher; hitters count even if their real manager sits them)")
+                     "Games worth tuning into — ranked by how much they overlap your matchup (your players "
+                     "weighted heaviest). Counts hitters + confirmed starters (⚾); a pitcher who isn't starting "
+                     "tonight is skipped. Hitters count even if their real manager sits them.")
         + "".join(cards)
         + '<div style="margin-bottom:24px;"></div>'
     )
@@ -5976,9 +6021,12 @@ def build_email(snap, override_team=None):
         _ranked_tg = _rank_todays_games(_tg_list, " ".join(my_team.split()), " ".join(_opp_name.split()))
         if _ranked_tg:
             _top = _ranked_tg[0]
-            _aw = _FULLNAME_TO_ABBREV.get(_top["g"].get("away_name", ""), _top["g"].get("away_name", ""))
-            _hm = _FULLNAME_TO_ABBREV.get(_top["g"].get("home_name", ""), _top["g"].get("home_name", ""))
-            _tune_in = (f'\U0001f4fa Tune in: <b>{_aw}–{_hm}</b> — '
+            _g0 = _top["g"]
+            _aw = _FULLNAME_TO_ABBREV.get(_g0.get("away_name", ""), _g0.get("away_name", ""))
+            _hm = _FULLNAME_TO_ABBREV.get(_g0.get("home_name", ""), _g0.get("home_name", ""))
+            _net = (_g0.get("national_tv") or [None])[0] or _g0.get("away_tv") or _g0.get("home_tv") or ""
+            _net_str = f' <span style="color:{MUTED};">({_net})</span>' if _net else ""
+            _tune_in = (f'\U0001f4fa Tune in: <b>{_aw}–{_hm}</b>{_net_str} — '
                         f'{len(_top["mine"])} of yours + {len(_top["opp"])} of theirs')
     except Exception as _e:
         print(f"  WARNING: today's-games panel failed ({_e}); skipping it.")
