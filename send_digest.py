@@ -5779,6 +5779,16 @@ def main():
     with open(SNAPSHOT) as f:
         snap = json.load(f)
 
+    # Non-blocking schema check: surface a drifted snapshot (esp. under --no-refresh, where
+    # fetch_data's write-time guard never ran) but never crash a working reader.
+    try:
+        from snapshot_schema import validate_snapshot, report as _snap_report
+        _errs, _warns = validate_snapshot(snap)
+        if _errs or _warns:
+            _snap_report(_errs, _warns)
+    except ImportError:
+        pass
+
     html      = build_email(snap, override_team=override_team)
     team_slug = team_label.replace(" ", "_")
     date_str   = datetime.now().strftime('%Y-%m-%d')

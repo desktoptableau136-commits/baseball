@@ -1991,6 +1991,22 @@ def main():
         "lineup_efficiency_current": lineup_efficiency_current,
     }
 
+    # Validate the reader contract BEFORE persisting -- a broken snapshot fails LOUD here
+    # (raising exits fetch_data nonzero, so send_digest/dashboard fall back to the previous
+    # good snapshot) instead of silently garbling the digest. Optional import: never block a
+    # fetch on the validator's absence.
+    try:
+        from snapshot_schema import assert_valid, SnapshotValidationError
+    except ImportError:
+        assert_valid = None
+    if assert_valid is not None:
+        try:
+            assert_valid(snapshot, verbose=True)
+        except SnapshotValidationError as e:
+            print(f"  SNAPSHOT VALIDATION FAILED: {e}")
+            print("  Refusing to overwrite the previous snapshot. Investigate upstream data.")
+            raise
+
     with open(OUTPUT_FILE, "w") as f:
         json.dump(snapshot, f, default=str)
 
