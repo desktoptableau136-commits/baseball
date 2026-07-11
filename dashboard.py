@@ -607,7 +607,9 @@ def render_hitting(ctx):
             r_ops = _n(rh.get("OPS"))
             if r_ops > 0:
                 movers.append((r_ops - _n(r.get("OPS")), r, r_ops))
-    movers.sort(reverse=True)
+    # sort by the OPS delta only -- tuples carry a dict (r), so an unkeyed
+    # sort compares dicts on a delta tie and raises TypeError (crashed CI 2026-07-11)
+    movers.sort(key=lambda x: x[0], reverse=True)
     hot = movers[:3]; cold = movers[-3:][::-1] if len(movers) > 3 else []
 
     def line(d, r, r_ops, icon, col):
