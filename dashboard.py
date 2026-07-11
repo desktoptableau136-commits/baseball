@@ -646,7 +646,8 @@ def render_trade_radar(ctx):
         if is_get and p.get("_tfillpos"):
             _pp = ",".join(p["_tfillpos"])
             chips += f' <span title="upgrades your thin {_pp} — a position you rank near the bottom of the league" style="color:{CYAN};font-size:11px;cursor:help;">({_pp})</span>'
-        return f'{sd.team_logo(p.get("Team"), 13)}<span style="color:{TEXT};">{p.get("PlayerName")}</span>{chips}'
+        return (f'<div style="font-size:12px;line-height:1.5;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'
+                f'{sd.team_logo(p.get("Team"), 12)}<span style="color:{TEXT};">{p.get("PlayerName")}</span>{chips}</div>')
 
     # Abbreviated view: prefer TWO DISTINCT partners (the dashboard is already dense — two
     # is enough; showing two deals with the same team wastes the space); backfill from the
@@ -666,26 +667,32 @@ def render_trade_radar(ctx):
 
     rows = []
     _clip = "overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"
-    _lbl = "display:inline-block;width:36px;font-size:10px;font-weight:700;letter-spacing:.5px;"
+    _colhdr = "font-size:9.5px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;margin-bottom:2px;"
     for t in top:
-        give = " + ".join(pl(o, False) for o in t["outs"])
-        get_ = " + ".join(pl(i, True) for i in t["ins"])
+        give = "".join(pl(o, False) for o in t["outs"])
+        get_ = "".join(pl(i, True) for i in t["ins"])
         net = t.get("net_val", 0)
         val = "you win" if net > 0.1 else "even" if net >= -0.1 else "you pay up"
         thesis = "sell-high" if t.get("sell_out") else ""
         thesis += ("/buy-low" if thesis and t.get("buy_in") else ("buy-low" if t.get("buy_in") else ""))
-        tag = val + (f" &middot; {thesis}" if thesis else "")
         logo = sd.fantasy_logo(ctx["team_logos"].get(t["team"], ""), 14, t["team"])
         accent = GREEN if net > 0.1 else MUTED
-        # Each trade is a padded full-width mini-card (uses the width + breathes vertically,
-        # so the panel doesn't feel cramped); left accent green when the value tilts to me.
+        # Each trade is a padded mini-card laid out as THREE side-by-side columns —
+        # (1) partner + value/thesis "why", (2) what I GIVE, (3) what I GET — so the card
+        # reads horizontally and stays short (both swaps fit without one getting clipped).
+        # Left accent green when value tilts to me.
         rows.append(
             f'<div style="background:{SURFACE2};border-left:3px solid {accent};border-radius:6px;'
-            f'padding:7px 11px;margin-bottom:8px;">'
-            f'<div style="font-size:11px;color:{MUTED};margin-bottom:3px;{_clip}">&#8644; {logo}'
-            f'<span style="color:{TEXT};font-weight:600;">{t["team"]}</span> &middot; {tag}</div>'
-            f'<div style="font-size:12.5px;line-height:1.6;{_clip}"><span style="{_lbl}color:{RED};">GIVE</span>{give}</div>'
-            f'<div style="font-size:12.5px;line-height:1.6;{_clip}"><span style="{_lbl}color:{GREEN};">GET</span>{get_}</div>'
+            f'padding:7px 9px;margin-bottom:8px;display:flex;align-items:flex-start;gap:8px;">'
+            f'<div style="flex:0 0 27%;min-width:0;">'
+            f'<div style="font-size:11.5px;{_clip}">{logo}<span style="color:{TEXT};font-weight:600;">{t["team"]}</span></div>'
+            f'<div style="font-size:9.5px;color:{accent};font-weight:600;margin-top:1px;">{val}</div>'
+            + (f'<div style="font-size:9px;color:{MUTED};">{thesis}</div>' if thesis else "")
+            + f'</div>'
+            f'<div style="flex:1 1 0;min-width:0;">'
+            f'<div style="{_colhdr}color:{RED};">Give</div>{give}</div>'
+            f'<div style="flex:1 1 0;min-width:0;">'
+            f'<div style="{_colhdr}color:{GREEN};">Get</div>{get_}</div>'
             f'</div>')
     if not rows:
         rows = [f'<div style="color:{MUTED};">No trade fits right now.</div>']
