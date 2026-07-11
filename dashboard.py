@@ -230,6 +230,7 @@ def build_context(snap, my_team):
         days_elapsed=days_elapsed, game_days_elapsed=game_days_elapsed, matchup_game_days=matchup_game_days,
         matchup_period_days=matchup_period_days, week_end_str=week_end_str, is_sunday=is_sunday,
         n_hot=n_hot, n_cold=n_cold, refreshed_at=snap.get("refreshed_at", ""),
+        todays_games=snap.get("todays_games", []),
     )
 
 
@@ -470,6 +471,89 @@ def _pulse_cell(c, ctx, my_avgs, opp_avgs, my_std, opp_std, elapsed_frac, remain
         f'</div>'
     )
     return html, is_close
+
+
+def render_tv_games(ctx):
+    """Compact 'Today's Games' tile — your favorite team (&#9733;, pinned first) plus the
+    next highest-overlap game. Mirrors the digest's Today's MLB Games selection + badges
+    (sd._rank_todays_games with pin_favorite, role-aware chips) but trimmed to 2 games so
+    it fits the zero-scroll grid. Returns '' (no tile) when there are no games today."""
+    try:
+        games_raw = ctx.get("todays_games") or []
+        if not games_raw:
+            return ""
+        matchup = ctx.get("matchup") or {}
+        my_key  = " ".join((ctx["my_team"] or "").split())
+        opp_key = " ".join((matchup.get("opp_team") or "").split())
+        ranked = sd._rank_todays_games(games_raw, my_key, opp_key, pin_favorite=True)
+        if not ranked:
+            return ""
+        # Badge row lookups (YEAR preferred, 30->15->7 fallback) — same as build_email.
+        hit_rows, pit_rows, rec_era = {}, {}, {}
+        for ds in (7, 15, 30, YEAR):
+            for r in ctx["hitters"]:
+                if int(_n(r.get("Dataset")) or 0) == ds and r.get("PlayerName"):
+                    hit_rows[sd._badge_name_key(r["PlayerName"])] = r
+            for r in ctx["pitchers"]:
+                if int(_n(r.get("Dataset")) or 0) == ds and r.get("PlayerName"):
+                    pit_rows[sd._badge_name_key(r["PlayerName"])] = r
+        for nm, r in {**ctx["rec_p"], **ctx["p15"]}.items():
+            if r.get("ERA") is not None:
+                rec_era[sd._badge_name_key(nm)] = r.get("ERA")
+        hit_pctile = ctx.get("hit_pctile")
+
+        def _badges(p):
+            k = sd._badge_name_key(p.get("name", ""))
+            if p.get("is_p"):
+                row = pit_rows.get(k)
+                return (sd.blowup_badge(row, rec_era.get(k)) + sd.pitcher_regression_badge(row)) if row else ""
+            row = hit_rows.get(k)
+            return sd.hitter_badges(row, hit_pctile, cap=2) if row else ""
+
+        def _names(players, cap=3):
+            if not players:
+                return f'<span style="color:{MUTED};">0</span>'
+            parts = []
+            for p in players[:cap]:
+                mark = f'<span style="color:{CYAN};font-weight:700;">&#9918;</span>' if p.get("is_sp") else ""
+                parts.append(f'{p.get("name","")}{mark}{_badges(p)}')
+            extra = f' +{len(players)-cap}' if len(players) > cap else ""
+            return ", ".join(parts) + extra
+
+        blocks = []
+        for item in ranked[:2]:
+            g = item["g"]
+            aw = sd._FULLNAME_TO_ABBREV.get(g.get("away_name", ""), g.get("away_name", ""))
+            hm = sd._FULLNAME_TO_ABBREV.get(g.get("home_name", ""), g.get("home_name", ""))
+            star = f'<span style="color:{YELLOW};font-weight:700;">&#9733; </span>' if item.get("fav") else ""
+            gt  = sd._fmt_game_time_et(g.get("game_time_utc", ""))
+            net = (g.get("national_tv") or [None])[0] or g.get("away_tv") or g.get("home_tv") or ""
+            net = net.split(" Presented by")[0].strip()   # drop sponsor tail — compact tile
+            meta = gt + (f' &middot; {net}' if net else "")
+            my_sp  = {sd._ascii_lower(p["name"]) for p in item["mine"] if p.get("is_sp")}
+            opp_sp = {sd._ascii_lower(p["name"]) for p in item["opp"] if p.get("is_sp")}
+            def _pn(nm):
+                if not nm:
+                    return f'<span style="color:{MUTED};">TBD</span>'
+                a = sd._ascii_lower(nm); c = ACCENT if a in my_sp else RED if a in opp_sp else MUTED
+                return f'<span style="color:{c};">{nm.split()[-1]}</span>'
+            blocks.append(
+                f'<div style="margin-bottom:5px;font-size:11px;line-height:1.4;">'
+                f'<div>{star}{sd.team_logo(aw,13)}<b style="color:{TEXT};">{aw}</b>'
+                f'<span style="color:{MUTED};"> @ </span>{sd.team_logo(hm,13)}<b style="color:{TEXT};">{hm}</b>'
+                f'<span style="color:{MUTED};font-size:10px;"> &middot; {meta}</span></div>'
+                f'<div style="color:{MUTED};font-size:10px;">&#9918; {_pn(g.get("away_prob"))}'
+                f'<span style="color:{MUTED};"> v </span>{_pn(g.get("home_prob"))}</div>'
+                f'<div><span style="color:{ACCENT};font-weight:700;">You:</span> '
+                f'<span style="color:{TEXT};">{_names(item["mine"])}</span></div>'
+                f'<div><span style="color:{MUTED};font-weight:700;">Opp:</span> '
+                f'<span style="color:{MUTED};">{_names(item["opp"])}</span></div>'
+                f'</div>'
+            )
+        return _tile("Today's Games", "".join(blocks), flex=0.95,
+                     sub="&#9733; your team + top overlap")
+    except Exception:
+        return ""
 
 
 def render_category_pulse(ctx):
@@ -948,6 +1032,7 @@ def build_dashboard(snap, my_team):
     #            order. Each column packs tight (like the desktop columns), so there
     #            is NO row-alignment whitespace (which an order-aware single grid,
     #            the previous approach, left below short tiles).
+    t_tv     = render_tv_games(ctx)
     t_pulse  = render_category_pulse(ctx)
     t_holes  = render_holes(ctx)
     t_pitch  = render_pitching(ctx)
@@ -960,7 +1045,10 @@ def build_dashboard(snap, my_team):
     # Desktop 3-col: col1 = Pulse + Weakest Spots/Lineup, col2 = Pitching·Hitting·Trade
     # Radar (Trade Radar took the Opponent This Matchup slot per user preference — opponent
     # scouting still lives in the digest), col3 = Moves·FA·Season.
-    col1 = f'<div class="col">{t_pulse}{t_holes}</div>'
+    # Today's Games rides at the TOP of col1 (above Category Pulse) — the user wants the
+    # TV panel first on the dashboard. It's a compact 2-game tile (favorite + top overlap)
+    # so col1 stays a 3-tile column like the others; '' (no games) collapses cleanly.
+    col1 = f'<div class="col">{t_tv}{t_pulse}{t_holes}</div>'
     col2 = f'<div class="col">{t_pitch}{t_hit}{t_trade}</div>'
     col3 = f'<div class="col">{t_moves}{t_fa}{t_season}</div>'
     grid_desktop = f'<div id="grid">{col1}{col2}{col3}</div>'
@@ -969,7 +1057,7 @@ def build_dashboard(snap, my_team):
     # Pitching · Hitting · Weakest Spots · Trade Radar. The two tall tiles (Pulse +
     # Weakest Spots) sit one-per-column so the columns end at roughly the same height.
     # On a phone the two columns stack top-to-bottom.
-    colt_l = f'<div class="colt">{t_pulse}{t_moves}{t_fa}{t_season}</div>'
+    colt_l = f'<div class="colt">{t_tv}{t_pulse}{t_moves}{t_fa}{t_season}</div>'
     colt_r = f'<div class="colt">{t_pitch}{t_hit}{t_holes}{t_trade}{render_legend_panel()}</div>'
     grid_tablet = f'<div id="gridt">{colt_l}{colt_r}</div>'
 
