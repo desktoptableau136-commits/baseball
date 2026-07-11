@@ -159,7 +159,7 @@ def build_context(snap, my_team):
         matchup, pitchers, hitters, fa_sp, fa_rp, fa_hit, my_team, best_recent_p, best_recent_h,
         all_matchups, week_end_str, classification=classification,
         league_total_roster_max=snap.get("league_total_roster_max", 28),
-        pos_data=pos_data, lineup_eff=lineup_eff_current,
+        pos_data=pos_data, lineup_eff=lineup_eff_current, pill_fn=_mini_badge,
     )
     emerging, fading = sd.save_role_watch(pitchers, my_team, claimed)
 
@@ -279,6 +279,37 @@ def _mini_badge(score):
     elif s >= 32: bg = "#d97706"
     else:         bg = "#dc2626"
     return f'<span style="background:{bg};color:#fff;padding:1px 6px;border-radius:9px;font-size:10px;font-weight:800;">{s}</span>'
+
+
+def _score_tip(p):
+    """Short plain-text score explanation for a hover tooltip (title=), role-aware off
+    the trade player's _tptype. Reuses send_digest's narrative helpers so the prose
+    matches the digest's tap-to-expand breakdowns. Returns '' on any failure."""
+    try:
+        if p.get("_tptype") == "hit":
+            comps, _ = sd.hitter_score(p, _parts=True)
+            role, season, clauses = "Hitter", sd.hitter_score(p), sd._hit_clauses(p, comps)
+        elif _is_sp(p):
+            comps, _ = sd.pitcher_score(p, _parts=True)
+            role, season, clauses = "SP", sd.pitcher_score(p), sd._sp_clauses(p, comps)
+        else:
+            comps, _ = sd.rp_score(p, _parts=True)
+            role, season, clauses = "RP", sd.rp_score(p), sd._rp_clauses(p, comps)
+        if not comps:
+            return ""
+        txt = f"{role} score {season}. {sd._score_narrative(clauses)}"
+        return txt.replace("&", "&amp;").replace('"', "&quot;").replace("<", "&lt;").replace(">", "&gt;")
+    except Exception:
+        return ""
+
+
+def _score_pill_tip(p):
+    """_mini_badge for a trade player's _tscore, wrapped in a hover tooltip."""
+    pill = _mini_badge(int(round(p.get("_tscore", 0))))
+    tip = _score_tip(p)
+    if not tip:
+        return pill
+    return f'<span title="{tip}" style="cursor:help;">{pill}</span>'
 
 
 def _pos(r):
@@ -595,7 +626,7 @@ def render_hitting(ctx):
         rows += [line(d, r, ro, "&#10052;", ACCENT) for d, r, ro in cold]
     if not rows:
         rows = [f'<div style="color:{MUTED};">No hitter data.</div>']
-    return _tile("Hitting Hot / Cold", "".join(rows), sub="7-day OPS vs season")
+    return _tile("Hitting Hot / Cold", "".join(rows), flex=1.18, sub="7-day OPS vs season")
 
 
 def render_holes(ctx):
@@ -647,7 +678,8 @@ def render_trade_radar(ctx):
             _pp = ",".join(p["_tfillpos"])
             chips += f' <span title="upgrades your thin {_pp} — a position you rank near the bottom of the league" style="color:{CYAN};font-size:11px;cursor:help;">({_pp})</span>'
         return (f'<div style="font-size:12px;line-height:1.5;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'
-                f'{sd.team_logo(p.get("Team"), 12)}<span style="color:{TEXT};">{p.get("PlayerName")}</span>{chips}</div>')
+                f'{sd.team_logo(p.get("Team"), 12)}<span style="color:{TEXT};">{p.get("PlayerName")}</span> '
+                f'{_score_pill_tip(p)}{chips}</div>')
 
     # Abbreviated view: prefer TWO DISTINCT partners (the dashboard is already dense — two
     # is enough; showing two deals with the same team wastes the space); backfill from the
@@ -696,7 +728,7 @@ def render_trade_radar(ctx):
             f'</div>')
     if not rows:
         rows = [f'<div style="color:{MUTED};">No trade fits right now.</div>']
-    return _tile("Trade Radar", "".join(rows), flex=1.05, sub="top mutual-benefit swaps &middot; hover a badge for why")
+    return _tile("Trade Radar", "".join(rows), flex=0.9, sub="top mutual-benefit swaps &middot; hover a badge for why")
 
 
 # ── Column 3: Moves, FA Radar, Season ───────────────────────────────────────────
