@@ -3347,7 +3347,8 @@ _UPGRADE_MARGIN = 3.0   # min score-pt upgrade over my worst starter to bother f
 def _roster_suggestion(matchup, pitchers, hitters, fa_sp, fa_rp, fa_hit,
                         my_team, best_recent_p, best_recent_h,
                         all_matchups, week_end_str, classification=None,
-                        league_total_roster_max=28, pos_data=None, lineup_eff=None):
+                        league_total_roster_max=28, pos_data=None, lineup_eff=None,
+                        pill_fn=None):
     """Return a LIST of Week-at-a-Glance pickup bullets (HTML strings), roster-context
     aware. (Was: a single 'best available hitter' bullet, blind to positional need -- it
     chronically told you to add an OF, the deepest pool, even while you were benching a
@@ -3362,9 +3363,16 @@ def _roster_suggestion(matchup, pitchers, hitters, fa_sp, fa_rp, fa_hit,
         streamer that would make ratios worse.
 
     Drops prefer a SURPLUS player (deep position / bench-leaker), and the two bullets take
-    DISTINCT drops. Falls back to a trade idea only when neither pickup fires."""
+    DISTINCT drops. Falls back to a trade idea only when neither pickup fires.
+
+    `pill_fn`: optional callback (score:int -> HTML) that renders a score pill after each
+    add/drop player name — used by the dashboard's Recommended Moves tile for at-a-glance
+    quality; the digest passes nothing (bullets unchanged)."""
     if not matchup:
         return []
+
+    def _pill(score):
+        return f' {pill_fn(int(round(score)))}' if pill_fn else ''
 
     classification = classification or {}
     pos_data   = pos_data or []
@@ -3438,6 +3446,7 @@ def _roster_suggestion(matchup, pitchers, hitters, fa_sp, fa_rp, fa_hit,
         [(r, _blend(r, hitter_score, best_recent_h),  "hit") for r in full_hit],
         key=lambda x: x[1]
     )
+    _drop_score = {id(r): s for r, s, _ in scored_drop}
 
     def _can_drop(cand):
         """True if dropping cand leaves at least one healthy player at every position it fills."""
@@ -3487,7 +3496,7 @@ def _roster_suggestion(matchup, pitchers, hitters, fa_sp, fa_rp, fa_hit,
         if d and d.get("PlayerName") != add_row.get("PlayerName"):
             surplus_tag = f' <span style="color:{MUTED};font-size:10px;">[surplus]</span>' if _in_surplus(d) else ''
             return (f' &middot; Drop <span style="color:{MUTED};">{d.get("PlayerName","")}'
-                    f' ({_pos_disp(d)})</span>{surplus_tag}')
+                    f' ({_pos_disp(d)})</span>{_pill(_drop_score.get(id(d), 0))}{surplus_tag}')
         return ''
 
     bullets = []
@@ -3510,6 +3519,7 @@ def _roster_suggestion(matchup, pitchers, hitters, fa_sp, fa_rp, fa_hit,
     if bat_add and bat_add.get("PlayerName"):
         bullets.append(
             f'Pickup (bat): Add <span style="color:{TEXT};font-weight:700;">{bat_add["PlayerName"]}</span>'
+            f'{_pill(_blend(bat_add, hitter_score, best_recent_h))}'
             f'<span style="color:{MUTED};"> ({_pos_disp(bat_add)})</span>'
             f'<span style="color:{MUTED};"> &mdash; {bat_reason}</span>'
             + _move_tail(bat_add)
@@ -3548,6 +3558,7 @@ def _roster_suggestion(matchup, pitchers, hitters, fa_sp, fa_rp, fa_hit,
                 preason = f'you&rsquo;re losing {rl_lbl}'
             bullets.append(
                 f'Pitching fix: Add <span style="color:{TEXT};font-weight:700;">{pa.get("PlayerName","")}</span>'
+                f'{_pill(_score_p(pa, best_recent_p))}'
                 f'<span style="color:{MUTED};"> ({role}, </span>'
                 f'<span style="color:{ec};">{era:.2f} ERA</span>'
                 f'<span style="color:{MUTED};"> / </span><span style="color:{wc};">{whip:.2f} WHIP</span>'
@@ -3605,9 +3616,13 @@ def _roster_suggestion(matchup, pitchers, hitters, fa_sp, fa_rp, fa_hit,
         nc = _CAT_DISPLAY.get(need_cat, need_cat)
         oc = _CAT_DISPLAY.get(offer_cat, offer_cat)
         if tn and mn:
+            _mn_score = (_score_p(my_offer, best_recent_p) if offer_cat in _PIT_CATS
+                         else _blend(my_offer, hitter_score, best_recent_h))
+            _tn_score = (_score_p(their_player, best_recent_p) if need_cat in _PIT_CATS
+                         else _blend(their_player, hitter_score, best_recent_h))
             return [
-                f'Trade: Offer <span style="color:{TEXT};font-weight:700;">{mn}</span>'
-                f' to {opp} for <span style="color:{TEXT};font-weight:700;">{tn}</span>'
+                f'Trade: Offer <span style="color:{TEXT};font-weight:700;">{mn}</span>{_pill(_mn_score)}'
+                f' to {opp} for <span style="color:{TEXT};font-weight:700;">{tn}</span>{_pill(_tn_score)}'
                 f'<span style="color:{MUTED};"> &mdash; fills {nc} gap, gives them {oc}</span>'
             ]
 
