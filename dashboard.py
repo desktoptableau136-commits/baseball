@@ -832,10 +832,9 @@ def _legend_chip(glyph, color, size=8):
             f'border-radius:3px;padding:0 3px;vertical-align:middle;">{glyph}</span>')
 
 
-def render_legend():
-    """A slim key strip pinned to the bottom of the pane, defining every badge/marker
-    on the dashboard. Sits outside both grids (flex:0 0 auto), so it shows in the
-    desktop no-scroll pane and at the foot of the scrolling tablet/phone view alike."""
+def _legend_items():
+    """The badge/marker key items, shared by the desktop bottom bar (render_legend)
+    and the tablet panel (render_legend_panel) so the two never drift apart."""
     def plain(g, c, sz=10):
         return f'<span style="color:{c};font-weight:700;font-size:{sz}px;">{g}</span>'
 
@@ -858,13 +857,32 @@ def render_legend():
         item(_legend_chip("SB", sd.SILVER), "speed / steals"),
         item(f'{plain("&#128293;",GREEN)}{plain("&#10052;",ACCENT)}', "hot / cold vs season"),
     ]
+    return "".join(items)
+
+
+def render_legend():
+    """A slim key strip pinned to the bottom of the DESKTOP pane, defining every
+    badge/marker on the dashboard. Sits outside both grids (flex:0 0 auto). Hidden on
+    tablet/phone (media query below 1100px), where the same key renders as a panel at
+    the foot of the right tablet column instead (render_legend_panel), per user pref."""
     return (
         f'<div id="legend" style="flex:0 0 auto;background:{SURFACE};border:1px solid {BORDER};'
         f'border-radius:6px;padding:4px 10px;display:flex;flex-wrap:wrap;align-items:center;gap:5px 12px;">'
         f'<span style="color:{TEXT};font-weight:800;text-transform:uppercase;letter-spacing:.6px;font-size:9px;">Key</span>'
-        + "".join(items) +
+        + _legend_items() +
         f'</div>'
     )
+
+
+def render_legend_panel():
+    """The same key rendered as a normal tile — placed last in the right tablet column
+    (inside #gridt, so it only shows on tablet/phone; desktop uses the bottom bar)."""
+    inner = (
+        f'<div style="display:flex;flex-wrap:wrap;align-items:center;gap:5px 12px;">'
+        + _legend_items() +
+        f'</div>'
+    )
+    return _tile("Key", inner)
 
 
 STYLE = """
@@ -894,6 +912,7 @@ STYLE = """
        flex-start` keeps the two columns their natural heights (a ragged bottom, but no
        internal gaps). */
     #grid  { display:none !important; }
+    #legend { display:none !important; }  /* desktop bottom bar; tablet uses the panel in colt_r */
     #gridt { display:flex !important; gap:6px !important; align-items:flex-start !important; }
     .colt  { flex:1 1 0 !important; min-width:0 !important; }
     .tile { flex:0 0 auto !important; min-height:0 !important; overflow:visible !important; margin:0 !important; }
@@ -951,7 +970,7 @@ def build_dashboard(snap, my_team):
     # Weakest Spots) sit one-per-column so the columns end at roughly the same height.
     # On a phone the two columns stack top-to-bottom.
     colt_l = f'<div class="colt">{t_pulse}{t_moves}{t_fa}{t_season}</div>'
-    colt_r = f'<div class="colt">{t_pitch}{t_hit}{t_holes}{t_trade}</div>'
+    colt_r = f'<div class="colt">{t_pitch}{t_hit}{t_holes}{t_trade}{render_legend_panel()}</div>'
     grid_tablet = f'<div id="gridt">{colt_l}{colt_r}</div>'
 
     legend = render_legend()

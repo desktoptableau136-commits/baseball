@@ -1755,6 +1755,20 @@ def _whiff_sub(r):
     )
 
 
+def _qs_sub(r):
+    """Small muted second line under the QS% cell naming the run-prevention SKILL
+    behind the projection: xERA (Baseball Savant, luck-stripped ERA — what the ER
+    projection regresses toward). DISPLAY ONLY. xERA only, NOT raw ERA (which has
+    its own adjacent column here, unlike whiff% under K%). Empty when missing."""
+    val = _n(r.get("xERA"))
+    if val <= 0:
+        return ""
+    return (
+        f'<div style="color:{MUTED};font-size:10px;margin-top:1px;white-space:nowrap;">'
+        f'{val:.2f} xERA</div>'
+    )
+
+
 def band_divider(label, color=None, anchor=None):
     c = color or MUTED
     # Anchor target for the "jump to" nav. name+id maximizes email-client support;
@@ -3899,7 +3913,9 @@ def build_glossary_section():
                "bat can't score like a regular over a week. Blended 65% season / 35% recent form."),
         _entry("QS% (quality-start probability)",
                "Modeled chance a starter throws a quality start (6+ IP, ≤3 ER). League-average ≈ 38%, "
-               "an ace ≈ 75%. Driven by innings-per-start, K%, ERA/WHIP and contact allowed."),
+               "an ace ≈ 75%. Driven by innings-per-start, K%, ERA/WHIP and contact allowed. The muted "
+               "<b>xERA</b> line beneath it is the luck-stripped run-prevention skill behind the projection "
+               "(what the ER projection regresses toward) — a lower xERA than ERA hints the QS rate is earned."),
     ])
     badges = _group("Badges & icons", [
         _subhead("Any player"),
@@ -4871,7 +4887,7 @@ def build_email(snap, override_team=None):
                     f'<td style="{_tdc}">{opp_logo(ha)}{ha}'
                     f'{"&nbsp;<span style=\"color:#888;font-size:11px\">(proj.)</span>" if r.get("PSP_Projected") else ""}'
                     f'{_opp_ops_sub(r)}</td>'
-                    f'<td style="{_tdc}">{qsp_str}</td>'
+                    f'<td style="{_tdc}">{qsp_str}{_qs_sub(r)}</td>'
                     f'<td style="{_tdc}">{v(r.get("ERA"), 2)}</td>'
                     + hot_cold_cell(r.get("ERA"), p15r.get("ERA"), lower_better=True, dec=2, no_data_title="No 15-day stats — player may not have pitched recently", td_style=_tdc) +
                     f'<td style="{_tdc}">{kpct_s_cell}{_whiff_sub(r)}</td>'
@@ -5104,7 +5120,7 @@ def build_email(snap, override_team=None):
                     f'<td style="{_tdc}">{opp_logo(ha)}{ha}'
                     f'{"&nbsp;<span style=\"color:#888;font-size:11px\">(proj.)</span>" if r.get("PSP_Projected") else ""}'
                     f'{_opp_ops_sub(r)}</td>'
-                    f'<td style="{_tdc}">{qsp_str}</td>'
+                    f'<td style="{_tdc}">{qsp_str}{_qs_sub(r)}</td>'
                     f'<td style="{_tdc}">{v(r.get("ERA"), 2)}</td>'
                     + hot_cold_cell(r.get("ERA"), p15r.get("ERA"), lower_better=True, dec=2, no_data_title="No 15-day stats — player may not have pitched recently", td_style=_tdc) +
                     f'<td style="{_tdc}">{kpct_cell}{_whiff_sub(r)}</td>'
