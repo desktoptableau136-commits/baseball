@@ -677,9 +677,27 @@ def _hit_badge(text, color, title=""):
     )
 
 
-def qs_badge(ip_g, er):
-    """Cyan QS chip with a hover `title` naming the projected line that earned it."""
-    return _hit_badge("QS", CYAN, f"Projected {_fmt_ip(ip_g)} IP &middot; {er} ER &mdash; quality start (6+ IP, &le; 3 ER)")
+def _qs_stat_clause(row):
+    """The run-prevention analytic behind a QS projection — xERA (the luck-stripped skill
+    the ER projection regresses toward), falling back to raw ERA. Deliberately does NOT
+    restate IP/start (that just repeats the projected-line IP). Empty when unavailable."""
+    if row is None:
+        return ""
+    xera = _n(row.get("xERA"))
+    if xera > 0:
+        return f"{xera:.2f} xERA"
+    era = _n(row.get("ERA"))
+    if era > 0:
+        return f"{era:.2f} ERA"
+    return ""
+
+
+def qs_badge(ip_g, er, row=None):
+    """Cyan QS chip with a hover `title` naming the projected line that earned it, plus the
+    length + run-prevention analytics (IP/start, xERA) backing the projection when available."""
+    stat = _qs_stat_clause(row)
+    tail = f" &mdash; {stat}" if stat else ""
+    return _hit_badge("QS", CYAN, f"Projected {_fmt_ip(ip_g)} IP &middot; {er} ER{tail}")
 
 
 def _k5_stat_clause(row):
@@ -1522,8 +1540,10 @@ def _sp_badge_context(row, qs_fires, k_fires, two_start_n, recent_era=None):
     if two_start_n >= 2:
         lines.append(f'{two_start_badge()} {two_start_n} starts inside the matchup week.')
     if qs_fires:
-        lines.append(f'{qs_badge(ip_g, er)} projected {_fmt_ip(ip_g)} IP &middot; {er} ER '
-                     f'is a quality start (6+ IP, &le; 3 ER).')
+        stat = _qs_stat_clause(row)
+        tail = f", backed by {stat}" if stat else ""
+        lines.append(f'{qs_badge(ip_g, er, row)} projected {_fmt_ip(ip_g)} IP &middot; {er} ER '
+                     f'is a quality start (6+ IP, &le; 3 ER){tail}.')
     if k_fires:
         stat = _k5_stat_clause(row)
         tail = f", backed by a {stat}" if stat else ""
@@ -4783,7 +4803,7 @@ def build_email(snap, override_team=None):
                 if _n_starts_s >= 2:
                     start_badges.append(two_start_badge(f"{_n_starts_s} starts this matchup week"))
                 if qs_fires_s:
-                    start_badges.append(qs_badge(_pjs_ip, _pjs_er))
+                    start_badges.append(qs_badge(_pjs_ip, _pjs_er, r))
                 if k_fires_s:
                     start_badges.append(k5_badge(_pjs_k, r))
                 start_badges.append(blowup_badge(r, p15r.get("ERA")))
@@ -4995,7 +5015,7 @@ def build_email(snap, override_team=None):
                 pickup_badges = []
                 name_border = ""
                 if qs_fires:
-                    pickup_badges.append(qs_badge(_pj_ip, _pj_er))
+                    pickup_badges.append(qs_badge(_pj_ip, _pj_er, r))
                 if k_fires:
                     pickup_badges.append(k5_badge(_pj_k, r))
                 if qs_fires and k_fires:
