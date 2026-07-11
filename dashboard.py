@@ -550,7 +550,7 @@ def render_tv_games(ctx):
                 f'<span style="color:{MUTED};">{_names(item["opp"])}</span></div>'
                 f'</div>'
             )
-        return _tile("Today's Games", "".join(blocks), flex=0.95,
+        return _tile("Today's Games", "".join(blocks), flex=1.05,
                      sub="&#9733; your team + top overlap")
     except Exception:
         return ""
@@ -591,7 +591,7 @@ def render_category_pulse(ctx):
     close = sum(1 for _, ic in rendered if ic)
     sub = (f'{cw}W&middot;{cl}L&middot;{ct}T &rarr; proj {pw}-{pl}-{pt}'
            + (f' &middot; &#9889;{close}' if close else ''))
-    return _tile(f"Category Pulse", grid, flex=1.45, sub=sub)
+    return _tile(f"Category Pulse", grid, flex=1.6, sub=sub)
 
 
 # ── Column 2: Pitching, Hitting, Holes ──────────────────────────────────────────
@@ -740,9 +740,20 @@ def render_holes(ctx):
     holes = "".join(rows) if rows else f'<div style="color:{MUTED};">Balanced roster.</div>'
     watch = sd.build_bench_watch(ctx["lineup_eff_current"]) if ctx["lineup_eff_current"] else ""
     if watch:
-        # tighten the reused callout for the compact tile
-        watch = f'<div style="margin-top:5px;font-size:10.5px;">{watch}</div>'
-    return _tile("Weakest Spots &middot; Lineup Watch", holes + watch, flex=1.25, sub="rank / worst &rarr; best FA")
+        # Lineup Watch is the ONE dashboard region allowed to scroll (per user
+        # preference): bench-leakage detail can run long, so it gets its own
+        # overflow-y:auto pane below the fixed Weakest-Spots rows. On tablet the
+        # tile-body is content-sized (overflow:visible), so height:100% resolves to
+        # the content and the pane just expands with the page — no inner scrollbar.
+        body = (
+            f'<div style="display:flex;flex-direction:column;height:100%;min-height:0;">'
+            f'<div style="flex:0 0 auto;">{holes}</div>'
+            f'<div style="flex:1 1 0;min-height:0;overflow-y:auto;margin-top:5px;font-size:10.5px;">{watch}</div>'
+            f'</div>'
+        )
+    else:
+        body = holes
+    return _tile("Weakest Spots &middot; Lineup Watch", body, flex=1.0, sub="rank / worst &rarr; best FA")
 
 
 def render_trade_radar(ctx):
