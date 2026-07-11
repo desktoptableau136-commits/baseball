@@ -1491,6 +1491,27 @@ _ESPN_PROID_TO_MLBID = {
 }
 
 
+def _espn_is_reliever(pl) -> bool:
+    """Usage-based RP detection from a rostered player's ESPN season GS/GP breakdown
+    (mirrors send_digest._is_sp, inverted) so a reliever is identified by ROLE, not just a
+    position string. GS/GP <= 0.20 with >= 5 appearances -> reliever; >= 0.80 -> starter;
+    the ambiguous middle and thin samples fall back to eligibleSlots (RP-only -> reliever).
+    Wrapped in try/except so a missing stats breakdown never blocks the snapshot."""
+    try:
+        bd = (pl.stats or {}).get(0, {}).get('breakdown', {})
+        gs = bd.get('GS'); gp = bd.get('GP')
+        if gp and gp >= 5 and gs is not None:
+            rate = gs / gp
+            if rate <= 0.20:
+                return True
+            if rate >= 0.80:
+                return False
+    except Exception:
+        pass
+    slots = pl.eligibleSlots or []
+    return ('RP' in slots) and ('SP' not in slots)
+
+
 def fetch_todays_games(league) -> list:
     """Today's real MLB games, enriched with which ROSTERED players (any fantasy team)
     are involved -- so send_digest can surface the games that most overlap the current
@@ -1500,7 +1521,9 @@ def fetch_todays_games(league) -> list:
     the game whose home/away team id matches. Each involved player carries its
     FantasyTeam so the renderer can apply my/opponent perspective (keeps --team working).
     A rostered pitcher is flagged is_sp when he's the game's confirmed probable starter
-    (guaranteed to pitch; a bat may sit -- we have no posted MLB batting lineups). Games
+    (guaranteed to pitch; a bat may sit -- we have no posted MLB batting lineups) and is_rp
+    when he's a reliever by ROLE (_espn_is_reliever) -- so the renderer can count relievers
+    (whose save/hold chance moves the matchup) while still skipping a starter on his off-day. Games
     with zero rostered involvement are dropped to keep the snapshot lean. Broad
     try/except -> [] so a StatsAPI hiccup never blocks the snapshot write."""
     try:
@@ -1531,10 +1554,12 @@ def fetch_todays_games(league) -> list:
                 mlbid = _ESPN_PROID_TO_MLBID.get(espn_id)
                 if not mlbid:
                     continue
+                _is_pit = is_pitcher(pl)
                 roster_by_mlbid.setdefault(mlbid, []).append({
                     "name":        pl.name,
                     "FantasyTeam": tm.team_name,
-                    "is_pitcher":  is_pitcher(pl),
+                    "is_pitcher":  _is_pit,
+                    "is_rp":       _is_pit and _espn_is_reliever(pl),
                 })
 
         games = []
@@ -1560,6 +1585,7 @@ def fetch_todays_games(league) -> list:
                             "name":        pl["name"],
                             "FantasyTeam": pl["FantasyTeam"],
                             "is_p":        bool(pl["is_pitcher"]),
+                            "is_rp":       bool(pl.get("is_rp")),
                             "is_sp":       bool(pl["is_pitcher"]
                                                 and _strip_accents(pl["name"]) in probables),
                         })

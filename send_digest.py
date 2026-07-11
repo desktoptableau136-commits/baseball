@@ -73,6 +73,15 @@ def _ascii_lower(s):
     return "".join(c for c in unicodedata.normalize("NFKD", str(s or ""))
                    if not unicodedata.combining(c)).lower().strip()
 
+
+def _badge_name_key(s):
+    """Loose join key for matching a roster/ESPN player name to a FantasyPros stat row:
+    _ascii_lower + drop punctuation + strip a trailing generational suffix (Jr./Sr./II-V),
+    which the two sources disagree on ('Jazz Chisholm Jr.' vs 'Jazz Chisholm')."""
+    import re as _re
+    k = _ascii_lower(s).replace(".", "").replace("'", "")
+    return _re.sub(r"\s+(jr|sr|ii|iii|iv|v)$", "", k).strip()
+
 try:
     from dotenv import load_dotenv
     load_dotenv(Path(__file__).parent / ".env")
@@ -1293,6 +1302,11 @@ _FULLNAME_TO_ABBREV = {
     "Tampa Bay Rays": "TB",        "Texas Rangers": "TEX",
     "Toronto Blue Jays": "TOR",    "Washington Nationals": "WSH",
 }
+
+# Favorite MLB team(s) — their games are pinned to the top of "Today's MLB Games"
+# regardless of matchup-overlap score (the manager is an Atlanta fan and wants to see
+# them first). Set of team abbrevs (as _FULLNAME_TO_ABBREV maps them). Empty = no pin.
+_FAVORITE_MLB_TEAMS = {"ATL"}
 
 
 def team_logo(abbrev, size=20):
@@ -4077,10 +4091,19 @@ def build_glossary_section():
                "and season counting totals (SV/K/W/IP) for pitchers."),
         _entry("MLB Stats API", "Probable starters (confirmed, plus a rotation-order projection that walks "
                "each team's rotation through its upcoming games), the opponent lineup OPS each starter faces, "
-               "and today's game schedule + national TV broadcasts for the Today's MLB Games panel."),
-        _entry("Today's MLB Games", "Real games today ranked by how many of your and your opponent's rostered "
-               "players they carry (a confirmed starting pitcher counts double). Hitters count as involved even "
-               "if their real manager sits them — only starting pitchers are confirmed via probables."),
+               "and today's game schedule + national and local TV broadcasts for the Today's MLB Games panel."),
+        _entry("Today's MLB Games", "The real games today worth tuning into, ranked by how much they overlap "
+               "your current matchup. Each involved rostered player scores (2 if a confirmed starting pitcher, "
+               "else 1) x (2 if he's yours, 1 if your opponent's) — so YOUR players and starters weigh most. "
+               "Counted as likely to actually appear: hitters, confirmed starters (marked ⚾), and relievers "
+               "(a save/hold chance moves the week); a starting pitcher who ISN'T tonight's probable — a starter "
+               "on his off-day — is skipped so he can't inflate a game. Relievers are identified by usage ROLE, "
+               "not just position. Hitters count even if their real manager benches them (we have no posted MLB "
+               "batting lineups — only pitching probables are confirmed). A ★ game is your favorite team "
+               "(Atlanta) — those are pinned to the top regardless of score. Each player carries the same "
+               "tactical badges as the rest of the digest (PWR/SB/buy/sell for hitters, blowup-risk/buy/sell "
+               "for pitchers). Where to watch shows national TV plus each side's local RSN; the pitching "
+               "matchup lists both probables (yours in blue, your opponent's in red)."),
         _entry("Baseball Savant (via pybaseball)", "Statcast: contact quality, expected stats (xERA, "
                "xwOBA, xBA/xSLG), sprint speed and whiff percentiles."),
     ])
@@ -4609,50 +4632,82 @@ def render_briefing(my_team, today, matchup, classification, starts, today_str,
 
 # ── TODAY'S MLB GAMES ─────────────────────────────────────────────────────────
 
-def _rank_todays_games(todays_games, my_key, opp_key):
+def _is_favorite_game(g):
+    """True when either club in this game is a favorite team (_FAVORITE_MLB_TEAMS)."""
+    for side in ("home_name", "away_name"):
+        if _FULLNAME_TO_ABBREV.get(g.get(side, "")) in _FAVORITE_MLB_TEAMS:
+            return True
+    return False
+
+
+def _rank_todays_games(todays_games, my_key, opp_key, pin_favorite=True):
     """Rank today's games by how much they overlap the current matchup, biased toward MY
-    roster. Each returned item = {g, mine, opp, score}; `mine`/`opp` are the involved
+    roster. Each returned item = {g, mine, opp, score, fav}; `mine`/`opp` are the involved
     rostered players. Only players likely to actually appear count: HITTERS (probable to
-    play) and CONFIRMED STARTING PITCHERS. A rostered pitcher who isn't tonight's probable
-    (a starter on his off-day, or a reliever whose appearance is speculative) is excluded
-    so he can't inflate the count. Value per player = (2 if starting pitcher else 1) ×
-    (2 for my player, 1 for the opponent's) — my players and starters both weigh more.
-    Games with fewer than 2 counted players and no starter are dropped. Sorted by score
-    desc, then earliest first pitch."""
+    play), CONFIRMED STARTING PITCHERS, and RELIEVERS (a save/hold chance moves the
+    matchup). The one exclusion is a STARTING pitcher who isn't tonight's probable (a
+    starter on his off-day) — he won't appear, so he can't inflate the count. Value per
+    player = (2 if confirmed starter else 1) × (2 for my player, 1 for the opponent's) —
+    my players and starters both weigh more. Games with fewer than 2 counted players and
+    no starter are dropped — EXCEPT a favorite-team game (_FAVORITE_MLB_TEAMS), which is
+    always kept. When pin_favorite, favorite games sort ahead of everything regardless of
+    score (the manager wants to see them first); within each tier, score desc then
+    earliest first pitch. pin_favorite=False gives pure impact order (used by the Briefing
+    'tune in' teaser, which should name the true highest-overlap game)."""
     ranked = []
     for g in (todays_games or []):
+        fav = _is_favorite_game(g)
         mine, opp = [], []
         for p in g.get("involved", []):
-            if p.get("is_p") and not p.get("is_sp"):
-                continue   # rostered pitcher not starting tonight -> may not appear
+            if p.get("is_p") and not p.get("is_sp") and not p.get("is_rp"):
+                continue   # a starter on his off-day -> won't appear (relievers DO count)
             fk = " ".join((p.get("FantasyTeam") or "").split())
             if fk == my_key:
                 mine.append(p)
             elif fk == opp_key:
                 opp.append(p)
-        if not mine and not opp:
-            continue
-        n_sp = sum(1 for p in mine + opp if p.get("is_sp"))
-        if (len(mine) + len(opp)) < 2 and n_sp == 0:
-            continue
+        if not fav:
+            if not mine and not opp:
+                continue
+            n_sp = sum(1 for p in mine + opp if p.get("is_sp"))
+            if (len(mine) + len(opp)) < 2 and n_sp == 0:
+                continue
         def _val(players, side_mult):
             return sum((2 if p.get("is_sp") else 1) * side_mult for p in players)
         score = _val(mine, 2) + _val(opp, 1)   # my players weighted 2x
-        ranked.append({"g": g, "mine": mine, "opp": opp, "score": score})
-    ranked.sort(key=lambda x: (-x["score"], x["g"].get("game_time_utc", "")))
+        ranked.append({"g": g, "mine": mine, "opp": opp, "score": score, "fav": fav})
+    ranked.sort(key=lambda x: ((not x["fav"]) if pin_favorite else False,
+                               -x["score"], x["g"].get("game_time_utc", "")))
     return ranked
 
 
-def build_todays_games_section(todays_games, my_team, opp_team, max_games=4):
+def build_todays_games_section(todays_games, my_team, opp_team, max_games=4,
+                               hit_rows=None, pit_rows=None, recent_era=None, hit_pctile=None):
     """The 'Today's MLB Games' panel — the real games worth tuning into because they
     carry the most of my and my opponent's rostered players. Returns '' when nothing
     qualifies (off-day / no overlap). Perspective is applied here from each involved
-    player's FantasyTeam, so it works under --team for free."""
+    player's FantasyTeam, so it works under --team for free. When the row lookups are
+    passed (`hit_rows`/`pit_rows` = season YEAR row keyed by _badge_name_key, `recent_era`
+    = L15 ERA keyed the same, `hit_pctile` = the qualified-pool percentile index), each
+    involved player gets the SAME role-aware tactical badges as the rest of the digest —
+    hitters PWR/SB/$/▼ (`hitter_badges`), pitchers ⚠ (`blowup_badge`, self-gated to
+    startable arms) + $/▼ (`pitcher_regression_badge`)."""
     my_key  = " ".join((my_team or "").split())
     opp_key = " ".join((opp_team or "").split())
     ranked = _rank_todays_games(todays_games, my_key, opp_key)
     if not ranked:
         return ""
+    hit_rows = hit_rows or {}; pit_rows = pit_rows or {}; recent_era = recent_era or {}
+
+    def _badges(p):
+        key = _badge_name_key(p.get("name", ""))
+        if p.get("is_p"):
+            row = pit_rows.get(key)
+            if not row:
+                return ""
+            return blowup_badge(row, recent_era.get(key)) + pitcher_regression_badge(row)
+        row = hit_rows.get(key)
+        return hitter_badges(row, hit_pctile) if row else ""
 
     def _side(players, label, color):
         if not players:
@@ -4660,6 +4715,7 @@ def build_todays_games_section(todays_games, my_team, opp_team, max_games=4):
         names = ", ".join(
             f'<span style="color:{MUTED};">{p.get("name","")}'
             + (f'<span style="color:{CYAN};font-weight:700;"> ⚾</span>' if p.get("is_sp") else "")
+            + _badges(p)
             + '</span>'
             for p in players
         )
@@ -4671,7 +4727,10 @@ def build_todays_games_section(todays_games, my_team, opp_team, max_games=4):
         g = item["g"]
         away_ab = _FULLNAME_TO_ABBREV.get(g.get("away_name", ""), "")
         home_ab = _FULLNAME_TO_ABBREV.get(g.get("home_name", ""), "")
+        fav_star = (f'<span style="color:{YELLOW};font-weight:700;" title="Your team — pinned to the top">★ </span>'
+                    if item.get("fav") else "")
         matchup_html = (
+            f'{fav_star}'
             f'{team_logo(away_ab, 16)}<span style="color:{TEXT};font-weight:700;">{away_ab or g.get("away_name","")}</span>'
             f'<span style="color:{MUTED};"> @ </span>'
             f'{team_logo(home_ab, 16)}<span style="color:{TEXT};font-weight:700;">{home_ab or g.get("home_name","")}</span>'
@@ -4721,11 +4780,13 @@ def build_todays_games_section(todays_games, my_team, opp_team, max_games=4):
             f'<div style="margin:2px 0;">{_side(item["opp"], "Opp", TEXT)}</div>'
             f'</div>'
         )
+    fav_note = (" ★ Your team's games are pinned first." if any(it.get("fav") for it in ranked) else "")
     return (
         section_head("\U0001f4fa Today's MLB Games",
                      "Games worth tuning into — ranked by how much they overlap your matchup (your players "
-                     "weighted heaviest). Counts hitters + confirmed starters (⚾); a pitcher who isn't starting "
-                     "tonight is skipped. Hitters count even if their real manager sits them.")
+                     "weighted heaviest). Counts hitters, confirmed starters (⚾), and relievers (save/hold "
+                     "chances); only a starter who isn't pitching tonight is skipped. Hitters count even if "
+                     "their real manager sits them." + fav_note)
         + "".join(cards)
         + '<div style="margin-bottom:24px;"></div>'
     )
@@ -6017,8 +6078,28 @@ def build_email(snap, override_team=None):
     _tune_in = ""
     try:
         _tg_list = snap.get("todays_games") or []
-        todays_games_section = build_todays_games_section(_tg_list, my_team, _opp_name)
-        _ranked_tg = _rank_todays_games(_tg_list, " ".join(my_team.split()), " ".join(_opp_name.split()))
+        # Best-available stat row per player, keyed loosely (ESPN roster names vs
+        # FantasyPros) so each involved player carries the SAME tactical badges as the rest
+        # of the digest. Prefer the season YEAR row but fall back 30 -> 15 -> 7 (some arms —
+        # e.g. Hunter Brown — appear only in the short-range FP views this snapshot); a
+        # thinner row just means a regression/IP-gated badge quietly doesn't fire.
+        _tg_hit_rows, _tg_pit_rows, _tg_recent_era = {}, {}, {}
+        for _ds in (7, 15, 30, YEAR):   # ascending preference — YEAR overwrites last
+            for _r in hitters:
+                if int(_n(_r.get("Dataset")) or 0) == _ds and _r.get("PlayerName"):
+                    _tg_hit_rows[_badge_name_key(_r["PlayerName"])] = _r
+            for _r in pitchers:
+                if int(_n(_r.get("Dataset")) or 0) == _ds and _r.get("PlayerName"):
+                    _tg_pit_rows[_badge_name_key(_r["PlayerName"])] = _r
+        for _nm, _r in {**rec_p, **p15}.items():   # p15 wins; rec_p (Baseball Ref L15) fallback
+            if _r.get("ERA") is not None:
+                _tg_recent_era[_badge_name_key(_nm)] = _r.get("ERA")
+        todays_games_section = build_todays_games_section(
+            _tg_list, my_team, _opp_name,
+            hit_rows=_tg_hit_rows, pit_rows=_tg_pit_rows,
+            recent_era=_tg_recent_era, hit_pctile=hit_pctile)
+        # Teaser names the true highest-OVERLAP game (pin_favorite=False), not the pinned favorite.
+        _ranked_tg = _rank_todays_games(_tg_list, " ".join(my_team.split()), " ".join(_opp_name.split()), pin_favorite=False)
         if _ranked_tg:
             _top = _ranked_tg[0]
             _g0 = _top["g"]
