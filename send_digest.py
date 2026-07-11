@@ -2757,12 +2757,36 @@ def find_trades(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
     return picked
 
 
-def _trade_player_line(r, hi_cats, hi_color, side, show_pos=False):
+def _trade_score_reveal(score, breakdown_html, uid):
+    """Div-based analog of `score_reveal` for the Trade Radar cards, whose players are
+    stacked <div>s inside table cells (not per-player <tr> rows) — so the <tr> reveal
+    can't be appended. Returns (badge_link, hidden_div): the clickable ▾ badge + a hidden
+    breakdown <div> to drop right after the player line; a `div.scorebd-div:target` rule
+    in the head <style> reveals it in the browser attachment (Gmail strips <style> → the
+    div stays hidden, the badge is a harmless no-op)."""
+    if not breakdown_html or not uid:
+        return badge(score), ""
+    cell = (f'<a href="#{uid}" class="bdlink" title="Tap for score breakdown" '
+            f'style="text-decoration:none;white-space:nowrap;">{badge(score)}'
+            f'<span style="color:{MUTED};font-size:9px;font-weight:700;">&nbsp;&#9662;</span></a>')
+    div = (f'<div id="{uid}" class="scorebd-div" style="display:none;background:{SURFACE2};'
+           f'padding:8px 12px;margin:2px 0 6px;font-size:11px;line-height:1.55;color:{MUTED};'
+           f'border-left:3px solid {ACCENT};border-radius:4px;white-space:normal;">'
+           f'{breakdown_html}'
+           f'<a href="#{uid}x" style="color:{MUTED};text-decoration:none;font-weight:700;'
+           f'float:right;margin-left:10px;">&#10005;</a></div>')
+    return cell, div
+
+
+def _trade_player_line(r, hi_cats, hi_color, side, show_pos=False,
+                       best_recent_p=None, best_recent_h=None, hit_pctile=None):
     """One player row inside a trade card: MLB logo + name + score badge + cat chips
     (+ a CYAN position chip for a thin slot the incoming player upgrades, + the CANONICAL
     buy-low/sell-high chip — same glyph-only `$`/`▼` (green/red) as everywhere else in the
     digest, so the visual language stays consistent). `side` ('give'/'get') only tunes the
-    hover tooltip; the whole-trade framing lives in the footer's sell-high/buy-low tag."""
+    hover tooltip; the whole-trade framing lives in the footer's sell-high/buy-low tag.
+    The score badge is tap-to-expand (role-aware prose breakdown for every player in the
+    trade), same as the section tables."""
     logo  = team_logo(r.get("Team"), 14)
     nm    = str(r.get("PlayerName") or "")
     chips = "".join(_hit_badge(_CAT_DISPLAY.get(c, c), hi_color, f"strong in {c}")
@@ -2780,9 +2804,15 @@ def _trade_player_line(r, hi_cats, hi_color, side, show_pos=False):
                if side == "give" else
                "results behind his Statcast expected — positive regression likely, acquire cheap")
         chips += _hit_badge("$", GREEN, tip)
+    if r.get("_tptype") == "hit":
+        bd = _hitter_score_breakdown(r, best_recent_h, hit_pctile)
+    else:
+        bd = _pitcher_score_breakdown(r, best_recent_p)
+    uid = _bd_uid("trade", nm) if bd else None
+    score_html, reveal = _trade_score_reveal(int(round(r["_tscore"])), bd, uid)
     return (f'<div style="margin:3px 0;font-size:12px;color:{TEXT};white-space:nowrap;">'
             f'{logo}<span style="font-weight:600;">{nm}</span> '
-            f'{badge(int(round(r["_tscore"])))}{chips}</div>')
+            f'{score_html}{chips}</div>{reveal}')
 
 
 def build_trade_radar(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
@@ -2794,8 +2824,12 @@ def build_trade_radar(pitchers, hitters, roto, my_team, best_recent_p, best_rece
     team_logos = team_logos or {}
     cards = []
     for t in trades:
-        give = "".join(_trade_player_line(o, set(t["send_cats"]), MUTED, "give") for o in t["outs"])
-        get_ = "".join(_trade_player_line(i, set(t["get_cats"]), ACCENT, "get", show_pos=True) for i in t["ins"])
+        give = "".join(_trade_player_line(o, set(t["send_cats"]), MUTED, "give",
+                                          best_recent_p=best_recent_p, best_recent_h=best_recent_h,
+                                          hit_pctile=hit_pctile) for o in t["outs"])
+        get_ = "".join(_trade_player_line(i, set(t["get_cats"]), ACCENT, "get", show_pos=True,
+                                          best_recent_p=best_recent_p, best_recent_h=best_recent_h,
+                                          hit_pctile=hit_pctile) for i in t["ins"])
         gains = ([_CAT_DISPLAY.get(c, c) for c in t["get_cats"]]
                  + [f"{p} slot" for p in t.get("get_pos", [])])
         get_lbl  = ", ".join(gains) or "depth"
@@ -5666,6 +5700,7 @@ def build_email(snap, override_team=None):
        Renders in the browser-opened attachment; Gmail strips <style> so the rows stay
        hidden there (the score badge itself always shows). */
     tr.scorebd-row:target {{ display:table-row !important; scroll-margin-top:40vh; }}
+    div.scorebd-div:target {{ display:block !important; scroll-margin-top:40vh; }}
     a.bdlink {{ outline:none; }}
     @media only screen and (max-width:600px) {{
       .ew {{ width:100% !important; padding:8px !important; }}
