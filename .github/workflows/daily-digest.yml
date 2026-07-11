@@ -28,9 +28,12 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Send digest
+      - name: Send digest (with dashboard attached)
         env:
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
           ESPN_SWID: ${{ secrets.ESPN_SWID }}
           ESPN_S2: ${{ secrets.ESPN_S2 }}
-        run: python send_digest.py
+        # One fetch, one email: the digest builds the dashboard and attaches it too,
+        # so both deliverables arrive together. (The standalone daily-dashboard.yml
+        # schedule is retired -- it now only runs on manual dispatch.)
+        run: python send_digest.py --with-dashboard

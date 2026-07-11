@@ -151,15 +151,17 @@ $env:PATH = [System.Environment]::GetEnvironmentVariable("PATH","Machine") + ";"
 
 ## Automation
 
-Three scheduled workflows run on GitHub Actions (Python on Ubuntu; cron is always UTC):
+Two scheduled workflows run on GitHub Actions (plus one manual-only), Python on Ubuntu; cron is always UTC:
 
 | Workflow | Cron (UTC) | Fires (EDT) | Lands (ET) | What it runs |
 |---|---|---|---|---|
-| `daily-digest.yml` | `0 6 * * *` | 2 AM | ~8 AM | `python send_digest.py` |
-| `daily-dashboard.yml` | `0 6 * * *` | 2 AM | ~8 AM | `python dashboard.py --refresh --email` |
+| `daily-digest.yml` | `0 6 * * *` | 2 AM | ~8 AM | `python send_digest.py --with-dashboard` |
 | `weekly-recap.yml` | `30 15 * * 1` | Mon 11:30 AM | — | `python weekly_recap.py` |
+| `daily-dashboard.yml` | *manual only* | — | — | `python dashboard.py --refresh --email` (`workflow_dispatch`) |
 
-**The cron is when the job *fires*, not when the email *arrives*.** GitHub's scheduler is unreliable — delays run 1–4 hours and in practice **~6 hours** (the 06:00 UTC digest lands ~8 AM ET), and only ever push runs *later*. So arrival ≈ cron + ~6h, and the digest and dashboard share the same cron so they land together ~8 AM. That same lag keeps the data fresh: the 2 AM crons actually *execute* ~8 AM, well past ESPN's overnight refresh. (Firing later — e.g. 4 AM EDT — would guard against the rare fast-scheduler day but push everyday arrival ~2h later, so we don't. The digest's former afternoon run at 15:00 UTC was removed — it's once daily now.)
+**One email, both deliverables.** The daily job runs `send_digest.py --with-dashboard`: a single ESPN fetch, then one email carrying the digest (inline body + `digest_*.html` attachment) *and* the dashboard (`dashboard_*.html` attachment). The old separate `daily-dashboard.yml` schedule is retired (kept for manual standalone sends). If the dashboard ever fails to build, the digest still sends — the attachment is just dropped.
+
+**The cron is when the job *fires*, not when the email *arrives*.** GitHub's scheduler is unreliable — delays run 1–4 hours and in practice **~6 hours** (the 06:00 UTC job lands ~8 AM ET), and only ever push runs *later*. That same lag keeps the data fresh: the 2 AM cron actually *executes* ~8 AM, well past ESPN's overnight refresh. (Firing later — e.g. 4 AM EDT — would guard against the rare fast-scheduler day but push everyday arrival ~2h later, so we don't.)
 
 ### Trigger a manual run
 
@@ -580,8 +582,8 @@ baseball/
 ├── .env.example                         # Safe template to share
 ├── .github/
 │   └── workflows/
-│       ├── daily-digest.yml            # Digest — fires 06:00 UTC (2 AM EDT), lands ~8 AM ET
-│       ├── daily-dashboard.yml         # Dashboard — fires 06:00 UTC (2 AM EDT), lands ~8 AM ET
+│       ├── daily-digest.yml            # Digest + dashboard attached — fires 06:00 UTC (2 AM EDT), lands ~8 AM ET
+│       ├── daily-dashboard.yml         # Standalone dashboard — manual (workflow_dispatch) only; schedule retired
 │       ├── weekly-recap.yml            # Recap — fires Mon 15:30 UTC
 │       └── pr-check.yml                # CI: compile + dry-run render on PRs into main
 ├── data/

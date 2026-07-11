@@ -5754,7 +5754,10 @@ def build_email(snap, override_team=None):
 
 # ── SEND ──────────────────────────────────────────────────────────────────────
 
-def send_email(html, subject, filename=None):
+def send_email(html, subject, filename=None, extra_attachments=None):
+    """Send the digest. `extra_attachments` is an optional list of (html, filename)
+    tuples appended as further .html attachments (e.g. the dashboard rides along as a
+    second attachment under --with-dashboard) so both deliverables arrive in ONE email."""
     import smtplib
     from email.mime.multipart import MIMEMultipart
     from email.mime.text import MIMEText
@@ -5780,6 +5783,12 @@ def send_email(html, subject, filename=None):
     )
     msg.attach(attachment)
 
+    # Additional attachments (dashboard, etc.) — each its own .html, opened in a browser
+    for extra_html, extra_name in (extra_attachments or []):
+        extra = MIMEText(extra_html, "html", "utf-8")
+        extra.add_header("Content-Disposition", "attachment", filename=extra_name)
+        msg.attach(extra)
+
     with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
         smtp.login(FROM_EMAIL, GMAIL_APP_PASSWORD)
         smtp.sendmail(FROM_EMAIL, [TO_EMAIL, CC_EMAIL], msg.as_string())
@@ -5789,8 +5798,9 @@ def send_email(html, subject, filename=None):
 # ── MAIN ─────────────────────────────────────────────────────────────────────
 
 def main():
-    dry_run    = "--dry-run"    in sys.argv
-    no_refresh = "--no-refresh" in sys.argv
+    dry_run        = "--dry-run"       in sys.argv
+    no_refresh     = "--no-refresh"    in sys.argv
+    with_dashboard = "--with-dashboard" in sys.argv
     override_team = None
     if "--team" in sys.argv:
         idx = sys.argv.index("--team")
@@ -5845,6 +5855,22 @@ def main():
     _is_sun    = datetime.now().weekday() == 6
     subject    = f"⚾ {team_label} {'Lookahead' if _is_sun else 'Digest'} — {datetime.now().strftime('%b %d')}"
 
+    # Optionally build the dashboard and attach it to THIS email (one delivery for both).
+    # Isolated so a dashboard failure only drops the attachment — the digest still sends.
+    extra_attachments = []
+    dash_html = None
+    if with_dashboard:
+        print("  Building dashboard attachment...")
+        try:
+            import dashboard as _dash  # deferred: dashboard imports send_digest at module load
+            dash_team = override_team or snap.get("my_team", MY_TEAM)
+            dash_html = _dash.build_dashboard(snap, dash_team)
+            dash_name = f"dashboard_{team_slug}_{date_str}.html"
+            extra_attachments.append((dash_html, dash_name))
+            print(f"  Dashboard built ({len(dash_html) // 1024} KB) — will attach as {dash_name}.")
+        except Exception as e:  # never let the dashboard sink the digest
+            print(f"  WARNING: dashboard build failed ({e}); sending digest without it.")
+
     if dry_run:
         fname = f"digest_preview_{team_slug}.html"
         previews_dir = Path(__file__).parent / "previews"
@@ -5852,13 +5878,17 @@ def main():
         out = previews_dir / fname
         out.write_text(html, encoding="utf-8")
         print(f"\n  Dry run — saved to {out}")
+        if dash_html is not None:
+            dout = previews_dir / f"dashboard_{team_slug}.html"
+            dout.write_text(dash_html, encoding="utf-8")
+            print(f"  Dry run — dashboard saved to {dout}")
         print("\nDone (no email sent).")
         return
 
     print(f"\n[3/3] Sending to {TO_EMAIL}...")
     attach_name = f"digest_{date_str}_{team_slug}.html" if override_team else f"digest_{date_str}.html"
-    send_email(html, subject, filename=attach_name)
-    print("  Sent.")
+    send_email(html, subject, filename=attach_name, extra_attachments=extra_attachments)
+    print("  Sent." + (" (digest + dashboard)" if extra_attachments else ""))
 
     # Structured send-history line. Wrapped so a locked/unwritable log never
     # crashes a run whose email already went out. run_digest.bat captures full
