@@ -823,21 +823,24 @@ def render_trade_radar(ctx):
             f'</div>{counter}</div>')
 
     # Abbreviated view: prefer DISTINCT partners (the dashboard is dense); backfill from the
-    # full ranked list if only one distinct team fits. When a REAL incoming offer exists it
-    # OWNS the tile — a live decision on a clock beats speculative ideas — so we drop the
-    # radar rows entirely (they were getting clipped) and let the offers use the full height.
-    max_radar = 0 if offer_cards else 2
+    # full ranked list if only one distinct team fits. When REAL incoming offers exist they
+    # LEAD the tile (a live decision on a clock beats speculative ideas), and we keep just ONE
+    # radar idea below them — from a team I DON'T already have an incoming offer from (a fresh
+    # partner to shop, not a duplicate of a pending negotiation). The pane scrolls so nothing
+    # clips.
+    offer_partners = {g["partner"] for g in pending}
+    max_radar = 1 if offer_cards else 2
     top, _seen = [], set()
     for t in trades:
-        if len(top) >= max_radar:  # check BEFORE appending, so max_radar=0 adds nothing
+        if len(top) >= max_radar:  # check BEFORE appending, so the cap is exact
             break
-        if t["team"] in _seen:
-            continue
+        if t["team"] in _seen or t["team"] in offer_partners:
+            continue               # skip teams I already have a pending offer with
         _seen.add(t["team"]); top.append(t)
-    for t in trades:               # backfill if fewer than max_radar distinct partners exist
+    for t in trades:               # backfill if fewer than max_radar distinct fresh partners exist
         if len(top) >= max_radar:
             break
-        if t not in top:
+        if t not in top and t["team"] not in offer_partners:
             top.append(t)
 
     rows = list(offer_cards)
@@ -873,12 +876,12 @@ def render_trade_radar(ctx):
     if offer_cards:
         title = "Trades"
         n_off = len(offer_cards)
-        sub = f'{n_off} incoming offer{"s" if n_off != 1 else ""} to review'
-        # A single offer fits the tile; multiple offers get a scrollable pane (per user
-        # preference — the ONLY other scroll region on the dashboard is Lineup Watch) so
-        # every live decision is reachable without any getting clipped.
-        if n_off > 1:
-            body = f'<div style="height:100%;overflow-y:auto;">{body}</div>'
+        sub = (f'{n_off} incoming offer{"s" if n_off != 1 else ""} to review '
+               f'&middot; then 1 idea')
+        # Whenever a live offer leads the tile the body scrolls (the ONLY dashboard scroll
+        # region besides Lineup Watch, per user preference) — so every incoming offer PLUS
+        # the one fresh-partner idea is always reachable, none clipped.
+        body = f'<div style="height:100%;overflow-y:auto;">{body}</div>'
     else:
         title, sub = "Trade Radar", "top mutual-benefit swaps &middot; hover a badge for why"
     return _tile(title, body, flex=0.9, sub=sub)
