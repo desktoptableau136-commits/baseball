@@ -823,16 +823,17 @@ def render_trade_radar(ctx):
             f'</div>{counter}</div>')
 
     # Abbreviated view: prefer DISTINCT partners (the dashboard is dense); backfill from the
-    # full ranked list if only one distinct team fits. Fewer radar ideas when a real offer
-    # is already leading the tile.
-    max_radar = 1 if offer_cards else 2
+    # full ranked list if only one distinct team fits. When a REAL incoming offer exists it
+    # OWNS the tile — a live decision on a clock beats speculative ideas — so we drop the
+    # radar rows entirely (they were getting clipped) and let the offers use the full height.
+    max_radar = 0 if offer_cards else 2
     top, _seen = [], set()
     for t in trades:
+        if len(top) >= max_radar:  # check BEFORE appending, so max_radar=0 adds nothing
+            break
         if t["team"] in _seen:
             continue
         _seen.add(t["team"]); top.append(t)
-        if len(top) >= max_radar:
-            break
     for t in trades:               # backfill if fewer than max_radar distinct partners exist
         if len(top) >= max_radar:
             break
@@ -868,14 +869,19 @@ def render_trade_radar(ctx):
             f'</div>')
     if not rows:
         rows = [f'<div style="color:{MUTED};">No trade fits right now.</div>']
+    body = "".join(rows)
     if offer_cards:
         title = "Trades"
         n_off = len(offer_cards)
-        sub = (f'{n_off} incoming offer{"s" if n_off != 1 else ""} to review '
-               f'&middot; then top swap ideas')
+        sub = f'{n_off} incoming offer{"s" if n_off != 1 else ""} to review'
+        # A single offer fits the tile; multiple offers get a scrollable pane (per user
+        # preference — the ONLY other scroll region on the dashboard is Lineup Watch) so
+        # every live decision is reachable without any getting clipped.
+        if n_off > 1:
+            body = f'<div style="height:100%;overflow-y:auto;">{body}</div>'
     else:
         title, sub = "Trade Radar", "top mutual-benefit swaps &middot; hover a badge for why"
-    return _tile(title, "".join(rows), flex=0.9, sub=sub)
+    return _tile(title, body, flex=0.9, sub=sub)
 
 
 # ── Column 3: Moves, FA Radar, Season ───────────────────────────────────────────
