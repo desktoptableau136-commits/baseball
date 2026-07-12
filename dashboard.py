@@ -172,6 +172,12 @@ def build_context(snap, my_team):
     pit_pctile = sd.build_cat_percentiles(_pit_pool, sd._FA_RP_CATS)
     trades = sd.find_trades(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
                             pos_data, hit_pctile, pit_pctile)
+    # Real pending trade OFFERS (my team only) — graded once, same as the digest. A concrete
+    # offer to decide on outranks the speculative radar ideas, so the tile leads with it.
+    pending_incoming = [g for g in sd._grade_pending_trades(
+        snap.get("pending_trades") or [], pitchers, hitters, roto, my_team,
+        best_recent_p, best_recent_h, pos_data, hit_pctile, pit_pctile, today_str=today_str)
+        if g["incoming"]] if not override else []
 
     # Per-week roto scores → sparkline + weekly finishes + KPI averages
     my_key = " ".join(my_team.split())
@@ -223,7 +229,7 @@ def build_context(snap, my_team):
         fa_sp=fa_sp, fa_rp=fa_rp, fa_hit=fa_hit, luck=luck, my_row=my_row, cats=cats, n_teams=n,
         weekly_avgs=weekly_avgs, weekly_std=weekly_std, classification=classification, pit_proj=pit_proj,
         pos_data=pos_data, starts=starts, alerts=alerts, hit_pctile=hit_pctile,
-        trades=trades,
+        trades=trades, pending_incoming=pending_incoming,
         lineup_eff_current=lineup_eff_current, roster_sugg=roster_sugg, emerging=emerging, fading=fading,
         sparkline=sparkline, peak_label=peak_label, roto_week_results=roto_week_results,
         weekly_results=weekly_results, wk_ranks=wk_ranks, wk_pts=wk_pts,
@@ -778,25 +784,62 @@ def render_trade_radar(ctx):
                 f'{sd.team_logo(p.get("Team"), 12)}<span style="color:{TEXT};">{p.get("PlayerName")}</span> '
                 f'{_score_pill_tip(p)}{chips}</div>')
 
-    # Abbreviated view: prefer TWO DISTINCT partners (the dashboard is already dense — two
-    # is enough; showing two deals with the same team wastes the space); backfill from the
-    # full ranked list if only one distinct team fits.
+    _clip = "overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"
+    _colhdr = "font-size:9.5px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;margin-bottom:2px;"
+
+    def pl_entry(entry, is_get):
+        r, nm = entry
+        if r is None:
+            return (f'<div style="font-size:12px;line-height:1.5;{_clip}color:{MUTED};">'
+                    f'{nm} <span style="font-size:9px;">(no data)</span></div>')
+        return pl(r, is_get)
+
+    # A REAL incoming offer is a decision on a clock — it leads the tile, above the
+    # speculative radar ideas (which drop to one row so the tile stays zero-scroll).
+    pending = ctx.get("pending_incoming") or []
+    offer_cards = []
+    for g in pending:
+        label, vcolor, why = g["verdict"] if g.get("verdict") else ("REVIEW", ACCENT, "")
+        logo = sd.fantasy_logo(ctx["team_logos"].get(g["partner"], ""), 14, g["partner"])
+        give = "".join(pl_entry(e, False) for e in g["give_rows"])
+        get_ = "".join(pl_entry(e, True)  for e in g["get_rows"])
+        exp = (f'<div style="font-size:9px;color:{RED};font-weight:600;">{g["expiry_str"]}</div>'
+               if g.get("expiry_str") else "")
+        counter = (f'<div style="font-size:10px;color:{YELLOW};margin-top:5px;">'
+                   f'&#128161; Counter: {g["counter"]}</div>' if g.get("counter") else "")
+        offer_cards.append(
+            f'<div style="background:{SURFACE2};border-left:3px solid {vcolor};border-radius:6px;'
+            f'padding:7px 9px;margin-bottom:8px;">'
+            f'<div style="display:flex;align-items:flex-start;gap:8px;">'
+            f'<div style="flex:0 0 27%;min-width:0;">'
+            f'<div style="font-size:8.5px;font-weight:700;letter-spacing:.4px;color:{ACCENT};'
+            f'text-transform:uppercase;">&#128229; Offer to review</div>'
+            f'<div style="font-size:11.5px;{_clip}">{logo}<span style="color:{TEXT};font-weight:600;">{g["partner"]}</span></div>'
+            f'<div style="margin-top:2px;">{sd._verdict_pill(label, vcolor)}</div>{exp}</div>'
+            f'<div style="flex:1 1 0;min-width:0;">'
+            f'<div style="{_colhdr}color:{RED};">Give</div>{give}</div>'
+            f'<div style="flex:1 1 0;min-width:0;">'
+            f'<div style="{_colhdr}color:{GREEN};">Get</div>{get_}</div>'
+            f'</div>{counter}</div>')
+
+    # Abbreviated view: prefer DISTINCT partners (the dashboard is dense); backfill from the
+    # full ranked list if only one distinct team fits. Fewer radar ideas when a real offer
+    # is already leading the tile.
+    max_radar = 1 if offer_cards else 2
     top, _seen = [], set()
     for t in trades:
         if t["team"] in _seen:
             continue
         _seen.add(t["team"]); top.append(t)
-        if len(top) >= 2:
+        if len(top) >= max_radar:
             break
-    for t in trades:               # backfill if fewer than 2 distinct partners exist
-        if len(top) >= 2:
+    for t in trades:               # backfill if fewer than max_radar distinct partners exist
+        if len(top) >= max_radar:
             break
         if t not in top:
             top.append(t)
 
-    rows = []
-    _clip = "overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"
-    _colhdr = "font-size:9.5px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;margin-bottom:2px;"
+    rows = list(offer_cards)
     for t in top:
         give = "".join(pl(o, False) for o in t["outs"])
         get_ = "".join(pl(i, True) for i in t["ins"])
@@ -825,7 +868,14 @@ def render_trade_radar(ctx):
             f'</div>')
     if not rows:
         rows = [f'<div style="color:{MUTED};">No trade fits right now.</div>']
-    return _tile("Trade Radar", "".join(rows), flex=0.9, sub="top mutual-benefit swaps &middot; hover a badge for why")
+    if offer_cards:
+        title = "Trades"
+        n_off = len(offer_cards)
+        sub = (f'{n_off} incoming offer{"s" if n_off != 1 else ""} to review '
+               f'&middot; then top swap ideas')
+    else:
+        title, sub = "Trade Radar", "top mutual-benefit swaps &middot; hover a badge for why"
+    return _tile(title, "".join(rows), flex=0.9, sub=sub)
 
 
 # ── Column 3: Moves, FA Radar, Season ───────────────────────────────────────────
