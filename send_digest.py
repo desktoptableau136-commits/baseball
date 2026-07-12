@@ -4787,14 +4787,17 @@ def render_briefing(my_team, today, matchup, classification, starts, today_str,
     # ── Analyst-voice narrative of the matchup (connected sentences) ────────────
     margin = pw - pl
     n_toss = len(toss_cats)
+    # Framed as the PROJECTION, not the current standing: the visible record is "now"
+    # (e.g. a 6-6-0 tie), while pw/pl is where the categories are trending -- so "ahead"
+    # must read as projected, not as a claim about the tied current record beside it.
     if pw > pl:
-        lead_in = ("You're firmly in control of this matchup" if (margin >= 4 and n_toss <= 3)
-                   else "You're ahead here, though it isn't locked away")
+        lead_in = ("The projection has you firmly in control of this matchup" if (margin >= 4 and n_toss <= 3)
+                   else "The projection leans your way, though it isn't locked away")
     elif pl > pw:
-        lead_in = ("You're in a real hole this matchup" if (pl - pw) >= 4
-                   else "You're behind, but it's within striking distance")
+        lead_in = ("The projection has you in a real hole this matchup" if (pl - pw) >= 4
+                   else "The projection has you trailing, but within striking distance")
     else:
-        lead_in = "This one's a dead heat"
+        lead_in = "The projection is a dead heat"
 
     where = []
     if lead_hit:
