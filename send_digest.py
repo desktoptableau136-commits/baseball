@@ -2642,6 +2642,39 @@ def _trade_pos_groups(r):
     return {label for label, slots, _ in POS_GROUPS if tags & slots}
 
 
+def _trade_value(r, ptype, hit_pctile, pit_pctile):
+    """Cross-role trade currency (`_tval`): summed above-median category contribution.
+    Hitters span 5 everyday cats; a reliever's counting stats (K/W) rank low vs the whole
+    pitcher pool (volume-aware) and SV+H is punt-discounted — so an everyday bat outweighs
+    a one-category closer even when both post a top role-score badge. Promoted from a
+    find_trades closure so the pending-trade evaluator grades on the SAME currency."""
+    cats, pctile = (_FA_HIT_CATS, hit_pctile) if ptype == "hit" else (_FA_RP_CATS, pit_pctile)
+    v = 0.0
+    for c in cats:
+        p = _cat_pctile(pctile, c, _cat_value(r, c))
+        v += max(0.0, p - 0.5) * (_TRADE_SVHD_W if c == "SVHD" else 1.0)
+    return v
+
+
+def _enrich_trade_player(r, ptype, best_recent_p, best_recent_h, hit_pctile, pit_pctile):
+    """Attach the trade-scoring fields to a player row (role score, cat strengths, value
+    currency, buy/sell timing, position groups). Promoted from a find_trades closure so
+    both find_trades and build_pending_trades_section share one source of truth."""
+    if ptype == "hit":
+        r["_tscore"] = _blend(r, hitter_score, best_recent_h)
+        r["_tcats"]  = set(player_cat_strengths(r, hit_pctile, _FA_HIT_CATS, set()))
+    else:
+        r["_tscore"] = _score_p(r, best_recent_p)
+        r["_tcats"]  = set(player_cat_strengths(r, pit_pctile, _FA_RP_CATS, set()))
+    r["_tval"]    = _trade_value(r, ptype, hit_pctile, pit_pctile)
+    _flag = _regression_flag(r) if ptype == "hit" else pitcher_regression_flag(r)
+    r["_tsell"]   = (_flag == "sell")
+    r["_tbuy"]    = (_flag == "buy")
+    r["_tgroups"] = _trade_pos_groups(r)
+    r["_tptype"]  = ptype
+    return r
+
+
 def find_trades(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
                 pos_data, hit_pctile, pit_pctile):
     """Ranked list of mutually-beneficial trades between my_team and each rival.
@@ -2676,32 +2709,8 @@ def find_trades(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
                 if " ".join((r.get("FantasyTeam") or "").split()) == team
                 and int(r.get("Dataset", 0) or 0) == YEAR]
 
-    def _trade_value(r, ptype):
-        """Cross-role trade currency: summed above-median category contribution. Hitters
-        span 5 everyday cats; a reliever's counting stats (K/W) rank low vs the whole
-        pitcher pool (volume-aware) and SV+H is punt-discounted — so an everyday bat
-        outweighs a one-category closer even when both post a top role-score badge."""
-        cats, pctile = (_FA_HIT_CATS, hit_pctile) if ptype == "hit" else (_FA_RP_CATS, pit_pctile)
-        v = 0.0
-        for c in cats:
-            p = _cat_pctile(pctile, c, _cat_value(r, c))
-            v += max(0.0, p - 0.5) * (_TRADE_SVHD_W if c == "SVHD" else 1.0)
-        return v
-
     def enrich(r, ptype):
-        if ptype == "hit":
-            r["_tscore"] = _blend(r, hitter_score, best_recent_h)
-            r["_tcats"]  = set(player_cat_strengths(r, hit_pctile, _FA_HIT_CATS, set()))
-        else:
-            r["_tscore"] = _score_p(r, best_recent_p)
-            r["_tcats"]  = set(player_cat_strengths(r, pit_pctile, _FA_RP_CATS, set()))
-        r["_tval"]    = _trade_value(r, ptype)
-        _flag = _regression_flag(r) if ptype == "hit" else pitcher_regression_flag(r)
-        r["_tsell"]   = (_flag == "sell")
-        r["_tbuy"]    = (_flag == "buy")
-        r["_tgroups"] = _trade_pos_groups(r)
-        r["_tptype"]  = ptype
-        return r
+        return _enrich_trade_player(r, ptype, best_recent_p, best_recent_h, hit_pctile, pit_pctile)
 
     my_players = ([enrich(r, "hit") for r in roster(hitters, my_key)] +
                   [enrich(r, "pit") for r in roster(pitchers, my_key)])
@@ -2865,6 +2874,172 @@ def _trade_player_line(r, hi_cats, hi_color, side, show_pos=False,
     return (f'<div style="margin:3px 0;font-size:12px;color:{TEXT};white-space:nowrap;">'
             f'{logo}<span style="font-weight:600;">{nm}</span> '
             f'{score_html}{chips}</div>{reveal}')
+
+
+def _verdict_pill(label, color):
+    """The Accept/Counter/Decline pill for a pending trade (shared by the section render
+    and the glossary so the two can't drift)."""
+    return (f'<span style="background:{color};color:#0b1220;font-weight:800;'
+            f'font-size:11px;padding:2px 9px;border-radius:10px;">{label}</span>')
+
+
+def _pending_verdict(net_val, addresses_need, timing, incoming):
+    """Accept / Counter / Decline lean for a pending trade, from the SAME signals
+    find_trades ranks on: my value edge (net_val = get − give), whether it addresses a
+    real category/positional need, and timing (positive = I sell-high / buy-low, negative
+    = a trap I'd be selling a riser / buying a regressor). Returns (label, color, why).
+    Only meaningful for INCOMING offers (mine to decide); outgoing gets a status read
+    instead. Thresholds mirror the Trade Radar value tilt (±0.1)."""
+    trap = timing < 0
+    if net_val >= 0.1 and not trap:
+        return ("ACCEPT", GREEN, "you win the value" +
+                (" and it fills a need" if addresses_need else ""))
+    if addresses_need and net_val >= -0.1 and not trap:
+        return ("ACCEPT", GREEN, "roughly even value and it fills a real need")
+    if addresses_need:
+        why = ("you'd be paying up" if net_val < -0.1 else "the timing is a trap")
+        return ("COUNTER", YELLOW, f"right direction but {why} — ask for more")
+    if net_val >= 0.1:
+        return ("ACCEPT", GREEN, "you win the value")
+    return ("DECLINE", RED, "no need addressed and you don't gain value")
+
+
+def build_pending_trades_section(pending, pitchers, hitters, roto, my_team,
+                                 best_recent_p, best_recent_h, pos_data,
+                                 hit_pctile, pit_pctile, team_logos=None):
+    """Grade the REAL pending trade offers involving my team (snapshot `pending_trades`),
+    reusing the Trade Radar machinery (`_enrich_trade_player` value/score/timing +
+    `_trade_player_line` render). Distinguishes an INCOMING offer (a rival proposed it →
+    Accept/Counter/Decline verdict) from an OUTGOING one (I proposed it → awaiting the
+    partner). Returns "" when nothing is pending."""
+    if not pending:
+        return ""
+    team_logos = team_logos or {}
+
+    # YEAR-preferred row lookups (fall back 30→15→7), keyed like the Today's Games block.
+    hit_rows, pit_rows = {}, {}
+    for _ds in (7, 15, 30, YEAR):
+        for _r in hitters:
+            if int(_n(_r.get("Dataset")) or 0) == _ds and _r.get("PlayerName"):
+                hit_rows[_badge_name_key(_r["PlayerName"])] = _r
+        for _r in pitchers:
+            if int(_n(_r.get("Dataset")) or 0) == _ds and _r.get("PlayerName"):
+                pit_rows[_badge_name_key(_r["PlayerName"])] = _r
+
+    # Category need/surplus matrix (same convention as find_trades).
+    ranks, n = team_category_ranks(roto)
+    third = max(1, round(n / 3.0)) if n else 1
+    needs_of   = lambda tk: {c for c, rk in ranks.get(tk, {}).items() if rk >= n - third + 1}
+    surplus_of = lambda tk: {c for c, rk in ranks.get(tk, {}).items() if rk <= third}
+    my_key   = " ".join(my_team.split())
+    my_needs = needs_of(my_key)
+    # Thin hitter positions of mine → {pos: (rank, my_avg_score)} (positional need, hitter-only).
+    _nt    = lambda p: (p.get("n_teams") or n or 1)
+    _third = lambda p: max(1, round(_nt(p) / 3.0))
+    need_pos = {p["pos"]: ((p.get("rank") or _nt(p)), (p.get("my_avg") or 0))
+                for p in pos_data if p.get("ptype") == "hit"
+                and (p.get("rank") or _nt(p)) >= _nt(p) - _third(p) + 1}
+
+    def _resolve(entry):
+        """(row_or_None, ptype) for a traded player name."""
+        k = _badge_name_key(entry.get("name", ""))
+        if k in hit_rows:
+            return _enrich_trade_player(dict(hit_rows[k]), "hit", best_recent_p,
+                                        best_recent_h, hit_pctile, pit_pctile), "hit"
+        if k in pit_rows:
+            return _enrich_trade_player(dict(pit_rows[k]), "pit", best_recent_p,
+                                        best_recent_h, hit_pctile, pit_pctile), "pit"
+        return None, None
+
+    def _plain_line(name):
+        return (f'<div style="margin:3px 0;font-size:12px;color:{MUTED};white-space:nowrap;">'
+                f'<span style="font-weight:600;">{name}</span> '
+                f'<span style="font-size:10px;">(no data)</span></div>')
+
+    cards = []
+    for tr in pending:
+        partner   = " ".join((tr.get("partner") or "").split())
+        incoming  = bool(tr.get("incoming"))
+        get_rows  = [(_resolve(e), e.get("name")) for e in (tr.get("get") or [])]
+        give_rows = [(_resolve(e), e.get("name")) for e in (tr.get("give") or [])]
+        ins  = [r for ((r, pt), nm) in get_rows if r is not None]
+        outs = [r for ((r, pt), nm) in give_rows if r is not None]
+
+        # Positional slots the incoming hitters upgrade (for the CYAN chip + verdict need).
+        for r in ins:
+            r["_tfillpos"] = sorted(pos for pos in (r["_tgroups"] & set(need_pos))
+                                    if r["_tptype"] == "hit" and r["_tscore"] > need_pos[pos][1])
+
+        get_val = sum(r["_tval"] for r in ins)
+        give_val = sum(r["_tval"] for r in outs)
+        net_val = get_val - give_val
+
+        p_needs   = needs_of(partner)
+        gcov = set().union(*[r["_tcats"] for r in ins]) & my_needs if ins else set()
+        gpos = set().union(*[set(r.get("_tfillpos", [])) for r in ins]) if ins else set()
+        scov = set().union(*[r["_tcats"] for r in outs]) & p_needs if outs else set()
+        addresses_need = bool(gcov or gpos)
+
+        sell_out = sum(1 for r in outs if r.get("_tsell"))   # good: move my regressors
+        buy_in   = sum(1 for r in ins  if r.get("_tbuy"))    # good: acquire their risers
+        buy_out  = sum(1 for r in outs if r.get("_tbuy"))    # bad: don't sell my risers low
+        sell_in  = sum(1 for r in ins  if r.get("_tsell"))   # bad: don't buy their regressors
+        timing = sell_out + buy_in - buy_out - sell_in
+
+        # Render give / get columns.
+        give_html = "".join(
+            (_trade_player_line(r, scov, MUTED, "give", best_recent_p=best_recent_p,
+                                best_recent_h=best_recent_h, hit_pctile=hit_pctile)
+             if r is not None else _plain_line(nm))
+            for ((r, pt), nm) in give_rows)
+        get_html = "".join(
+            (_trade_player_line(r, gcov, ACCENT, "get", show_pos=True, best_recent_p=best_recent_p,
+                                best_recent_h=best_recent_h, hit_pctile=hit_pctile)
+             if r is not None else _plain_line(nm))
+            for ((r, pt), nm) in get_rows)
+
+        value = ("you win the value" if net_val > 0.1 else
+                 "even value" if net_val >= -0.1 else "you pay up")
+
+        if incoming:
+            label, vcolor, why = _pending_verdict(net_val, addresses_need, timing, incoming)
+            tag = f'<span style="color:{ACCENT};font-weight:700;">OFFER TO YOU</span>'
+            verdict_html = f'{_verdict_pill(label, vcolor)} <span style="color:{MUTED};">{why}</span>'
+        else:
+            tag = f'<span style="color:{MUTED};font-weight:700;">YOUR OFFER</span>'
+            verdict_html = (f'<span style="color:{MUTED};">Awaiting '
+                            f'<span style="color:{TEXT};font-weight:700;">{partner or "partner"}</span>'
+                            f' &middot; {value} from your side</span>')
+
+        gains = ([_CAT_DISPLAY.get(c, c) for c in sorted(gcov, key=lambda c: -ranks[my_key][c])]
+                 + [f"{p} slot" for p in sorted(gpos, key=lambda p: -need_pos[p][0])])
+        get_lbl  = ", ".join(gains) or "depth"
+        logo = fantasy_logo(team_logos.get(partner, ""), size=20, team_name=partner)
+        cards.append(
+            f'<div style="background:{SURFACE};border:1px solid {BORDER};border-radius:8px;'
+            f'padding:12px 14px;margin-bottom:12px;">'
+            f'<div style="font-size:11px;color:{MUTED};margin-bottom:8px;">{tag}'
+            f' &middot; with {logo}<span style="color:{TEXT};font-weight:700;">{partner}</span></div>'
+            f'<table style="width:100%;border-collapse:collapse;"><tr>'
+            f'<td style="width:47%;vertical-align:top;">'
+            f'<div style="font-size:9px;font-weight:700;color:{RED};text-transform:uppercase;'
+            f'letter-spacing:.5px;margin-bottom:3px;">You give</div>{give_html}</td>'
+            f'<td style="width:6%;text-align:center;color:{MUTED};font-size:17px;vertical-align:middle;">&#8644;</td>'
+            f'<td style="width:47%;vertical-align:top;">'
+            f'<div style="font-size:9px;font-weight:700;color:{GREEN};text-transform:uppercase;'
+            f'letter-spacing:.5px;margin-bottom:3px;">You get</div>{get_html}</td>'
+            f'</tr></table>'
+            f'<div style="font-size:11px;margin-top:8px;border-top:1px solid {BORDER};'
+            f'padding-top:7px;">{verdict_html}'
+            f'<div style="color:{MUTED};margin-top:3px;">Upgrades your '
+            f'<span style="color:{ACCENT};font-weight:700;">{get_lbl}</span></div></div>'
+            f'</div>'
+        )
+
+    n_in = sum(1 for t in pending if t.get("incoming"))
+    sub = (f'{len(pending)} live offer{"s" if len(pending) != 1 else ""}'
+           + (f' &middot; {n_in} awaiting your decision' if n_in else ' &middot; awaiting partners'))
+    return section_head("Pending Trades", sub) + "".join(cards)
 
 
 def build_trade_radar(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
@@ -4015,6 +4190,15 @@ def build_glossary_section():
                "The <b>%</b> in each card corner is your odds of winning that category (normal model of the final "
                "margin), colored to the projected outcome. On a toss-up — odds near even, or a projected tie — a "
                "<b>⚡</b> replaces the number instead."),
+
+        _subhead("Pending trades"),
+        _entry(f'Verdict{_verdict_pill("ACCEPT", GREEN)}&nbsp;{_verdict_pill("COUNTER", YELLOW)}&nbsp;{_verdict_pill("DECLINE", RED)}',
+               "On a real trade offer made <b>to you</b>, the lean: <b>ACCEPT</b> (green) = you win the value, or "
+               "it's roughly even and fills a real category/positional need without a timing trap; <b>COUNTER</b> "
+               "(yellow) = the right direction but you'd be paying up or selling a riser / buying a regressor — ask "
+               "for more; <b>DECLINE</b> (red) = it addresses no need and you don't gain value. Value is judged on "
+               "the same cross-role currency Trade Radar uses. An offer <b>you</b> proposed shows an "
+               "&ldquo;awaiting {partner}&rdquo; status instead (it's their call)."),
     ])
     pitching = _group("Pitching metrics", [
         _entry("xERA / xwOBA-against", "Baseball Savant “deserved” run prevention from contact quality — "
@@ -5165,9 +5349,26 @@ def build_email(snap, override_team=None):
 </table>"""
 
     # ── Alerts ─────────────────────────────────────────────────────────────────
-    if alerts:
-        inj_notes = fetch_injury_notes()
-        items_html = []
+    # Incoming trade offers (a rival proposed → my decision) surface at the very top,
+    # pointing to the full Accept/Counter/Decline grade in the Pending Trades section.
+    trade_alert_items = []
+    if not override_team:
+        for _pt in (snap.get("pending_trades") or []):
+            if not _pt.get("incoming"):
+                continue
+            _partner = " ".join((_pt.get("partner") or "").split()) or "a rival"
+            _get = ", ".join(e.get("name", "") for e in (_pt.get("get") or [])) or "—"
+            _give = ", ".join(e.get("name", "") for e in (_pt.get("give") or [])) or "—"
+            trade_alert_items.append(
+                f'<div style="padding:5px 0;border-bottom:1px solid {BORDER};font-size:12px;">'
+                f'<span style="color:{ACCENT};">&#129309;</span> '
+                f'<strong style="color:{TEXT};">Trade offer from {_partner}</strong>'
+                f'<span style="color:{MUTED};font-size:10px;margin-left:8px;">'
+                f'get {_get} for {_give} &middot; see Pending Trades below</span></div>'
+            )
+    if alerts or trade_alert_items:
+        inj_notes = fetch_injury_notes() if alerts else {}
+        items_html = list(trade_alert_items)
         for a in alerts:
             status_color = RED if (a["status"] in _DL_STATUSES or a["status"].startswith("IL")) else YELLOW
             note = inj_notes.get(a["name"].lower(), {})
@@ -6126,6 +6327,11 @@ def build_email(snap, override_team=None):
     )
     # Matchup-to-date Lineup Watch (my team only — snapshot stores only my daily lineup).
     bench_watch = build_bench_watch(snap.get("lineup_efficiency_current") or {}) if not override_team else ""
+    # Pending trade offers (my team only — snapshot stores only my pending trades).
+    pending_trades = snap.get("pending_trades") or []
+    pending_section = (build_pending_trades_section(
+        pending_trades, pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
+        pos_data, hit_pctile, pit_pctile, team_logos=team_logos) if not override_team else "")
     body_parts += [
         build_prev_matchup_recap(prev_matchup, team_logos=team_logos) if is_monday and prev_matchup.get("week") != (matchup or {}).get("week") else "",  # 2a MONDAY RECAP
         week_overview,                                                                    # 2  WEEK INTELLIGENCE
@@ -6147,6 +6353,7 @@ def build_email(snap, override_team=None):
         build_pitcher_hot_cold_section(pitchers, my_team, rec_p, best_recent_p),         # 8
         build_hot_cold_section(hitters, recent_hitting, my_team, best_recent_h, hit_pctile),  # 9
         band_divider("TRANSACTIONS", anchor="band-fa"),                                   # ACTION band header (FA pickups + Trade Radar)
+        pending_section,                                                                  # 10b Pending Trades (real offers — Accept/Counter/Decline)
         fa_sp_section,                                                                    # 11
         fa_rp_section,                                                                    # 12
         fa_hit_section,                                                                   # 13

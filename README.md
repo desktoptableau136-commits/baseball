@@ -219,6 +219,7 @@ KPI row: **Record** · **Current Matchup** (W-L-T + win%) · **Roster** (whole-t
 12. **Roster Hot/Cold**
 
 **TRANSACTIONS**
+12b. **Pending Trades** — the real trade offers involving your team, each graded **Accept / Counter / Decline** (for offers made to you) or shown as *awaiting the partner* (for offers you sent), with the same player scores and value read as Trade Radar *(shown only when a trade is pending)*
 13. **FA Pickup — Starting Pitchers**
 14. **FA Pickup — Relief Pitchers**
 15. **FA Pickup — Hitters**

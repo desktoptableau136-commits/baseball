@@ -76,6 +76,7 @@ _EXPECTED = {
     "lineup_efficiency":         dict,
     "lineup_efficiency_current": dict,
     "todays_games":              list,   # legitimately empty on an off-day / off-season
+    "pending_trades":            list,   # legitimately empty when no trades are pending
 }
 
 # Fields a well-formed row of each list carries. WARN if coverage drops below the floor
