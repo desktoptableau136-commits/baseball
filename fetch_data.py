@@ -1002,6 +1002,100 @@ def get_transactions(league) -> list:
     return rows
 
 
+def get_pending_trades(league, my_team_name) -> list:
+    """Pending trade PROPOSALS involving my team, from MY perspective.
+
+    espn_api does not expose pending trades, so we hit the raw ESPN endpoint with the
+    same cookies the League object holds. Trades live under the top-level
+    `pendingTransactions` key (NOT `transactions`). For each PENDING TRADE_PROPOSAL we
+    record its direction (get/give) from my team's id and whether it is INCOMING (a
+    rival proposed it -> awaiting my accept/decline/counter) or OUTGOING (I proposed it
+    -> awaiting the partner). Only trades that touch my team are kept. Broad try/except
+    -> [] so an ESPN hiccup never blocks the snapshot write (same discipline as
+    fetch_todays_games)."""
+    try:
+        my_key = " ".join((my_team_name or "").split())
+        team_by_id = {t.team_id: t.team_name for t in league.teams}
+        my_id = next((tid for tid, nm in team_by_id.items()
+                      if " ".join((nm or "").split()) == my_key), None)
+        if my_id is None:
+            return []
+
+        # player id -> (name, proTeam abbrev) from every roster (traded players are rostered)
+        pid_info = {}
+        for t in league.teams:
+            for p in t.roster:
+                pid_info[p.playerId] = (p.name, getattr(p, "proTeam", "") or "")
+
+        def _pname(pid):
+            if pid in pid_info:
+                return pid_info[pid]
+            try:
+                info = league.player_info(playerId=pid)
+                if info:
+                    return (info.name, getattr(info, "proTeam", "") or "")
+            except Exception:
+                pass
+            return (f"player#{pid}", "")
+
+        my_swid = str(ESPN_CONFIG.get("swid") or "").upper()
+        url = (f"https://lm-api-reads.fantasy.espn.com/apis/v3/games/flb/seasons/"
+               f"{ESPN_CONFIG['year']}/segments/0/leagues/{ESPN_CONFIG['league_id']}"
+               f"?view=mPendingTransactions")
+        cookies = {"espn_s2": ESPN_CONFIG["espn_s2"], "SWID": ESPN_CONFIG["swid"]}
+        resp = requests.get(url, cookies=cookies,
+                            headers={"User-Agent": "Mozilla/5.0"}, timeout=30)
+        resp.raise_for_status()
+        data = resp.json()
+        top = data if isinstance(data, dict) else data[0]
+        pending = top.get("pendingTransactions") or []
+
+        out = []
+        for tr in pending:
+            if tr.get("type") != "TRADE_PROPOSAL" or tr.get("status") != "PENDING":
+                continue
+            items = tr.get("items") or []
+            team_ids = {it.get("fromTeamId") for it in items} | {it.get("toTeamId") for it in items}
+            if my_id not in team_ids:
+                continue
+            partner_id = next((tid for tid in team_ids if tid not in (my_id, None)), None)
+            # I proposed it iff the proposing member's SWID is mine.
+            incoming = str(tr.get("memberId") or "").upper() != my_swid
+
+            get_side, give_side = [], []
+            for it in items:
+                if it.get("type") != "TRADE":
+                    continue
+                nm, pro = _pname(it.get("playerId"))
+                entry = {"name": nm, "playerId": it.get("playerId"), "mlb_team": pro}
+                if it.get("toTeamId") == my_id:
+                    get_side.append(entry)
+                elif it.get("fromTeamId") == my_id:
+                    give_side.append(entry)
+
+            expires = tr.get("expirationDate")
+            try:
+                expires_iso = (datetime.fromtimestamp(expires / 1000, tz=timezone.utc).isoformat()
+                               if expires else "")
+            except Exception:
+                expires_iso = ""
+
+            out.append({
+                "id":       tr.get("id"),
+                "proposer": team_by_id.get(tr.get("teamId"), ""),
+                "partner":  team_by_id.get(partner_id, ""),
+                "incoming": incoming,
+                "status":   tr.get("status"),
+                "expires":  expires_iso,
+                "get":      get_side,
+                "give":     give_side,
+            })
+        return out
+    except Exception as e:
+        log(f"get_pending_trades failed: {e}")
+        return []
+
+
 # â”€â”€ PITCHER PIPELINE â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def build_pitcher_data(league) -> list:
@@ -2093,6 +2187,11 @@ def main():
     todays_games = fetch_todays_games(league)
     print(f"       {len(todays_games)} games with rostered-player involvement")
 
+    print("       Fetching pending trade proposals...")
+    pending_trades = get_pending_trades(league, my_team)
+    _n_in = sum(1 for t in pending_trades if t.get("incoming"))
+    print(f"       {len(pending_trades)} pending trade(s) ({_n_in} incoming)")
+
     # Total roster cap = max total players (active + IL) on any team. The fullest team is at the cap.
     # send_digest uses: open_spots = league_total_roster_max - my_total → free pickup if > 0.
     from collections import Counter as _Counter
@@ -2128,6 +2227,7 @@ def main():
         "lineup_efficiency":         lineup_efficiency,
         "lineup_efficiency_current": lineup_efficiency_current,
         "todays_games":              todays_games,
+        "pending_trades":            pending_trades,
     }
 
     # Validate the reader contract BEFORE persisting -- a broken snapshot fails LOUD here
