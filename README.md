@@ -144,6 +144,27 @@ It's also **responsive**: on a tablet (≤1100px) the tiles reflow into two heig
 
 **Viewing on a phone/tablet:** use `--email` (or attach `previews/dashboard_{team}.html` to an email yourself) and open the **attachment** in your device browser — email apps strip the `<style>` block that holds the layout, so the attached file works but a pasted-in body won't.
 
+### Interactive Trade Lab
+
+A hands-on, **browser-only** trade builder. Where the digest's Trade Radar hands you finished ideas, the Trade Lab lets you construct your own: pick any two teams, browse each roster grouped by role, click players onto each side of the deal, and watch it get graded in real time.
+
+```bash
+# Write previews/tradelab_{team}.html from the existing snapshot (fast, no email)
+python trade_lab.py
+
+# Refresh data first, then write
+python trade_lab.py --refresh
+
+# Default the left (my) side to another team
+python trade_lab.py --team "Houck Tuah"
+```
+
+Open the file in a browser (it's the only page here that uses JavaScript, so it **can't be emailed** — mail clients strip the script). The layout is three columns — **My Team · Trade · Trade Partner**. Each side has a team dropdown (any of the 12 teams) and lists that roster as **Hitters / Starting Pitchers / Relief Pitchers**, every player carrying the same tactical badges (PWR, SB, ⚠, $ / ▼) and a color-coded **score pill** you can click to expand a plain-English breakdown — identical to the digest.
+
+Click players to drop them into the center **You give / You get** ledger and the panel grades the deal live: an **Accept / Counter / Decline** verdict, the value tilt (*you win the value / even / you pay up*), the categories you gain (green when they fill one of your needs) and lose (red when it's a real strength), any positional upgrades, the timing read (are you selling high / buying low, or walking into a trap), and a **"Would they do it?"** partner-fit line that checks whether what you're offering addresses the other team's actual category needs. Every number is pre-computed by the same scoring code as the digest, so the lab can never disagree with it.
+
+Two things help you build the deal quickly. Each player carries a **position chip** by their name, and partner players who'd actually help you are flagged with a **🎯 target** marker (they're strong in a category you need, or upgrade one of your thin positions). Below the ledger, a **Deal Coach** panel shows what each side needs and your leverage, then lists **value-ranked, clickable suggestions** — players to *get* that fill your needs and pieces to *offer* that fill theirs (click one to add it) — plus a running balance nudge. A **Fair · Favor me · Fleece** strategy toggle tunes how the coach curates: sliding toward *Fleece* protects your best players from the offer list, leads with cheaper fillers, and aims for a bigger value edge in your favor. The toggle only shapes the coaching — the Accept/Counter/Decline verdict stays objective.
+
 **On Windows PowerShell**, if `git` isn't found, run this first to restore it:
 ```powershell
 $env:PATH = [System.Environment]::GetEnvironmentVariable("PATH","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("PATH","User")
@@ -581,6 +602,7 @@ baseball/
 ├── fetch_data.py                        # Data pipeline — runs first (~60s)
 ├── send_digest.py                       # Email builder + sender
 ├── dashboard.py                         # Single-viewport command dashboard (--refresh/--team/--email)
+├── trade_lab.py                         # Interactive browser-only Trade Lab (--refresh/--team; JS, not emailable)
 ├── weekly_recap.py                      # Monday full-league recap email builder
 ├── bench_leakage.py                     # Standalone daily-lineup audit (my team + opponent → console)
 ├── backtest_projections.py              # Standalone walk-forward accuracy check of the SP proj line → console
