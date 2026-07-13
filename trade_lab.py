@@ -256,6 +256,7 @@ def build_html(data):
         <div class="get"><div class="lhead get-h">YOU GET</div><div id="getList" class="llist"></div></div>
       </div>
       <div id="reads"></div>
+      <div id="coach"></div>
       <button id="clearBtn" onclick="clearAll()">Clear deal</button>
     </div>
     <div class="side" id="sideR">
@@ -320,6 +321,23 @@ body {{ margin:0; background:{BG}; color:{TEXT}; font-family:-apple-system,Segoe
 #clearBtn {{ margin-top:12px; width:100%; background:{SURFACE2}; color:{MUTED}; border:1px solid {BORDER}; border-radius:6px; padding:7px; font-size:12px; font-weight:700; cursor:pointer; }}
 #clearBtn:hover {{ color:{TEXT}; }}
 .empty {{ color:{MUTED}; font-size:12px; font-style:italic; }}
+#coach {{ margin-top:12px; padding-top:10px; border-top:1px solid {BORDER}; }}
+.coachhdr {{ font-size:10px; font-weight:800; letter-spacing:.8px; color:{ACCENT}; margin-bottom:6px; }}
+.stratrow {{ display:flex; align-items:center; gap:5px; margin-bottom:8px; flex-wrap:wrap; }}
+.stratlbl {{ font-size:10px; font-weight:700; color:{MUTED}; text-transform:uppercase; letter-spacing:.5px; margin-right:2px; }}
+.stratbtn {{ font-size:11px; font-weight:700; color:{MUTED}; background:{SURFACE2}; border:1px solid {BORDER}; border-radius:6px; padding:3px 9px; cursor:pointer; }}
+.stratbtn:hover {{ color:{TEXT}; }}
+.stratbtn.active {{ color:#0b1220; background:{ACCENT}; border-color:{ACCENT}; }}
+.ctxline {{ font-size:11.5px; line-height:1.7; }}
+.ctxline .lbl {{ color:{MUTED}; font-weight:700; }}
+.sugblock {{ margin-top:9px; }}
+.sughdr {{ font-size:10px; font-weight:700; color:{MUTED}; text-transform:uppercase; letter-spacing:.5px; margin-bottom:4px; }}
+.sugchip {{ display:inline-block; font-size:11px; color:{TEXT}; background:{SURFACE2}; border:1px solid {BORDER}; border-radius:6px; padding:2px 7px; margin:2px 3px 2px 0; cursor:pointer; }}
+.sugchip:hover {{ border-color:{ACCENT}; background:rgba(59,130,246,.12); }}
+.sugchip .plus {{ color:{GREEN}; font-weight:800; margin-right:3px; }}
+.sugchip .sugwhy {{ color:{MUTED}; font-size:10px; margin-left:4px; }}
+.sugchip .v {{ color:{ACCENT}; font-size:10px; font-weight:700; margin-left:5px; }}
+.nudge {{ margin-top:9px; font-size:11.5px; line-height:1.5; color:{TEXT}; background:{SURFACE2}; border:1px solid {BORDER}; border-left:3px solid {ACCENT}; border-radius:5px; padding:6px 9px; }}
 @media (max-width:1000px) {{
   #cols {{ grid-template-columns:1fr; }}
   #mid {{ position:static; order:-1; }}
@@ -330,6 +348,11 @@ body {{ margin:0; background:{BG}; color:{TEXT}; font-family:-apple-system,Segoe
 
 _JS = r"""
 var picked = {{ L:{{}}, R:{{}} }};   // id -> player, per side
+var strategy = 'favor';              // fair | favor | fleece — how hard the coach tilts value to me
+var TARGET_NET = {{ fair:0.0, favor:0.30, fleece:0.70 }};   // value edge the coach steers toward
+var STUD_CEIL  = {{ fair:99, favor:1.6, fleece:1.2 }};      // don't suggest offering my pieces above this value
+
+function setStrategy(s) {{ strategy = s; renderCoach(); }}
 
 function pillColor(s) {{
   if (s >= 72) return '{GREEN}';
@@ -352,13 +375,14 @@ var ROLE_LABEL = {{ hit:'Hitters', sp:'Starting Pitchers', rp:'Relief Pitchers' 
 
 // Why a partner player is worth targeting for MY (left) team: fills a category need
 // or (hitter) upgrades one of my thin positions. Reused from the digest's need logic.
-function targetReasons(p, myMeta) {{
+function targetReasons(p, myMeta, poss) {{
+  poss = poss || 'your';
   var out = [];
   var nc = (p.tcats || []).filter(function(c) {{ return (myMeta.needs || []).indexOf(c) >= 0; }});
-  if (nc.length) out.push('fills your ' + nc.map(function(c) {{ return DATA.catLabels[c] || c; }}).join('/') + ' need');
+  if (nc.length) out.push('fills ' + poss + ' ' + nc.map(function(c) {{ return DATA.catLabels[c] || c; }}).join('/') + ' need');
   if (p.role === 'hit' && myMeta.need_pos) {{
     (p.tgroups || []).forEach(function(pos) {{
-      if ((pos in myMeta.need_pos) && p.score > myMeta.need_pos[pos]) out.push('upgrades your ' + pos);
+      if ((pos in myMeta.need_pos) && p.score > myMeta.need_pos[pos]) out.push('upgrades ' + poss + ' ' + pos);
     }});
   }}
   return out;
@@ -437,6 +461,88 @@ function ledgerItem(side, p) {{
     + '<span class="x" onclick="toggle(\'' + side + '\',\'' + p.id + '\')">&times;</span></div>';
 }}
 
+function flatPool(tk) {{
+  var pl = DATA.players[tk] || {{}};
+  return (pl.hit || []).concat(pl.sp || [], pl.rp || []);
+}}
+
+function needLabels(meta) {{
+  var cats = (meta.needs || []).map(function(c) {{ return DATA.catLabels[c] || c; }});
+  return cats.concat(Object.keys(meta.need_pos || {{}}));
+}}
+
+function sugChip(side, x) {{
+  var why = x.r.length ? x.r[0] : 'top value chip';
+  return '<span class="sugchip" onclick="toggle(\'' + side + '\',\'' + x.p.id + '\')">'
+    + '<span class="plus">+</span>' + x.p.name
+    + '<span class="sugwhy">' + why + '</span>'
+    + '<span class="v">' + x.p.tval.toFixed(1) + '</span></span>';
+}}
+
+// The Deal Coach: match-up context + value-ranked, clickable add suggestions + a
+// running balance nudge. Reuses targetReasons() from BOTH perspectives — partner
+// players that fill MY needs (get) and my players that fill THEIRS (offer).
+function renderCoach() {{
+  var myTk = document.getElementById('selL').value;
+  var partnerTk = document.getElementById('selR').value;
+  var myMeta = DATA.teamsMeta[myTk] || {{ needs:[], surplus:[], need_pos:{{}} }};
+  var partnerMeta = DATA.teamsMeta[partnerTk] || {{ needs:[], surplus:[], need_pos:{{}} }};
+
+  var youNeed = needLabels(myMeta);
+  var theyNeed = needLabels(partnerMeta);
+  var leverage = (myMeta.surplus || []).filter(function(c) {{ return (partnerMeta.needs || []).indexOf(c) >= 0; }})
+                   .map(function(c) {{ return DATA.catLabels[c] || c; }});
+
+  function notPicked(p) {{ return !picked.L[p.id] && !picked.R[p.id]; }}
+  function rank(pool, meta, poss) {{
+    var out = pool.filter(notPicked).map(function(p) {{ return {{ p:p, r:targetReasons(p, meta, poss) }}; }})
+                  .filter(function(x) {{ return x.r.length; }});
+    out.sort(function(a, b) {{ return b.p.tval - a.p.tval; }});
+    return out;
+  }}
+  // GET = partner players that fill MY needs; OFFER = my players that fill THEIRS.
+  var getSug = rank(flatPool(partnerTk), myMeta, 'your');
+  var giveSug = rank(flatPool(myTk), partnerMeta, 'their');
+  // Strategy gates the OFFER list: the harder I favor myself, the more I protect my
+  // studs (value ceiling) and the cheaper the need-filler I lead with (ascending value).
+  var ceil = STUD_CEIL[strategy];
+  giveSug = giveSug.filter(function(x) {{ return x.p.tval <= ceil; }});
+  if (strategy !== 'fair') giveSug.sort(function(a, b) {{ return a.p.tval - b.p.tval; }});
+  // Fallback so the biggest chips still surface when nothing squarely fills a need.
+  if (!getSug.length) {{
+    getSug = flatPool(partnerTk).filter(notPicked).map(function(p) {{ return {{ p:p, r:[] }}; }})
+               .sort(function(a, b) {{ return b.p.tval - a.p.tval; }}).slice(0, 4);
+  }}
+  var getHtml = getSug.slice(0, 4).map(function(x) {{ return sugChip('R', x); }}).join('') || '<span class="empty">none</span>';
+  var giveHtml = giveSug.slice(0, 4).map(function(x) {{ return sugChip('L', x); }}).join('')
+                 || '<span class="empty">nothing spare that they need &mdash; lead with value</span>';
+
+  var net = sumVal(picked.R) - sumVal(picked.L);
+  var nSel = Object.keys(picked.L).length + Object.keys(picked.R).length;
+  var target = TARGET_NET[strategy];
+  var label = {{ fair:'fair', favor:'favor-me', fleece:'fleece' }}[strategy];
+  var diff = net - target;
+  var nudge;
+  if (!nSel) nudge = 'Pick a player to give and a target to get &mdash; the suggestions above rank by trade value and update as you go.';
+  else if (diff > 0.1) nudge = 'Ahead of your ' + label + ' target (net ' + (net >= 0 ? '+' : '') + net.toFixed(2) + '). You could add a give to sweeten it, or expect them to counter.';
+  else if (diff < -0.1) nudge = 'Below your ' + label + ' target (net ' + (net >= 0 ? '+' : '') + net.toFixed(2) + '). Add a get piece, or drop one of yours.';
+  else nudge = 'On target for a ' + label + ' deal (net ' + (net >= 0 ? '+' : '') + net.toFixed(2) + '). Make sure it fills a real need for both sides.';
+
+  function stratBtn(s, lab) {{
+    return '<button class="stratbtn' + (strategy === s ? ' active' : '') + '" onclick="setStrategy(\'' + s + '\')">' + lab + '</button>';
+  }}
+  document.getElementById('coach').innerHTML =
+      '<div class="coachhdr">DEAL COACH</div>'
+    + '<div class="stratrow"><span class="stratlbl">Strategy</span>'
+      + stratBtn('fair', 'Fair') + stratBtn('favor', 'Favor me') + stratBtn('fleece', 'Fleece') + '</div>'
+    + '<div class="ctxline"><span class="lbl">You need:</span> ' + (youNeed.join(', ') || 'balanced everywhere') + '</div>'
+    + '<div class="ctxline"><span class="lbl">They need:</span> ' + (theyNeed.join(', ') || 'balanced everywhere') + '</div>'
+    + (leverage.length ? '<div class="ctxline"><span class="lbl">Your leverage:</span> ' + leverage.join(', ') + ' &mdash; deep for you, thin for them</div>' : '')
+    + '<div class="sugblock"><div class="sughdr">Add to get &mdash; fills your needs</div>' + getHtml + '</div>'
+    + '<div class="sugblock"><div class="sughdr">Offer them &mdash; fills their needs</div>' + giveHtml + '</div>'
+    + '<div class="nudge">' + nudge + '</div>';
+}}
+
 function recompute() {{
   var L = picked.L, R = picked.R;                       // L = give, R = get
   var lKeys = Object.keys(L), rKeys = Object.keys(R);
@@ -446,6 +552,8 @@ function recompute() {{
                                    : '<div class="empty">Click your players &rarr;</div>';
   getBox.innerHTML  = rKeys.length ? rKeys.map(function(k){{return ledgerItem('R',R[k]);}}).join('')
                                    : '<div class="empty">&larr; Click theirs</div>';
+
+  renderCoach();
 
   var vBox = document.getElementById('verdict');
   var reads = document.getElementById('reads');
