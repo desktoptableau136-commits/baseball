@@ -1124,6 +1124,13 @@ POS_GROUPS = [
     ("RP", {"RP"},                  "pit"),
 ]
 
+# Typical starting slots per position. positional_breakdown ranks each team on the
+# average of its top-K players here (not the mean of ALL eligible players), so a
+# team's bench/utility depth — e.g. a backup catcher who carries 1B eligibility, or
+# a cold bat sitting behind a starter — can't dilute a position into a phantom
+# "need". K ~ the league's active-lineup count at each spot.
+POS_STARTERS = {"C": 1, "1B": 1, "2B": 1, "3B": 1, "SS": 1, "OF": 3, "SP": 4, "RP": 3}
+
 
 def positional_breakdown(pitchers, hitters, my_team, best_recent_p=None, best_recent_h=None):
     my_key = " ".join(my_team.split())
@@ -1159,14 +1166,22 @@ def positional_breakdown(pitchers, hitters, my_team, best_recent_p=None, best_re
         for r in my_p:
             r["_pscore"] = score(r)
 
-        # Per-team average score at this position → league rank
+        # Per-team STARTER score at this position → league rank. Rank on each team's
+        # top-K players (K = typical starting slots, POS_STARTERS) rather than the mean
+        # of ALL eligible players, so bench/utility depth (e.g. a backup catcher carrying
+        # 1B eligibility, or a cold bat behind a starter) can't dilute a position into a
+        # phantom "need".
+        k = POS_STARTERS.get(pos_label, 1)
+        def _starter_avg(scores, k=k):
+            top = sorted(scores, reverse=True)[:k]
+            return sum(top) / len(top) if top else 0
         team_scores = {}
         for r in season:
             t = r.get("FantasyTeam", "")
             if t and pos_match(r):
                 team_scores.setdefault(t, []).append(score(r))
-        team_avgs = sorted(sum(v) / len(v) for v in team_scores.values())
-        my_avg = sum(r["_pscore"] for r in my_p) / len(my_p) if my_p else 0
+        team_avgs = sorted(_starter_avg(v) for v in team_scores.values())
+        my_avg = _starter_avg([r["_pscore"] for r in my_p])
         n = len(team_avgs)
         rank = n - sum(1 for s in team_avgs if s <= my_avg) + 1 if n else None
 
