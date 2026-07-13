@@ -2512,11 +2512,11 @@ def build_pitcher_hot_cold_section(pitchers, my_team, rec_p=None, best_recent_p=
 
 # ── CATEGORY PULSE ───────────────────────────────────────────────────────────
 
-_RATE_CATS    = {"OPS", "ERA", "WHIP", "B_SO"}   # use weighted-avg projection
-_LOWER_BETTER = {"ERA", "WHIP", "B_SO"}
+_RATE_CATS    = {"OPS", "ERA", "WHIP"}   # true rate stats — weighted-avg projection
+_LOWER_BETTER = {"ERA", "WHIP", "B_SO"}  # B_SO is lower-better but a COUNTING stat (accumulates), so NOT a rate cat
 
 _CLOSE_THRESH = {
-    "R": 8, "HR": 3, "RBI": 8, "SB": 3, "OPS": 0.025, "B_SO": 0.08,
+    "R": 8, "HR": 3, "RBI": 8, "SB": 3, "OPS": 0.025, "B_SO": 8,
     "K": 8, "QS": 2, "W": 2, "ERA": 0.30, "WHIP": 0.08, "SVHD": 3,
 }
 
