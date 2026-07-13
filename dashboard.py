@@ -1123,12 +1123,13 @@ def build_dashboard(snap, my_team):
     col3 = f'<div class="col">{t_moves}{t_fa}{t_season}</div>'
     grid_desktop = f'<div id="grid">{col1}{col2}{col3}</div>'
 
-    # Tablet 2-col, HEIGHT-BALANCED: left = Pulse · Moves · FA · Season; right =
-    # Pitching · Hitting · Weakest Spots · Trade Radar. The two tall tiles (Pulse +
-    # Weakest Spots) sit one-per-column so the columns end at roughly the same height.
-    # On a phone the two columns stack top-to-bottom.
-    colt_l = f'<div class="colt">{t_tv}{t_pulse}{t_moves}{t_fa}{t_season}</div>'
-    colt_r = f'<div class="colt">{t_pitch}{t_hit}{t_holes}{t_trade}{render_legend_panel()}</div>'
+    # Tablet 2-col, HEIGHT-BALANCED: left = Pulse · Moves · FA; right =
+    # Pitching · Hitting · Weakest Spots · Trade Radar · Season · Key. The two tall
+    # tiles (Pulse + Weakest Spots) sit one-per-column so the columns end at roughly the
+    # same height. Season rides 2nd-to-last in the right column, just above the Key panel
+    # (per user preference). On a phone the two columns stack top-to-bottom.
+    colt_l = f'<div class="colt">{t_tv}{t_pulse}{t_moves}{t_fa}</div>'
+    colt_r = f'<div class="colt">{t_pitch}{t_hit}{t_holes}{t_trade}{t_season}{render_legend_panel()}</div>'
     grid_tablet = f'<div id="gridt">{colt_l}{colt_r}</div>'
 
     legend = render_legend()
