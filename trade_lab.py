@@ -51,6 +51,34 @@ def _disp(name):
     return " ".join((name or "").split())
 
 
+def _freshness(refreshed_at):
+    """(label, color) for the snapshot's refresh stamp, computed at build time.
+    Green = refreshed today, yellow = 1 day old, red = 2+ days old (or unparseable)."""
+    from datetime import datetime, timezone
+    if not refreshed_at:
+        return ("no refresh timestamp", RED)
+    try:
+        dt = datetime.fromisoformat(str(refreshed_at).replace("Z", "+00:00"))
+    except Exception:
+        return ("refresh time unknown", RED)
+    try:
+        from zoneinfo import ZoneInfo
+        et = dt.astimezone(ZoneInfo("America/New_York"))
+        now_et = datetime.now(ZoneInfo("America/New_York"))
+    except Exception:
+        et = dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+        now_et = datetime.now(timezone.utc)
+    age = (now_et.date() - et.date()).days
+    h = et.hour % 12 or 12
+    ampm = "AM" if et.hour < 12 else "PM"
+    stamp = f"{et.strftime('%b')} {et.day}, {h}:{et.minute:02d} {ampm} ET"
+    if age <= 0:
+        return (f"{stamp} &middot; fresh today", GREEN)
+    if age == 1:
+        return (f"{stamp} &middot; 1 day old", YELLOW)
+    return (f"{stamp} &middot; {age} days old &mdash; run --refresh", RED)
+
+
 def _fmt(v, dec=2):
     v = _n(v)
     s = f"{v:.{dec}f}"
@@ -229,6 +257,7 @@ def build_html(data):
     js = _JS.format(GREEN=GREEN, RED=RED, YELLOW=YELLOW, ACCENT=ACCENT,
                     MUTED=MUTED, TEXT=TEXT, BORDER=BORDER, SURFACE2=SURFACE2)
     my_name = _disp(data["myTeam"])
+    fresh_label, fresh_color = _freshness(data.get("refreshed", ""))
     return f"""<!DOCTYPE html>
 <html lang="en"><head>
 <meta charset="utf-8">
@@ -238,8 +267,11 @@ def build_html(data):
 </head><body>
 <div id="app">
   <div id="head">
-    <div class="htitle">&#9878;&#65039; Trade Lab</div>
-    <div class="hsub">Pick two teams, click players to build a deal, watch it get graded live. &#127919; marks partner players who fill your needs.</div>
+    <div class="headmain">
+      <div class="htitle">&#9878;&#65039; Trade Lab</div>
+      <div class="hsub">Pick two teams, click players to build a deal, watch it get graded live. &#127919; marks partner players who fill your needs.</div>
+    </div>
+    <div class="fresh" title="Snapshot refresh time — rerun with --refresh to update"><span class="dot" style="background:{fresh_color}"></span><span>Data: {fresh_label}</span></div>
   </div>
   <div id="cols">
     <div class="side" id="sideL">
@@ -277,7 +309,9 @@ _CSS = """
 * {{ box-sizing:border-box; }}
 body {{ margin:0; background:{BG}; color:{TEXT}; font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif; }}
 #app {{ max-width:1500px; margin:0 auto; padding:16px; }}
-#head {{ margin-bottom:12px; }}
+#head {{ margin-bottom:12px; display:flex; justify-content:space-between; align-items:flex-start; gap:12px; flex-wrap:wrap; }}
+.fresh {{ font-size:11.5px; color:{MUTED}; white-space:nowrap; display:flex; align-items:center; gap:6px; padding-top:5px; }}
+.dot {{ width:9px; height:9px; border-radius:50%; display:inline-block; flex:0 0 auto; }}
 .htitle {{ font-size:22px; font-weight:800; }}
 .hsub {{ color:{MUTED}; font-size:13px; margin-top:2px; }}
 #cols {{ display:grid; grid-template-columns:1fr 360px 1fr; gap:14px; align-items:start; }}
