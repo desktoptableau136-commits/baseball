@@ -57,6 +57,24 @@ def _fmt(v, dec=2):
     return s[1:] if 0 <= v < 1 else s
 
 
+_POS_ORDER = ["C", "1B", "2B", "3B", "SS", "OF", "DH"]
+
+
+def _pos_tokens(r, role):
+    """Clean, compact position chips for a hitter (OF variants collapsed to OF).
+    Pitchers are already grouped as SP/RP, so they get none."""
+    if role != "hit":
+        return []
+    parts = {p.strip() for p in str(r.get("Position") or "").upper().replace("/", ",").split(",") if p.strip()}
+    norm = set()
+    for p in parts:
+        if p in ("LF", "CF", "RF", "OF"):
+            norm.add("OF")
+        elif p in _POS_ORDER:
+            norm.add(p)
+    return [p for p in _POS_ORDER if p in norm]
+
+
 def _stat_line(r, role):
     """A compact role-specific stat line for the player row."""
     if role == "hit":
@@ -187,6 +205,7 @@ def _serialize(r, role, best_recent_h, best_recent_p, hit_pctile):
         "role":      role,
         "logo":      sd.team_logo(r.get("Team"), 16),
         "pos":       str(r.get("Position") or ""),
+        "posTokens": _pos_tokens(r, role),
         "stat":      _stat_line(r, role),
         "score":     int(round(_n(r.get("_tscore")))),
         "badges":    badges,
@@ -220,7 +239,7 @@ def build_html(data):
 <div id="app">
   <div id="head">
     <div class="htitle">&#9878;&#65039; Trade Lab</div>
-    <div class="hsub">Pick two teams, click players to build a deal, watch it get graded live.</div>
+    <div class="hsub">Pick two teams, click players to build a deal, watch it get graded live. &#127919; marks partner players who fill your needs.</div>
   </div>
   <div id="cols">
     <div class="side" id="sideL">
@@ -270,8 +289,11 @@ body {{ margin:0; background:{BG}; color:{TEXT}; font-family:-apple-system,Segoe
 .prow {{ padding:6px 8px; border-radius:7px; cursor:pointer; border:1px solid transparent; margin-bottom:2px; }}
 .prow:hover {{ background:{SURFACE2}; }}
 .prow.sel {{ background:rgba(59,130,246,.14); border-color:{ACCENT}; }}
+.prow.target {{ box-shadow:inset 3px 0 0 {GREEN}; }}
 .prow-top {{ display:flex; align-items:center; gap:6px; }}
 .pname {{ font-weight:700; font-size:13px; }}
+.poschip {{ display:inline-block; font-size:9px; font-weight:800; letter-spacing:.4px; color:{TEXT}; background:{SURFACE2}; border:1px solid {BORDER}; border-radius:4px; padding:1px 4px; vertical-align:middle; }}
+.tgt {{ font-size:12px; cursor:help; }}
 .pill {{ margin-left:auto; font-size:11px; font-weight:800; padding:1px 7px; border-radius:9px; color:#0b1220; cursor:pointer; }}
 .pstat {{ color:{MUTED}; font-size:11px; margin-top:1px; }}
 .bd {{ display:none; margin-top:5px; padding:7px 8px; background:{SURFACE2}; border:1px solid {BORDER}; border-radius:6px; font-size:11.5px; line-height:1.5; color:{TEXT}; }}
@@ -328,11 +350,26 @@ function teamOptions(sel, chosen) {{
 
 var ROLE_LABEL = {{ hit:'Hitters', sp:'Starting Pitchers', rp:'Relief Pitchers' }};
 
+// Why a partner player is worth targeting for MY (left) team: fills a category need
+// or (hitter) upgrades one of my thin positions. Reused from the digest's need logic.
+function targetReasons(p, myMeta) {{
+  var out = [];
+  var nc = (p.tcats || []).filter(function(c) {{ return (myMeta.needs || []).indexOf(c) >= 0; }});
+  if (nc.length) out.push('fills your ' + nc.map(function(c) {{ return DATA.catLabels[c] || c; }}).join('/') + ' need');
+  if (p.role === 'hit' && myMeta.need_pos) {{
+    (p.tgroups || []).forEach(function(pos) {{
+      if ((pos in myMeta.need_pos) && p.score > myMeta.need_pos[pos]) out.push('upgrades your ' + pos);
+    }});
+  }}
+  return out;
+}}
+
 function renderRoster(side) {{
-  var sel = document.getElementById(side === 'L' ? 'selL' : 'selR');
   var box = document.getElementById(side === 'L' ? 'rosterL' : 'rosterR');
-  var tk = sel.value;
+  var tk = document.getElementById(side === 'L' ? 'selL' : 'selR').value;
   var pl = DATA.players[tk] || {{ hit:[], sp:[], rp:[] }};
+  // Targets are shown on the PARTNER (right) side, judged against MY (left) team's needs.
+  var myMeta = DATA.teamsMeta[document.getElementById('selL').value] || {{ needs:[], need_pos:{{}} }};
   var html = '';
   ['hit','sp','rp'].forEach(function(role) {{
     var rows = pl[role] || [];
@@ -340,13 +377,20 @@ function renderRoster(side) {{
     html += '<div class="rolehdr">' + ROLE_LABEL[role] + '</div>';
     rows.forEach(function(p) {{
       var on = picked[side][p.id] ? ' sel' : '';
-      html += '<div class="prow' + on + '" id="row-' + side + '-' + p.id + '">'
+      var pos = (p.posTokens || []).map(function(t) {{ return '<span class="poschip">' + t + '</span>'; }}).join(' ');
+      if (pos) pos = ' ' + pos;
+      var tgt = '', tgtCls = '';
+      if (side === 'R') {{
+        var tr = targetReasons(p, myMeta);
+        if (tr.length) {{ tgt = ' <span class="tgt" title="Target &mdash; ' + tr.join('; ') + '">&#127919;</span>'; tgtCls = ' target'; }}
+      }}
+      html += '<div class="prow' + on + tgtCls + '" id="row-' + side + '-' + p.id + '">'
         + '<div class="prow-top" onclick="toggle(\'' + side + '\',\'' + p.id + '\')">'
-        + p.logo + '<span class="pname">' + p.name + '</span>' + p.badges
+        + p.logo + '<span class="pname">' + p.name + '</span>' + pos + p.badges + tgt
         + '<span class="pill" style="background:' + pillColor(p.score) + '" '
         + 'onclick="event.stopPropagation();openBd(\'' + side + '\',\'' + p.id + '\')">' + p.score + '</span>'
         + '</div>'
-        + '<div class="pstat">' + p.stat + (p.pos ? ' &middot; ' + p.pos : '') + '</div>'
+        + '<div class="pstat">' + p.stat + '</div>'
         + '<div class="bd" id="bd-' + side + '-' + p.id + '">' + (p.breakdown || 'No breakdown.') + '</div>'
         + '</div>';
     }});
@@ -497,7 +541,7 @@ function initSide(side) {{
   var sel = document.getElementById(side === 'L' ? 'selL' : 'selR');
   sel.addEventListener('change', function() {{
     picked[side] = {{}};                 // reset that side's picks on team change
-    renderRoster(side); recompute();
+    renderRoster('L'); renderRoster('R'); recompute();   // R targets depend on L's needs
   }});
 }}
 
