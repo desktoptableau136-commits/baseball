@@ -1496,22 +1496,64 @@ def get_all_matchups(league) -> dict:
 
 
 
+def _current_matchup_start_sp(current_week):
+    """Earliest DAILY scoring-period id that belongs to the current matchup period.
+
+    Read from each matchup's `home/away.pointsByScoringPeriod` keys (the authoritative
+    day span ESPN actually scored) via the raw mMatchupScore view — the same source
+    get_lineup_efficiency trusts. This is the ONLY reliable start signal for a multi-week
+    (All-Star) matchup: ESPN's matchup_periods dict is degenerate here (period 15 -> [15]),
+    so a "this Monday" anchor lands a full week late when the matchup is in its 2nd week.
+    Returns the min day id, or None on any failure so the caller falls back to the Monday
+    anchor. (Daily SP ids are consecutive calendar days, so a SP delta == a day delta.)
+    """
+    try:
+        url = (f"https://lm-api-reads.fantasy.espn.com/apis/v3/games/flb/seasons/"
+               f"{ESPN_CONFIG['year']}/segments/0/leagues/{ESPN_CONFIG['league_id']}"
+               f"?view=mMatchupScore")
+        cookies = {"espn_s2": ESPN_CONFIG["espn_s2"], "SWID": ESPN_CONFIG["swid"]}
+        resp = requests.get(url, cookies=cookies,
+                            headers={"User-Agent": "Mozilla/5.0"}, timeout=30)
+        resp.raise_for_status()
+        sched = resp.json().get("schedule", []) or []
+        sps = set()
+        for m in sched:
+            if m.get("matchupPeriodId") != current_week:
+                continue
+            for side in ("home", "away"):
+                pbsp = (m.get(side) or {}).get("pointsByScoringPeriod") or {}
+                for k in pbsp:
+                    try:
+                        sps.add(int(k))
+                    except (TypeError, ValueError):
+                        pass
+        return min(sps) if sps else None
+    except Exception:
+        return None
+
+
 def get_matchup_dates(league) -> dict:
     """Return actual start/end dates for the current and next matchup periods.
 
-    Uses finalScoringPeriod to infer whether the current matchup is longer than
-    7 days (e.g. All-Star break = 14 days). ESPN's matchupPeriods dict maps each
-    matchup period ID → a list of WEEKLY scoring period IDs (not daily), so
-    len([15]) == 1 even when the All-Star break matchup spans 14 days. Instead:
+    START is anchored at the earliest daily scoring period actually scored in the current
+    matchup (`_current_matchup_start_sp`, from pointsByScoringPeriod), NOT "this Monday" —
+    the Monday anchor lands a full week late for the 2nd week of a multi-week (All-Star)
+    matchup. LENGTH still uses finalScoringPeriod to detect a >7-day matchup: ESPN's
+    matchupPeriods dict maps each matchup period ID → a list of WEEKLY scoring period IDs
+    (not daily), so len([15]) == 1 even when the All-Star matchup spans 14 days. Instead:
 
-      remaining_daily_sps  = finalScoringPeriod - this_monday_sp + 1
+      remaining_daily_sps  = finalScoringPeriod - true_start_sp + 1
       expected_days        = remaining_regular_mps * 7 + playoff_days
       extra_days           = remaining_daily_sps - expected_days   (≥ 0)
       period_days          = 7 + min(extra_days, 7)
 
+    Anchoring at the TRUE start (not this Monday) is what makes this surplus arithmetic
+    resolve to 14 mid-All-Star-break: the extra first week is no longer excluded from
+    remaining_daily_sps.
+
     Returns keys: matchup_start_date, matchup_end_date, matchup_period_days,
-    next_matchup_end_date  (all YYYY-MM-DD strings except matchup_period_days=int).
-    Returns {} if ESPN doesn't expose the needed fields.
+    next_matchup_end_date, matchup_game_days, matchup_game_days_elapsed  (all
+    YYYY-MM-DD strings except the int fields). Returns {} if ESPN lacks the needed fields.
     """
     current_week = getattr(league, "currentMatchupPeriod", None)
     today_sp     = getattr(league, "scoringPeriodId",      None)
@@ -1523,9 +1565,20 @@ def get_matchup_dates(league) -> dict:
         return {}
 
     today = datetime.now().date()
-    # This Monday's daily scoring period (anchor for start_date)
-    matchup_start_sp = int(today_sp) - today.weekday()
-    start_date = today - timedelta(days=today.weekday())
+    # Anchor the matchup START at the earliest daily scoring period that actually belongs
+    # to the current matchup (from pointsByScoringPeriod) — NOT "this Monday". The Monday
+    # anchor is a full week late for the 2nd week of a multi-week (All-Star) matchup, which
+    # zeroes out days_elapsed/game_days_elapsed and makes every counting-cat projection
+    # stack a full period on top of already-banked stats. Daily SP ids are consecutive
+    # days, so (today_sp - start_sp) == days between today and the start.
+    true_start_sp = _current_matchup_start_sp(int(current_week))
+    if true_start_sp is not None:
+        matchup_start_sp = true_start_sp
+        start_date = today - timedelta(days=int(today_sp) - true_start_sp)
+    else:
+        # Fallback: this Monday's daily scoring period (correct for a normal 7-day matchup)
+        matchup_start_sp = int(today_sp) - today.weekday()
+        start_date = today - timedelta(days=today.weekday())
 
     # Counts: regular (1 weekly SP) vs playoff/extended (>1 weekly SPs)
     regular_mp_count  = sum(1 for v in matchup_periods.values() if len(v) == 1)
