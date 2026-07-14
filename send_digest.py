@@ -2641,6 +2641,7 @@ def _regression_flag(row):
 # arbitrage: my sell-high guy's actual stats OVERstate his value, their buy-low guy's
 # UNDERstate his — even on paper, I win; they still accept on category need.
 _TRADE_SVHD_W       = 0.35  # punt-saves: discount SV+H contribution in trade value
+_POS_SCARCITY_CLAMP = (0.75, 1.50)  # bound the positional-scarcity multiplier so a thin pool can't over-swing _tval
 _TRADE_MAX_VAL      = 1.35  # give-side value ceiling — protects my elite bats (sell-high exempt)
 _TRADE_GIVE_SLACK   = 0.15  # most extra value I'll include to sweeten (favor-me: don't overpay)
 _TRADE_MAX_EDGE     = 0.45  # steal ceiling — how much MORE value I may extract (keeps it plausible)
@@ -2657,18 +2658,71 @@ def _trade_pos_groups(r):
     return {label for label, slots, _ in POS_GROUPS if tags & slots}
 
 
+# Positional-scarcity multipliers for the hitter trade currency, keyed by POS_GROUPS
+# label. Set by compute_position_scarcity() in the scoring prelude; empty (→ no
+# adjustment, raw behavior) until then. Pitchers are intentionally NOT scaled — pitcher
+# value is already punt-saves-shaped (SV+H discounted), a separate axis from scarcity.
+_POS_SCARCITY = {}
+
+
 def _trade_value(r, ptype, hit_pctile, pit_pctile):
-    """Cross-role trade currency (`_tval`): summed above-median category contribution.
-    Hitters span 5 everyday cats; a reliever's counting stats (K/W) rank low vs the whole
-    pitcher pool (volume-aware) and SV+H is punt-discounted — so an everyday bat outweighs
-    a one-category closer even when both post a top role-score badge. Promoted from a
-    find_trades closure so the pending-trade evaluator grades on the SAME currency."""
+    """Cross-role trade currency (`_tval`): summed above-median category contribution,
+    then (hitters) scaled by positional scarcity. Hitters span 5 everyday cats; a
+    reliever's counting stats (K/W) rank low vs the whole pitcher pool (volume-aware) and
+    SV+H is punt-discounted — so an everyday bat outweighs a one-category closer even when
+    both post a top role-score badge. The scarcity scale (_POS_SCARCITY) then corrects the
+    remaining position blindness: without it an everyday OF and an everyday SS graded
+    equal, so the radar handed you 'give abundant OF, get scarce SS' deals no rival would
+    accept. Promoted from a find_trades closure so the pending-trade evaluator grades on
+    the SAME currency."""
     cats, pctile = (_FA_HIT_CATS, hit_pctile) if ptype == "hit" else (_FA_RP_CATS, pit_pctile)
     v = 0.0
     for c in cats:
         p = _cat_pctile(pctile, c, _cat_value(r, c))
         v += max(0.0, p - 0.5) * (_TRADE_SVHD_W if c == "SVHD" else 1.0)
+    if ptype == "hit" and _POS_SCARCITY:
+        # Best-slot value: a multi-eligible bat is worth his scarcest position (a
+        # catcher-eligible hitter carries the C premium). Empty global → mult 1.0 (raw),
+        # which is also what compute_position_scarcity sees while deriving the scale.
+        mult = max((_POS_SCARCITY.get(g, 1.0) for g in _trade_pos_groups(r)), default=1.0)
+        v *= mult
     return v
+
+
+def compute_position_scarcity(hitters, hit_pctile):
+    """Derive the hitter positional-scarcity scale from this snapshot → module global
+    _POS_SCARCITY (read by _trade_value). A position whose league-wide STARTER talent is
+    weak (low mean raw _tval among the players who'd actually start there) is SCARCE — a
+    competent bat there clears replacement level by more, so his trade value is boosted;
+    a deep position (OF) is discounted. mult[P] = baseline / starter_avg_tval[P], baseline
+    = mean starter-tval across positions, clamped to _POS_SCARCITY_CLAMP so a thin sample
+    can't over-swing. Reset to {} first so the _trade_value calls below return RAW value
+    (the scale must be built from unscaled tvals). Hitters only — pitcher value stays
+    punt-saves-shaped, a separate axis. Call AFTER hit_pctile is built."""
+    global _POS_SCARCITY
+    _POS_SCARCITY = {}
+    season = [r for r in hitters if int(_n(r.get("Dataset")) or 0) == YEAR]
+    if not season:
+        return _POS_SCARCITY
+    n_teams = len({" ".join((r.get("FantasyTeam") or "").split())
+                   for r in season if (r.get("FantasyTeam") or "").strip()}) or 12
+    starter_avg = {}
+    for pos_label, slots, ptype in POS_GROUPS:
+        if ptype != "hit":
+            continue
+        elig = [r for r in season
+                if any(s in str(r.get("Position", "")).split(", ") for s in slots)]
+        vals = sorted((_trade_value(r, "hit", hit_pctile, None) for r in elig), reverse=True)
+        top = vals[:POS_STARTERS.get(pos_label, 1) * n_teams]
+        if top:
+            starter_avg[pos_label] = sum(top) / len(top)
+    if not starter_avg:
+        return _POS_SCARCITY
+    baseline = sum(starter_avg.values()) / len(starter_avg)
+    lo, hi = _POS_SCARCITY_CLAMP
+    _POS_SCARCITY = {pos: max(lo, min(hi, baseline / sa)) if sa > 0 else 1.0
+                     for pos, sa in starter_avg.items()}
+    return _POS_SCARCITY
 
 
 def _enrich_trade_player(r, ptype, best_recent_p, best_recent_h, hit_pctile, pit_pctile):
@@ -5263,6 +5317,7 @@ def build_email(snap, override_team=None):
     # traded arm's K/W/ERA/WHIP/SV+H is measured vs the whole pitcher pool).
     _pit_pool_all = [r for r in pitchers if int(_n(r.get("Dataset")) or 0) == YEAR]
     pit_pctile = build_cat_percentiles(_pit_pool_all, _FA_RP_CATS)
+    compute_position_scarcity(hitters, hit_pctile)   # positional-scarcity scale → _POS_SCARCITY (hitter _tval)
     # Current Matchup subtitle uses the SAME stored Roto_Score the Week N Roto
     # Rankings table renders (ESPN's method, which splits points on ties) so the
     # two panels agree. A pseudo rank-sum (n - rank + 1) would over-count ties

@@ -170,6 +170,7 @@ def build_context(snap, my_team):
     # Trade Radar (abbreviated on the dashboard — just the top couple of suggestions).
     _pit_pool = [r for r in pitchers if int(_n(r.get("Dataset")) or 0) == YEAR]
     pit_pctile = sd.build_cat_percentiles(_pit_pool, sd._FA_RP_CATS)
+    sd.compute_position_scarcity(hitters, hit_pctile)   # positional-scarcity scale → _POS_SCARCITY (hitter _tval)
     trades = sd.find_trades(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
                             pos_data, hit_pctile, pit_pctile)
     # Real pending trade OFFERS (my team only) — graded once, same as the digest. A concrete
