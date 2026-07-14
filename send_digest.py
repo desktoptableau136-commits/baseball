@@ -2651,6 +2651,7 @@ _TRADE_FAIR_MAX_VAL = 1.90  # fair lane give-ceiling — higher than favor's (de
 _TRADE_MAX_CARDS    = 6     # trades surfaced
 _TRADE_PER_TEAM_CAP = 2     # max cards per partner team (variety)
 _TRADE_POOL_WIDTH   = 4     # top-N of each side fed into the 2-for-2 combinations
+_POS_DEPTH_SLACK    = 1     # bodies beyond POS_STARTERS I can still use (bench/flex) before a position reads "stacked"
 # Player category coverage reuses the FA cat lists (QS/B_SO aren't per-player stats, so a
 # team need in those simply finds no matching player — intentional, same as the FA "Cats").
 
@@ -2659,6 +2660,39 @@ def _trade_pos_groups(r):
     """POS_GROUPS labels this player fills (OF covers LF/CF/RF)."""
     tags = {p.strip() for p in str(r.get("Position") or "").upper().replace("/", ",").split(",") if p.strip()}
     return {label for label, slots, _ in POS_GROUPS if tags & slots}
+
+
+def _my_position_counts(hitters, my_key):
+    """Count of my rostered YEAR hitters eligible at each POS_GROUPS label (multi-eligible
+    bats count at every position they qualify for). Feeds the redundancy guard; INCLUDES
+    IL-slot players, who still occupy the position on my roster and return to it."""
+    counts = {}
+    for r in hitters:
+        if int(_n(r.get("Dataset")) or 0) != YEAR:
+            continue
+        if " ".join((r.get("FantasyTeam") or "").split()) != my_key:
+            continue
+        for g in _trade_pos_groups(r):
+            counts[g] = counts.get(g, 0) + 1
+    return counts
+
+
+def _non_redundant_get_pos(get_pos, outs, ins, my_pos_count):
+    """Filter get-positions to those that AREN'T roster-redundant. A position P is redundant
+    when the deal would leave me with more eligible bodies there than my startable slots plus
+    one bench (POS_STARTERS[P] + _POS_DEPTH_SLACK) AND I shed nobody eligible at P — e.g.
+    acquiring a 4th catcher while rostering three and dealing none back. Acquiring an upgrade
+    while shedding a body at P (a swap) still counts as filling the need. Guards against
+    trades that read as 'fills your C slot' when catching is already stacked."""
+    keep = set()
+    for P in get_pos:
+        added = sum(1 for i in ins if P in i.get("_tgroups", set()))
+        shed  = sum(1 for o in outs if P in o.get("_tgroups", set()))
+        post  = my_pos_count.get(P, 0) - shed + added
+        cap   = POS_STARTERS.get(P, 1) + _POS_DEPTH_SLACK
+        if not (post > cap and shed == 0):
+            keep.add(P)
+    return keep
 
 
 # Positional-scarcity multipliers for the hitter trade currency, keyed by POS_GROUPS
@@ -2795,6 +2829,7 @@ def find_trades(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
 
     my_players = ([enrich(r, "hit") for r in roster(hitters, my_key)] +
                   [enrich(r, "pit") for r in roster(pitchers, my_key)])
+    my_pos_count = _my_position_counts(hitters, my_key)   # redundancy guard: bodies per position
 
     all_teams = {" ".join((r.get("FantasyTeam") or "").split())
                  for r in itertools.chain(hitters, pitchers)
@@ -2857,8 +2892,9 @@ def find_trades(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
                     packages.append(([o], [i]))
         for oa, ob in itertools.combinations(out_pool, 2):   # 2-for-2
             for ia, ib in itertools.combinations(in_pool, 2):
-                benefits = (((ia["_tcats"] | ib["_tcats"]) & get_cats)
-                            | set(ia["_tfillpos"]) | set(ib["_tfillpos"]))
+                pos_ben  = _non_redundant_get_pos(set(ia["_tfillpos"]) | set(ib["_tfillpos"]),
+                                                  [oa, ob], [ia, ib], my_pos_count)
+                benefits = (((ia["_tcats"] | ib["_tcats"]) & get_cats) | pos_ben)
                 if len(benefits) < 2:
                     continue   # a package must address >= 2 distinct needs (cat or position)
                 if gate(oa["_tval"] + ob["_tval"], ia["_tval"] + ib["_tval"], mult=1.5):
@@ -2866,7 +2902,8 @@ def find_trades(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
 
         for outs, ins in packages:
             gcov = set().union(*[i["_tcats"] for i in ins]) & get_cats   # category needs met
-            gpos = set().union(*[set(i["_tfillpos"]) for i in ins])       # positional holes filled
+            gpos = _non_redundant_get_pos(set().union(*[set(i["_tfillpos"]) for i in ins]),
+                                          outs, ins, my_pos_count)         # positional holes filled (redundancy-guarded)
             scov = set().union(*[o["_tcats"] for o in outs]) & send_cats
             if (not gcov and not gpos) or not scov:
                 continue
@@ -3140,6 +3177,7 @@ def _grade_pending_trades(pending, pitchers, hitters, roto, my_team,
     need_pos = {p["pos"]: ((p.get("rank") or _nt(p)), (p.get("my_avg") or 0))
                 for p in pos_data if p.get("ptype") == "hit"
                 and (p.get("rank") or _nt(p)) >= _nt(p) - _third(p) + 1}
+    my_pos_count = _my_position_counts(hitters, my_key)   # redundancy guard: bodies per position
 
     def _resolve(entry):
         k = _badge_name_key(entry.get("name", ""))
@@ -3164,7 +3202,8 @@ def _grade_pending_trades(pending, pitchers, hitters, roto, my_team,
 
         net_val = sum(r["_tval"] for r in ins) - sum(r["_tval"] for r in outs)
         gcov = set().union(*[r["_tcats"] for r in ins]) & my_needs if ins else set()
-        gpos = set().union(*[set(r.get("_tfillpos", [])) for r in ins]) if ins else set()
+        gpos = (_non_redundant_get_pos(set().union(*[set(r.get("_tfillpos", [])) for r in ins]),
+                                       outs, ins, my_pos_count) if ins else set())
         scov = set().union(*[r["_tcats"] for r in outs]) & needs_of(partner) if outs else set()
         addresses_need = bool(gcov or gpos)
         timing = (sum(1 for r in outs if r.get("_tsell")) + sum(1 for r in ins if r.get("_tbuy"))

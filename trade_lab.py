@@ -183,6 +183,7 @@ def build_data(snap, my_team):
             "needs":    needs_of(tk),
             "surplus":  surplus_of(tk),
             "need_pos": need_pos,
+            "pos_count": sd._my_position_counts(hitters, tk),   # redundancy guard: bodies per position
         }
 
         buckets = {"hit": [], "sp": [], "rp": []}
@@ -213,6 +214,8 @@ def build_data(snap, my_team):
         "myTeam":    my_key,
         "catLabels": CAT_LABELS,
         "lowerBetter": sorted(sd._LOWER_BETTER),
+        "posStarters": {p: sd.POS_STARTERS.get(p, 1) for p in ("C","1B","2B","3B","SS","OF")},
+        "posSlack":  sd._POS_DEPTH_SLACK,   # redundancy guard: bench/flex bodies allowed beyond starters
         "refreshed": snap.get("refreshed_at", ""),
     }
 
@@ -408,6 +411,18 @@ function teamOptions(sel, chosen) {{
 
 var ROLE_LABEL = {{ hit:'Hitters', sp:'Starting Pitchers', rp:'Relief Pitchers' }};
 
+// Redundancy guard (mirrors send_digest._non_redundant_get_pos): a position is "stacked"
+// when acquiring these players leaves me more eligible bodies than startable slots + one
+// bench (posStarters[P] + posSlack) AND I shed nobody eligible there. So a 4th catcher
+// stops reading as "fills your C" unless the deal also deals a catcher back (a swap).
+function posStacked(pos, myMeta, giveList, getList) {{
+  var added = (getList  || []).filter(function(p) {{ return (p.tgroups || []).indexOf(pos) >= 0; }}).length;
+  var shed  = (giveList || []).filter(function(p) {{ return (p.tgroups || []).indexOf(pos) >= 0; }}).length;
+  var post  = (((myMeta.pos_count || {{}})[pos]) || 0) - shed + added;
+  var cap   = ((DATA.posStarters || {{}})[pos] || 1) + (DATA.posSlack || 0);
+  return post > cap && shed === 0;
+}}
+
 // Why a partner player is worth targeting for MY (left) team: fills a category need
 // or (hitter) upgrades one of my thin positions. Reused from the digest's need logic.
 function targetReasons(p, myMeta, poss) {{
@@ -417,7 +432,9 @@ function targetReasons(p, myMeta, poss) {{
   if (nc.length) out.push('fills ' + poss + ' ' + nc.map(function(c) {{ return DATA.catLabels[c] || c; }}).join('/') + ' need');
   if (p.role === 'hit' && myMeta.need_pos) {{
     (p.tgroups || []).forEach(function(pos) {{
-      if ((pos in myMeta.need_pos) && p.score > myMeta.need_pos[pos]) out.push('upgrades ' + poss + ' ' + pos);
+      // Judge this single add: get=[p], give=[] — suppressed once the slot is already stacked.
+      if ((pos in myMeta.need_pos) && p.score > myMeta.need_pos[pos] && !posStacked(pos, myMeta, [], [p]))
+        out.push('upgrades ' + poss + ' ' + pos);
     }});
   }}
   return out;
@@ -611,13 +628,18 @@ function recompute() {{
   var gained = unionCats(R), lost = unionCats(L);
   var needFilled = gained.filter(function(c){{ return myNeeds.indexOf(c) >= 0; }});
 
-  // Positional upgrades: an incoming hitter at one of my thin slots whose score clears my avg there.
+  // Positional upgrades: an incoming hitter at one of my thin slots whose score clears my avg
+  // there — but redundancy-guarded, so stacking a 4th body at a full slot doesn't count as
+  // filling a need (unless the deal also sheds a body there). Package-aware: give=L, get=R.
+  var giveArr = lKeys.map(function(k){{ return L[k]; }});
+  var getArr  = rKeys.map(function(k){{ return R[k]; }});
   var posFilled = {{}};
   rKeys.forEach(function(k){{
     var p = R[k];
     if (p.role !== 'hit') return;
     (p.tgroups||[]).forEach(function(pos){{
-      if (myMeta.need_pos && (pos in myMeta.need_pos) && p.score > myMeta.need_pos[pos]) posFilled[pos]=1;
+      if (myMeta.need_pos && (pos in myMeta.need_pos) && p.score > myMeta.need_pos[pos]
+          && !posStacked(pos, myMeta, giveArr, getArr)) posFilled[pos]=1;
     }});
   }});
   var posList = Object.keys(posFilled);
