@@ -171,8 +171,8 @@ def build_context(snap, my_team):
     _pit_pool = [r for r in pitchers if int(_n(r.get("Dataset")) or 0) == YEAR]
     pit_pctile = sd.build_cat_percentiles(_pit_pool, sd._FA_RP_CATS)
     sd.compute_position_scarcity(hitters, hit_pctile)   # positional-scarcity scale → _POS_SCARCITY (hitter _tval)
-    trades = sd.find_trades(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
-                            pos_data, hit_pctile, pit_pctile)
+    trades = sd.find_trades_combined(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
+                                     pos_data, hit_pctile, pit_pctile)
     # Real pending trade OFFERS (my team only) — graded once, same as the digest. A concrete
     # offer to decide on outranks the speculative radar ideas, so the tile leads with it.
     pending_incoming = [g for g in sd._grade_pending_trades(
@@ -850,6 +850,7 @@ def render_trade_radar(ctx):
         get_ = "".join(pl(i, True) for i in t["ins"])
         net = t.get("net_val", 0)
         val = "you win" if net > 0.1 else "even" if net >= -0.1 else "you pay up"
+        _, accept, acc_color = sd._trade_tilt(net)   # rival's-POV acceptance read (realistic / aggressive ask)
         thesis = "sell-high" if t.get("sell_out") else ""
         thesis += ("/buy-low" if thesis and t.get("buy_in") else ("buy-low" if t.get("buy_in") else ""))
         logo = sd.fantasy_logo(ctx["team_logos"].get(t["team"], ""), 14, t["team"])
@@ -864,6 +865,7 @@ def render_trade_radar(ctx):
             f'<div style="flex:0 0 27%;min-width:0;">'
             f'<div style="font-size:11.5px;{_clip}">{logo}<span style="color:{TEXT};font-weight:600;">{t["team"]}</span></div>'
             f'<div style="font-size:9.5px;color:{accent};font-weight:600;margin-top:1px;">{val}</div>'
+            f'<div style="font-size:9px;color:{acc_color};font-weight:600;">{accept}</div>'
             + (f'<div style="font-size:9px;color:{MUTED};">{thesis}</div>' if thesis else "")
             + f'</div>'
             f'<div style="flex:1 1 0;min-width:0;">'
