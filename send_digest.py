@@ -2645,9 +2645,13 @@ _POS_SCARCITY_CLAMP = (0.75, 1.50)  # bound the positional-scarcity multiplier s
 _TRADE_MAX_VAL      = 1.35  # give-side value ceiling — protects my elite bats (sell-high exempt)
 _TRADE_GIVE_SLACK   = 0.15  # most extra value I'll include to sweeten (favor-me: don't overpay)
 _TRADE_MAX_EDGE     = 0.45  # steal ceiling — how much MORE value I may extract (keeps it plausible)
+_TRADE_FAIR_BAND    = 0.20  # fair lane: most value edge I keep and still call it realistic (near-even)
+_TRADE_FAIR_PAYUP   = 0.35  # fair lane: most value I'll PAY UP to land a scarce need-fill (a rival accepts)
+_TRADE_FAIR_MAX_VAL = 1.90  # fair lane give-ceiling — higher than favor's (deal a real chip) but still protects a franchise anchor
 _TRADE_MAX_CARDS    = 6     # trades surfaced
 _TRADE_PER_TEAM_CAP = 2     # max cards per partner team (variety)
 _TRADE_POOL_WIDTH   = 4     # top-N of each side fed into the 2-for-2 combinations
+_POS_DEPTH_SLACK    = 1     # bodies beyond POS_STARTERS I can still use (bench/flex) before a position reads "stacked"
 # Player category coverage reuses the FA cat lists (QS/B_SO aren't per-player stats, so a
 # team need in those simply finds no matching player — intentional, same as the FA "Cats").
 
@@ -2656,6 +2660,39 @@ def _trade_pos_groups(r):
     """POS_GROUPS labels this player fills (OF covers LF/CF/RF)."""
     tags = {p.strip() for p in str(r.get("Position") or "").upper().replace("/", ",").split(",") if p.strip()}
     return {label for label, slots, _ in POS_GROUPS if tags & slots}
+
+
+def _my_position_counts(hitters, my_key):
+    """Count of my rostered YEAR hitters eligible at each POS_GROUPS label (multi-eligible
+    bats count at every position they qualify for). Feeds the redundancy guard; INCLUDES
+    IL-slot players, who still occupy the position on my roster and return to it."""
+    counts = {}
+    for r in hitters:
+        if int(_n(r.get("Dataset")) or 0) != YEAR:
+            continue
+        if " ".join((r.get("FantasyTeam") or "").split()) != my_key:
+            continue
+        for g in _trade_pos_groups(r):
+            counts[g] = counts.get(g, 0) + 1
+    return counts
+
+
+def _non_redundant_get_pos(get_pos, outs, ins, my_pos_count):
+    """Filter get-positions to those that AREN'T roster-redundant. A position P is redundant
+    when the deal would leave me with more eligible bodies there than my startable slots plus
+    one bench (POS_STARTERS[P] + _POS_DEPTH_SLACK) AND I shed nobody eligible at P — e.g.
+    acquiring a 4th catcher while rostering three and dealing none back. Acquiring an upgrade
+    while shedding a body at P (a swap) still counts as filling the need. Guards against
+    trades that read as 'fills your C slot' when catching is already stacked."""
+    keep = set()
+    for P in get_pos:
+        added = sum(1 for i in ins if P in i.get("_tgroups", set()))
+        shed  = sum(1 for o in outs if P in o.get("_tgroups", set()))
+        post  = my_pos_count.get(P, 0) - shed + added
+        cap   = POS_STARTERS.get(P, 1) + _POS_DEPTH_SLACK
+        if not (post > cap and shed == 0):
+            keep.add(P)
+    return keep
 
 
 # Positional-scarcity multipliers for the hitter trade currency, keyed by POS_GROUPS
@@ -2745,9 +2782,18 @@ def _enrich_trade_player(r, ptype, best_recent_p, best_recent_h, hit_pctile, pit
 
 
 def find_trades(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
-                pos_data, hit_pctile, pit_pctile):
+                pos_data, hit_pctile, pit_pctile, mode="favor"):
     """Ranked list of mutually-beneficial trades between my_team and each rival.
-    Perspective-driven via my_team (works under --team for free). See CLAUDE.md."""
+    Perspective-driven via my_team (works under --team for free). See CLAUDE.md.
+
+    `mode` selects the value lane (both grade on the SAME scarcity-weighted `_tval`):
+    - "favor" (default): tilt value to me — I never overpay past _TRADE_GIVE_SLACK and may
+      extract up to a _TRADE_MAX_EDGE steal; my elite bats are protected from the give side.
+    - "fair": realistic, near-even deals a rival would actually accept — the ones that land
+      a scarce C/SS upgrade. The give-side value ceiling is dropped (I'll deal a real chip
+      for fair return), the gate is centered on even (I may even PAY UP to _TRADE_FAIR_PAYUP
+      for a need-fill), and ranking rewards need-fit + their benefit + timing over any edge.
+    Each trade is tagged `"lane"` = the mode that produced it."""
     ranks, n = team_category_ranks(roto)
     my_key = " ".join(my_team.split())
     if n < 2 or my_key not in ranks:
@@ -2783,6 +2829,7 @@ def find_trades(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
 
     my_players = ([enrich(r, "hit") for r in roster(hitters, my_key)] +
                   [enrich(r, "pit") for r in roster(pitchers, my_key)])
+    my_pos_count = _my_position_counts(hitters, my_key)   # redundancy guard: bodies per position
 
     all_teams = {" ".join((r.get("FantasyTeam") or "").split())
                  for r in itertools.chain(hitters, pitchers)
@@ -2807,11 +2854,15 @@ def find_trades(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
         t_players = ([enrich(r, "hit") for r in roster(hitters, team)] +
                      [enrich(r, "pit") for r in roster(pitchers, team)])
 
-        # Give side: strong in a send cat, at a surplus position, and NOT an elite keeper —
-        # unless he's a sell-high regression candidate, whom I actively want to move.
+        # Give side: strong in a send cat, at a surplus position, and NOT above the value
+        # ceiling (unless a sell-high regression candidate I want to move anyway). FAIR mode
+        # raises the ceiling (_TRADE_FAIR_MAX_VAL > favor's _TRADE_MAX_VAL) so I'll deal a
+        # genuinely good chip for fair return — but still protects a franchise anchor from
+        # being auto-offered (the value gate keeps the return fair either way).
+        _give_ceil = _TRADE_FAIR_MAX_VAL if mode == "fair" else _TRADE_MAX_VAL
         out_pool = sorted([r for r in my_players
                            if (r["_tcats"] & send_cats) and (r["_tgroups"] & surplus_pos)
-                           and (r["_tval"] <= _TRADE_MAX_VAL or r["_tsell"])],
+                           and (r["_tval"] <= _give_ceil or r["_tsell"])],
                           key=lambda r: -r["_tscore"])[:_TRADE_POOL_WIDTH]
         # Incoming: helps a category I need OR upgrades a thin position of mine.
         in_pool  = sorted([r for r in t_players if (r["_tcats"] & get_cats) or _fills_need_pos(r)],
@@ -2827,23 +2878,32 @@ def find_trades(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
             plausible enough that a rival fixing a category need would accept."""
             return (vo - vi) <= _TRADE_GIVE_SLACK * mult and (vi - vo) <= _TRADE_MAX_EDGE * mult
 
+        def _fair(vo, vi, mult=1.0):
+            """Near-even: I keep at most a modest edge (_TRADE_FAIR_BAND) and may PAY UP at
+            most _TRADE_FAIR_PAYUP — the acceptable-to-a-rival zone that lands scarce pieces."""
+            net = vi - vo
+            return -_TRADE_FAIR_PAYUP * mult <= net <= _TRADE_FAIR_BAND * mult
+
+        gate = _fair if mode == "fair" else _favor_me
         packages = []
         for o in out_pool:                                   # 1-for-1
             for i in in_pool:
-                if _favor_me(o["_tval"], i["_tval"]):
+                if gate(o["_tval"], i["_tval"]):
                     packages.append(([o], [i]))
         for oa, ob in itertools.combinations(out_pool, 2):   # 2-for-2
             for ia, ib in itertools.combinations(in_pool, 2):
-                benefits = (((ia["_tcats"] | ib["_tcats"]) & get_cats)
-                            | set(ia["_tfillpos"]) | set(ib["_tfillpos"]))
+                pos_ben  = _non_redundant_get_pos(set(ia["_tfillpos"]) | set(ib["_tfillpos"]),
+                                                  [oa, ob], [ia, ib], my_pos_count)
+                benefits = (((ia["_tcats"] | ib["_tcats"]) & get_cats) | pos_ben)
                 if len(benefits) < 2:
                     continue   # a package must address >= 2 distinct needs (cat or position)
-                if _favor_me(oa["_tval"] + ob["_tval"], ia["_tval"] + ib["_tval"], mult=1.5):
+                if gate(oa["_tval"] + ob["_tval"], ia["_tval"] + ib["_tval"], mult=1.5):
                     packages.append(([oa, ob], [ia, ib]))
 
         for outs, ins in packages:
             gcov = set().union(*[i["_tcats"] for i in ins]) & get_cats   # category needs met
-            gpos = set().union(*[set(i["_tfillpos"]) for i in ins])       # positional holes filled
+            gpos = _non_redundant_get_pos(set().union(*[set(i["_tfillpos"]) for i in ins]),
+                                          outs, ins, my_pos_count)         # positional holes filled (redundancy-guarded)
             scov = set().union(*[o["_tcats"] for o in outs]) & send_cats
             if (not gcov and not gpos) or not scov:
                 continue
@@ -2856,16 +2916,22 @@ def find_trades(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
             buy_out  = sum(1 for o in outs if o.get("_tbuy"))    # bad: don't sell my risers low
             sell_in  = sum(1 for i in ins  if i.get("_tsell"))   # bad: don't buy their regressors
             timing = sell_out + buy_in - buy_out - sell_in
-            # Season fit + FAVOR-ME: deeper need cats/positions addressed (higher rank number)
-            # score more; their-side benefit is down-weighted (0.3) since we tilt to me; reward
-            # my net value edge and good timing legs; mild package-size penalty.
+            # Season fit: deeper need cats/positions addressed (higher rank number) score more.
+            # FAVOR mode tilts to me — their benefit down-weighted (0.3), reward my value edge
+            # (+5·net_val). FAIR mode optimizes for a realistic, accepted deal — weight THEIR
+            # benefit higher (0.5, acceptance likelihood) and, instead of rewarding an edge,
+            # PENALIZE paying up (−4·overpay) so the closest-to-even need-fills rank first.
             my_gain    = sum(ranks[my_key][c] for c in gcov) + sum(need_pos[p][0] for p in gpos)
             their_gain = sum(ranks[team][c]   for c in scov)
-            score = (my_gain + 0.3 * their_gain + 5.0 * net_val
-                     + 4.0 * timing - 0.5 * (len(ins) - 1))
+            if mode == "fair":
+                score = (my_gain + 0.5 * their_gain + 4.0 * timing
+                         - 4.0 * max(0.0, -net_val) - 0.5 * (len(ins) - 1))
+            else:
+                score = (my_gain + 0.3 * their_gain + 5.0 * net_val
+                         + 4.0 * timing - 0.5 * (len(ins) - 1))
             trades.append({
                 "team": team, "outs": outs, "ins": ins, "net_val": net_val, "score": score,
-                "sell_out": sell_out, "buy_in": buy_in,
+                "lane": mode, "sell_out": sell_out, "buy_in": buy_in,
                 "get_cats":  sorted(gcov, key=lambda c: -ranks[my_key][c]),
                 "get_pos":   sorted(gpos, key=lambda p: -need_pos[p][0]),
                 "send_cats": sorted(scov, key=lambda c: -ranks[team][c]),
@@ -2885,6 +2951,51 @@ def find_trades(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
         if len(picked) >= _TRADE_MAX_CARDS:
             break
     return picked
+
+
+def find_trades_combined(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
+                         pos_data, hit_pctile, pit_pctile, cards=None):
+    """Blend the FAIR lane (realistic, near-even/pay-up deals a rival would accept — the
+    ones that actually land a scarce C/SS upgrade) with the FAVOR-ME lane (value plays that
+    fix a rival's need while tilting to me). Leads with a fair deal (the realistic ask),
+    then alternates a value play, deduping identical packages and keeping the per-team +
+    total caps joint across lanes. Both lanes grade on the same scarcity-weighted `_tval`."""
+    cards = cards or _TRADE_MAX_CARDS
+    args = (pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
+            pos_data, hit_pctile, pit_pctile)
+    fair  = find_trades(*args, mode="fair")
+    value = find_trades(*args, mode="favor")
+    order = []
+    for f, v in itertools.zip_longest(fair, value):   # fair leads each round (user priority)
+        if f is not None:
+            order.append(f)
+        if v is not None:
+            order.append(v)
+    picked, per_team, seen = [], {}, set()
+    for t in order:
+        sig = (t["team"],
+               tuple(sorted(o.get("PlayerName", "") for o in t["outs"])),
+               tuple(sorted(i.get("PlayerName", "") for i in t["ins"])))
+        if sig in seen or per_team.get(t["team"], 0) >= _TRADE_PER_TEAM_CAP:
+            continue
+        seen.add(sig)
+        per_team[t["team"]] = per_team.get(t["team"], 0) + 1
+        picked.append(t)
+        if len(picked) >= cards:
+            break
+    return picked
+
+
+def _trade_tilt(net_val):
+    """(value_phrase, accept_phrase, accept_color) for a trade's net_val (my value edge,
+    + = I win). The value phrase is my-POV; the accept phrase is the RIVAL's-POV read on
+    whether they'd say yes — a deal where I win value is a tougher sell, an even/pay-up deal
+    is realistic. Shared by the digest Trade Radar + the dashboard tile so they agree."""
+    value = ("you win the value" if net_val > 0.1 else
+             "even value" if net_val >= -0.1 else "you pay up")
+    if net_val > _TRADE_FAIR_BAND:
+        return value, "aggressive ask", YELLOW
+    return value, "realistic", GREEN
 
 
 def _trade_score_reveal(score, breakdown_html, uid):
@@ -3066,6 +3177,7 @@ def _grade_pending_trades(pending, pitchers, hitters, roto, my_team,
     need_pos = {p["pos"]: ((p.get("rank") or _nt(p)), (p.get("my_avg") or 0))
                 for p in pos_data if p.get("ptype") == "hit"
                 and (p.get("rank") or _nt(p)) >= _nt(p) - _third(p) + 1}
+    my_pos_count = _my_position_counts(hitters, my_key)   # redundancy guard: bodies per position
 
     def _resolve(entry):
         k = _badge_name_key(entry.get("name", ""))
@@ -3090,7 +3202,8 @@ def _grade_pending_trades(pending, pitchers, hitters, roto, my_team,
 
         net_val = sum(r["_tval"] for r in ins) - sum(r["_tval"] for r in outs)
         gcov = set().union(*[r["_tcats"] for r in ins]) & my_needs if ins else set()
-        gpos = set().union(*[set(r.get("_tfillpos", [])) for r in ins]) if ins else set()
+        gpos = (_non_redundant_get_pos(set().union(*[set(r.get("_tfillpos", [])) for r in ins]),
+                                       outs, ins, my_pos_count) if ins else set())
         scov = set().union(*[r["_tcats"] for r in outs]) & needs_of(partner) if outs else set()
         addresses_need = bool(gcov or gpos)
         timing = (sum(1 for r in outs if r.get("_tsell")) + sum(1 for r in ins if r.get("_tbuy"))
@@ -3209,8 +3322,8 @@ def build_pending_trades_section(graded, best_recent_p, best_recent_h, hit_pctil
 
 def build_trade_radar(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
                       pos_data, hit_pctile, pit_pctile, team_logos=None):
-    trades = find_trades(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
-                         pos_data, hit_pctile, pit_pctile)
+    trades = find_trades_combined(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
+                                  pos_data, hit_pctile, pit_pctile)
     if not trades:
         return ""
     team_logos = team_logos or {}
@@ -3227,19 +3340,24 @@ def build_trade_radar(pitchers, hitters, roto, my_team, best_recent_p, best_rece
         get_lbl  = ", ".join(gains) or "depth"
         send_lbl = ", ".join(_CAT_DISPLAY.get(c, c) for c in t["send_cats"])
         net = t.get("net_val", 0.0)
-        value = ("you win the value" if net > 0.1 else
-                 "even value" if net >= -0.1 else "you pay up")
+        value, accept, acc_color = _trade_tilt(net)
         thesis = ("sell-high" if t.get("sell_out") else "") + \
                  (" · " if t.get("sell_out") and t.get("buy_in") else "") + \
                  ("buy-low" if t.get("buy_in") else "")
         if thesis:
             value += f" &middot; {thesis}"
+        # Realism chip in the card header — the RIVAL's-POV read on whether they'd accept
+        # (a fair/pay-up deal is realistic; a value-tilted one is a tougher sell). This is
+        # what turns "which of these would actually land?" into a glance.
+        acc_chip = (f'<span style="font-size:8.5px;font-weight:700;letter-spacing:.4px;'
+                    f'text-transform:uppercase;color:{acc_color};border:1px solid {acc_color};'
+                    f'border-radius:3px;padding:1px 5px;margin-left:6px;">{accept}</span>')
         logo = fantasy_logo(team_logos.get(t["team"], ""), size=20, team_name=t["team"])
         cards.append(
             f'<div style="background:{SURFACE};border:1px solid {BORDER};border-radius:8px;'
             f'padding:12px 14px;margin-bottom:12px;">'
             f'<div style="font-size:11px;color:{MUTED};margin-bottom:8px;">with {logo}'
-            f'<span style="color:{TEXT};font-weight:700;">{t["team"]}</span></div>'
+            f'<span style="color:{TEXT};font-weight:700;">{t["team"]}</span>{acc_chip}</div>'
             f'<table style="width:100%;border-collapse:collapse;"><tr>'
             f'<td style="width:47%;vertical-align:top;">'
             f'<div style="font-size:9px;font-weight:700;color:{RED};text-transform:uppercase;'
@@ -3256,7 +3374,12 @@ def build_trade_radar(pitchers, hitters, roto, my_team, best_recent_p, best_rece
             f'<span style="color:{MUTED};"> &middot; {value}</span></div>'
             f'</div>'
         )
+    n_fair = sum(1 for t in trades if t.get("lane") == "fair")
     sub = (f'{len(trades)} swap{"s" if len(trades) != 1 else ""} that fix a rival&rsquo;s '
+           f'category need &mdash; <span style="color:{GREEN};">realistic</span>, near-even '
+           f'asks that actually land the upgrade, plus value plays where a rival is motivated'
+           if n_fair else
+           f'{len(trades)} swap{"s" if len(trades) != 1 else ""} that fix a rival&rsquo;s '
            f'category need while tilting value your way (buy-low / sell-high where possible)')
     return section_head("Trade Radar", sub) + "".join(cards)
 
