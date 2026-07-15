@@ -3009,6 +3009,26 @@ def _deal_star_reach(ins, outs, net_val):
     return get_star >= _TRADE_STAR_SCORE and get_star > give_top and net_val > -_TRADE_STAR_PAYUP
 
 
+def _deal_star_surrender(ins, outs, net_val):
+    """The MY-side mirror of `_deal_star_reach`: would *I* balk because the deal asks me to
+    surrender my crown-jewel star at par? True when the single best player in the deal (by role
+    SCORE) is one I'd GIVE (in `outs`), he's a genuine star (bat or starter, score >=
+    _TRADE_STAR_SCORE), he outranks anything I acquire, and I'm not clearly WINNING value
+    (net_val < _TRADE_STAR_PAYUP). Relievers excluded — punt-saves arms move at par. Same
+    endowment/star bias that stops a rival shipping their best guy at par stops me shipping
+    mine: category-even `_tval` reads "fair" yet I'd hold out. Acceptance-layer only (keeps
+    `_tval` a pure value currency). Used by `_pending_verdict`."""
+    if not outs:
+        return False
+    def _is_star(p):
+        if _n(p.get("_tscore")) < _TRADE_STAR_SCORE:
+            return False
+        return p.get("_tptype") == "hit" or (p.get("_tptype") == "pit" and _is_sp(p))
+    give_star = max((_n(o.get("_tscore")) for o in outs if _is_star(o)), default=0.0)
+    get_top   = max((_n(p.get("_tscore")) for p in (ins or [])), default=0.0)
+    return give_star >= _TRADE_STAR_SCORE and give_star > get_top and net_val < _TRADE_STAR_PAYUP
+
+
 def _trade_tilt(net_val, ins=None, outs=None):
     """(value_phrase, accept_phrase, accept_color) for a trade's net_val (my value edge,
     + = I win). The value phrase is my-POV; the accept phrase is the RIVAL's-POV read on
@@ -3089,23 +3109,32 @@ def _verdict_pill(label, color):
             f'font-size:11px;padding:2px 9px;border-radius:10px;">{label}</span>')
 
 
-def _pending_verdict(net_val, addresses_need, timing, incoming):
+def _pending_verdict(net_val, addresses_need, timing, incoming, star_surrender=False):
     """Accept / Counter / Decline lean for a pending trade, from the SAME signals
     find_trades ranks on: my value edge (net_val = get − give), whether it addresses a
     real category/positional need, and timing (positive = I sell-high / buy-low, negative
     = a trap I'd be selling a riser / buying a regressor). Returns (label, color, why).
     Only meaningful for INCOMING offers (mine to decide); outgoing gets a status read
-    instead. Thresholds mirror the Trade Radar value tilt (±0.1)."""
+    instead. Thresholds mirror the Trade Radar value tilt (±0.1).
+    `star_surrender` (from `_deal_star_surrender`) is the MY-side mirror of the Trade Radar
+    star-reach: when the offer pries my crown-jewel star at par, an otherwise-ACCEPT is
+    downgraded to COUNTER (endowment/star bias — I'd hold out even at category-even value)."""
     trap = timing < 0
     if net_val >= 0.1 and not trap:
+        if star_surrender:
+            return ("COUNTER", YELLOW, "they're prying your star at par — hold out for more")
         return ("ACCEPT", GREEN, "you win the value" +
                 (" and it fills a need" if addresses_need else ""))
     if addresses_need and net_val >= -0.1 and not trap:
+        if star_surrender:
+            return ("COUNTER", YELLOW, "they're prying your star at par — hold out for more")
         return ("ACCEPT", GREEN, "roughly even value and it fills a real need")
     if addresses_need:
         why = ("you'd be paying up" if net_val < -0.1 else "the timing is a trap")
         return ("COUNTER", YELLOW, f"right direction but {why} — ask for more")
     if net_val >= 0.1:
+        if star_surrender:
+            return ("COUNTER", YELLOW, "they're prying your star at par — hold out for more")
         return ("ACCEPT", GREEN, "you win the value")
     return ("DECLINE", RED, "no need addressed and you don't gain value")
 
@@ -3237,7 +3266,8 @@ def _grade_pending_trades(pending, pitchers, hitters, roto, my_team,
         value = ("you win the value" if net_val > 0.1 else
                  "even value" if net_val >= -0.1 else "you pay up")
 
-        verdict = _pending_verdict(net_val, addresses_need, timing, incoming) if incoming else None
+        star_surrender = _deal_star_surrender(ins, outs, net_val)
+        verdict = _pending_verdict(net_val, addresses_need, timing, incoming, star_surrender) if incoming else None
         counter = ""
         if verdict and verdict[0] == "COUNTER":
             exclude = {_badge_name_key(nm) for (_r, nm) in get_rows + give_rows}
@@ -4517,7 +4547,8 @@ def build_glossary_section():
                "(yellow) = the right direction but you'd be paying up or selling a riser / buying a regressor — on a "
                "counter it also <b>names the best add-on to ask the other manager for</b> (a spare piece of theirs "
                "that evens the value and helps a need of yours); <b>DECLINE</b> (red) = it addresses no need and you "
-               "don't gain value. Value is judged on the same cross-role currency Trade Radar uses. Because offers "
+               "don't gain value. An even-value offer that <b>pries one of your star players at par</b> also leans "
+               "COUNTER (hold out — you'd give up a crown jewel for parity). Value is judged on the same cross-role currency Trade Radar uses. Because offers "
                "<b>expire</b>, an incoming-offer headline (verdict + days left) also shows atop Matchup at a Glance "
                "and in the email body's &ldquo;Act today&rdquo; list. An offer <b>you</b> proposed shows an "
                "&ldquo;awaiting {partner}&rdquo; status instead (it's their call)."),
