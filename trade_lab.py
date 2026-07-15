@@ -620,6 +620,21 @@ function counterAddon(partnerTk, myMeta, gap) {{
   return cands[0];
 }}
 
+// JS mirror of send_digest._deal_star_reach: a market-perception (NOT value) check —
+// a rival won't ship their crown-jewel star at par. True when the single best player in
+// the deal by SCORE is one I'd ACQUIRE, he's a genuine star (bat or starter, score >= 80),
+// he outranks anything I send back, and I'm not clearly paying up (net > -0.25). Relievers
+// excluded (punt-saves arms move at par). Keeps tval a pure value currency; the star
+// premium lives only in the acceptance ("Would they do it?") read, matching the Trade Radar.
+function dealStarReach(getArr, giveArr, netVal) {{
+  var STAR = 80, PAYUP = 0.25;
+  function isStar(p) {{ return p.score >= STAR && (p.role === 'hit' || p.role === 'sp'); }}
+  var getStar = 0, giveTop = 0;
+  getArr.forEach(function(p) {{ if (isStar(p) && p.score > getStar) getStar = p.score; }});
+  giveArr.forEach(function(p) {{ if (p.score > giveTop) giveTop = p.score; }});
+  return getStar >= STAR && getStar > giveTop && netVal > -PAYUP;
+}}
+
 function recompute() {{
   var L = picked.L, R = picked.R;                       // L = give, R = get
   var lKeys = Object.keys(L), rKeys = Object.keys(R);
@@ -707,12 +722,16 @@ function recompute() {{
   // Value tilt phrase (Trade Radar wording, +/-0.1).
   var tilt = netVal > 0.1 ? 'you win the value' : (netVal < -0.1 ? 'you pay up' : 'even value');
 
-  // Partner-fit: does what I give address THEIR needs?
+  // Partner-fit: does what I give address THEIR needs? A STAR REACH (prying their best
+  // player at par) overrides — a rival won't do it no matter how well my give fits their
+  // needs, matching the Trade Radar's "aggressive ask" read (send_digest._deal_star_reach).
   var partnerNeeds = partnerMeta.needs || [];
   var partnerGets = lost.filter(function(c){{ return partnerNeeds.indexOf(c) >= 0; }});
-  var partnerFit = partnerGets.length
-    ? 'fits their needs (' + partnerGets.map(function(c){{return DATA.catLabels[c]||c;}}).join(', ') + ') &mdash; realistic'
-    : (lKeys.length ? 'doesn\'t hit their category needs &mdash; may be a tough sell' : '&mdash;');
+  var partnerFit = dealStarReach(getArr, giveArr, netVal)
+    ? 'you\'d be prying their star at par &mdash; tough sell'
+    : (partnerGets.length
+        ? 'fits their needs (' + partnerGets.map(function(c){{return DATA.catLabels[c]||c;}}).join(', ') + ') &mdash; realistic'
+        : (lKeys.length ? 'doesn\'t hit their category needs &mdash; may be a tough sell' : '&mdash;'));
 
   var timingTxt = timing > 0 ? 'in your favor (selling high / buying low)'
                 : (timing < 0 ? 'a trap (dealing a riser or buying a regressor)' : 'neutral');
