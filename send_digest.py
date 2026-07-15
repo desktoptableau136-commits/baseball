@@ -2652,6 +2652,8 @@ _TRADE_MAX_CARDS    = 6     # trades surfaced
 _TRADE_PER_TEAM_CAP = 2     # max cards per partner team (variety)
 _TRADE_POOL_WIDTH   = 4     # top-N of each side fed into the 2-for-2 combinations
 _POS_DEPTH_SLACK    = 1     # bodies beyond POS_STARTERS I can still use (bench/flex) before a position reads "stacked"
+_TRADE_STAR_SCORE   = 80    # role SCORE at/above which a rival won't ship a player at par (endowment/star bias) -- an ACCEPTANCE knob, NOT a value one
+_TRADE_STAR_PAYUP   = 0.25  # tval you must be PAYING UP by for acquiring such a star to still read as a realistic ask
 # Player category coverage reuses the FA cat lists (QS/B_SO aren't per-player stats, so a
 # team need in those simply finds no matching player — intentional, same as the FA "Cats").
 
@@ -2986,16 +2988,40 @@ def find_trades_combined(pitchers, hitters, roto, my_team, best_recent_p, best_r
     return picked
 
 
-def _trade_tilt(net_val):
+def _deal_star_reach(ins, outs, net_val):
+    """Market-perception (NOT value) check: would a rival balk because the deal asks them to
+    surrender their crown-jewel star at par? True when the single best player in the deal (by
+    role SCORE) is one I'd ACQUIRE, he's a genuine star (bat or starter, score >=
+    _TRADE_STAR_SCORE), he outranks anything I send back, and I'm not clearly paying up for
+    him (net_val > -_TRADE_STAR_PAYUP). Relievers are excluded — punt-saves arms move at par.
+    This is why a Witt-Jr.-for-two-OF-depth deal reads even by _tval yet a tough manager
+    rejects it on sight: _tval measures category value honestly, but managers won't ship a
+    star at par. Keeps `_tval` a pure value currency; the premium lives in the acceptance
+    layer only. Called by `_trade_tilt`."""
+    if not ins:
+        return False
+    def _is_star(p):
+        if _n(p.get("_tscore")) < _TRADE_STAR_SCORE:
+            return False
+        return p.get("_tptype") == "hit" or (p.get("_tptype") == "pit" and _is_sp(p))
+    get_star = max((_n(p.get("_tscore")) for p in ins if _is_star(p)), default=0.0)
+    give_top = max((_n(o.get("_tscore")) for o in (outs or [])), default=0.0)
+    return get_star >= _TRADE_STAR_SCORE and get_star > give_top and net_val > -_TRADE_STAR_PAYUP
+
+
+def _trade_tilt(net_val, ins=None, outs=None):
     """(value_phrase, accept_phrase, accept_color) for a trade's net_val (my value edge,
     + = I win). The value phrase is my-POV; the accept phrase is the RIVAL's-POV read on
     whether they'd say yes — a deal where I win value is a tougher sell, an even/pay-up deal
-    is realistic. Shared by the digest Trade Radar + the dashboard tile so they agree."""
+    is realistic. Pass the deal's `ins`/`outs` so a STAR REACH (acquiring their best player at
+    par — a deal even _tval calls fair but no manager accepts) also reads "aggressive ask",
+    not "realistic". Shared by the digest Trade Radar + the dashboard tile so they agree."""
     value = ("you win the value" if net_val > 0.1 else
              "even value" if net_val >= -0.1 else "you pay up")
-    if net_val > _TRADE_FAIR_BAND:
-        return value, "aggressive ask", YELLOW
-    return value, "realistic", GREEN
+    realistic = net_val <= _TRADE_FAIR_BAND and not _deal_star_reach(ins, outs, net_val)
+    if realistic:
+        return value, "realistic", GREEN
+    return value, "aggressive ask", YELLOW
 
 
 def _trade_score_reveal(score, breakdown_html, uid):
@@ -3340,7 +3366,7 @@ def build_trade_radar(pitchers, hitters, roto, my_team, best_recent_p, best_rece
         get_lbl  = ", ".join(gains) or "depth"
         send_lbl = ", ".join(_CAT_DISPLAY.get(c, c) for c in t["send_cats"])
         net = t.get("net_val", 0.0)
-        value, accept, acc_color = _trade_tilt(net)
+        value, accept, acc_color = _trade_tilt(net, t["ins"], t["outs"])
         thesis = ("sell-high" if t.get("sell_out") else "") + \
                  (" · " if t.get("sell_out") and t.get("buy_in") else "") + \
                  ("buy-low" if t.get("buy_in") else "")

@@ -850,7 +850,7 @@ def render_trade_radar(ctx):
         get_ = "".join(pl(i, True) for i in t["ins"])
         net = t.get("net_val", 0)
         val = "you win" if net > 0.1 else "even" if net >= -0.1 else "you pay up"
-        _, accept, acc_color = sd._trade_tilt(net)   # rival's-POV acceptance read (realistic / aggressive ask)
+        _, accept, acc_color = sd._trade_tilt(net, t["ins"], t["outs"])   # rival's-POV acceptance read (realistic / aggressive ask; star-reach aware)
         thesis = "sell-high" if t.get("sell_out") else ""
         thesis += ("/buy-low" if thesis and t.get("buy_in") else ("buy-low" if t.get("buy_in") else ""))
         logo = sd.fantasy_logo(ctx["team_logos"].get(t["team"], ""), 14, t["team"])
