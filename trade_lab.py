@@ -799,10 +799,11 @@ function counterAddon(partnerTk, myMeta, gap) {{
 // premium lives only in the acceptance ("Would they do it?") read, matching the Trade Radar.
 function dealStarReach(getArr, giveArr, netVal) {{
   var STAR = 80, PAYUP = 0.25;
-  function isStar(p) {{ return p.score >= STAR && (p.role === 'hit' || p.role === 'sp'); }}
+  function starRole(p) {{ return p.role === 'hit' || p.role === 'sp'; }}  // relievers not cross-role comparable
+  function isStar(p) {{ return p.score >= STAR && starRole(p); }}
   var getStar = 0, giveTop = 0;
   getArr.forEach(function(p) {{ if (isStar(p) && p.score > getStar) getStar = p.score; }});
-  giveArr.forEach(function(p) {{ if (p.score > giveTop) giveTop = p.score; }});
+  giveArr.forEach(function(p) {{ if (starRole(p) && p.score > giveTop) giveTop = p.score; }});
   return getStar >= STAR && getStar > giveTop && netVal > -PAYUP;
 }}
 
@@ -812,10 +813,11 @@ function dealStarReach(getArr, giveArr, netVal) {{
 // WINNING value (net < 0.25). Same endowment/star bias, my side — drives "Would you do it?".
 function dealStarSurrender(getArr, giveArr, netVal) {{
   var STAR = 80, PAYUP = 0.25;
-  function isStar(p) {{ return p.score >= STAR && (p.role === 'hit' || p.role === 'sp'); }}
+  function starRole(p) {{ return p.role === 'hit' || p.role === 'sp'; }}  // relievers not cross-role comparable
+  function isStar(p) {{ return p.score >= STAR && starRole(p); }}
   var giveStar = 0, getTop = 0;
   giveArr.forEach(function(p) {{ if (isStar(p) && p.score > giveStar) giveStar = p.score; }});
-  getArr.forEach(function(p) {{ if (p.score > getTop) getTop = p.score; }});
+  getArr.forEach(function(p) {{ if (starRole(p) && p.score > getTop) getTop = p.score; }});
   return giveStar >= STAR && giveStar > getTop && netVal < PAYUP;
 }}
 

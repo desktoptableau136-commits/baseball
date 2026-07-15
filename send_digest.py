@@ -3030,15 +3030,17 @@ def _deal_star_reach(ins, outs, net_val):
     This is why a Witt-Jr.-for-two-OF-depth deal reads even by _tval yet a tough manager
     rejects it on sight: _tval measures category value honestly, but managers won't ship a
     star at par. Keeps `_tval` a pure value currency; the premium lives in the acceptance
-    layer only. Called by `_trade_tilt`."""
+    layer only. Relievers are excluded from BOTH sides of the comparison — not just as an
+    acquired star, but from `give_top` too: a closer's within-role score (e.g. 89) is not
+    cross-role comparable to a hitter's, so counting him in `give_top` would falsely mask a
+    genuine star on the get side (the Witt-for-McCarthy+reliever bug). Called by `_trade_tilt`."""
     if not ins:
         return False
-    def _is_star(p):
-        if _n(p.get("_tscore")) < _TRADE_STAR_SCORE:
-            return False
+    def _star_role(p):
         return p.get("_tptype") == "hit" or (p.get("_tptype") == "pit" and _is_sp(p))
-    get_star = max((_n(p.get("_tscore")) for p in ins if _is_star(p)), default=0.0)
-    give_top = max((_n(o.get("_tscore")) for o in (outs or [])), default=0.0)
+    get_star = max((_n(p.get("_tscore")) for p in ins
+                    if _star_role(p) and _n(p.get("_tscore")) >= _TRADE_STAR_SCORE), default=0.0)
+    give_top = max((_n(o.get("_tscore")) for o in (outs or []) if _star_role(o)), default=0.0)
     return get_star >= _TRADE_STAR_SCORE and get_star > give_top and net_val > -_TRADE_STAR_PAYUP
 
 
@@ -3050,15 +3052,16 @@ def _deal_star_surrender(ins, outs, net_val):
     (net_val < _TRADE_STAR_PAYUP). Relievers excluded — punt-saves arms move at par. Same
     endowment/star bias that stops a rival shipping their best guy at par stops me shipping
     mine: category-even `_tval` reads "fair" yet I'd hold out. Acceptance-layer only (keeps
-    `_tval` a pure value currency). Used by `_pending_verdict`."""
+    `_tval` a pure value currency). Relievers are excluded from BOTH sides — as a surrendered
+    star AND from `get_top` — for the same cross-role-incomparability reason as `_deal_star_reach`.
+    Used by `_pending_verdict`."""
     if not outs:
         return False
-    def _is_star(p):
-        if _n(p.get("_tscore")) < _TRADE_STAR_SCORE:
-            return False
+    def _star_role(p):
         return p.get("_tptype") == "hit" or (p.get("_tptype") == "pit" and _is_sp(p))
-    give_star = max((_n(o.get("_tscore")) for o in outs if _is_star(o)), default=0.0)
-    get_top   = max((_n(p.get("_tscore")) for p in (ins or [])), default=0.0)
+    give_star = max((_n(o.get("_tscore")) for o in outs
+                     if _star_role(o) and _n(o.get("_tscore")) >= _TRADE_STAR_SCORE), default=0.0)
+    get_top   = max((_n(p.get("_tscore")) for p in (ins or []) if _star_role(p)), default=0.0)
     return give_star >= _TRADE_STAR_SCORE and give_star > get_top and net_val < _TRADE_STAR_PAYUP
 
 
