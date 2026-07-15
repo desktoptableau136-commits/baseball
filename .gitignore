@@ -5,6 +5,7 @@
 data/
 logs/
 previews/
+public/
 
 # Python
 __pycache__/

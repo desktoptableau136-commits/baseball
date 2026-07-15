@@ -172,6 +172,17 @@ Two things help you build the deal quickly. Each player carries a **position chi
 
 You can also **preload a specific deal** from the command line (`--partner`/`--give`/`--get`, comma-separated names) so it's assembled and graded the moment the page opens — the deal is baked into the page data, so it survives the Windows `file://` launch (which strips URL fragments). The three columns render at **equal width**.
 
+#### Pocket Trade Lab (phone) — one-tap refresh from anywhere
+
+The Trade Lab also runs as a **phone-first web app** you open from a single GitHub Pages URL and refresh **on demand from the phone** — no scheduled runs, no waiting for an email. Because it's a self-contained page (the data is baked in; the JS only sums pre-computed numbers), publishing is trivial; the only extra machinery is the refresh trigger.
+
+- **`--out PATH`** writes the built HTML to an exact path (plus a sibling `build.json` freshness marker) — used by CI to publish `public/index.html`.
+- **`--refresh-url URL`** (or env `POCKET_REFRESH_URL`) bakes a **↻ Refresh data** button into the header. Left unset (normal local runs), no button renders.
+- **How refresh works:** the button POSTs to a tiny **Cloudflare Worker** (the only holder of a narrowly-scoped GitHub token), which fires the `pocket-tradelab.yml` workflow. That workflow re-fetches data, rebuilds the page, and redeploys to Pages; the phone polls `build.json` and auto-reloads when the new build lands (~2–3 min).
+- The layout has a **pocket redesign** below 640px: single column, big tap targets, a sticky team-section header, and an always-visible **bottom deal bar** (Give N · Get N · net · verdict) that jumps you to the full grade. Desktop is unchanged.
+
+**One-time setup** (Pages, a fine-grained token, the Worker, and the `POCKET_REFRESH_URL` repo variable) is documented step-by-step in [`worker/README.md`](worker/README.md).
+
 **On Windows PowerShell**, if `git` isn't found, run this first to restore it:
 ```powershell
 $env:PATH = [System.Environment]::GetEnvironmentVariable("PATH","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("PATH","User")

@@ -1,0 +1,60 @@
+name: Pocket Trade Lab (GitHub Pages)
+
+# Publishes the phone-friendly Trade Lab to GitHub Pages.
+# Triggers (NO schedule, by design -- refresh is on-demand):
+#   * workflow_dispatch     -> run manually from the Actions UI / GitHub mobile app
+#   * repository_dispatch    -> fired by the Cloudflare Worker when you tap "Refresh data"
+on:
+  workflow_dispatch:
+  repository_dispatch:
+    types: [refresh-tradelab]
+
+# Least-privilege token for the Pages deploy.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Only one publish at a time; a newer refresh supersedes an in-flight one.
+concurrency:
+  group: pocket-tradelab
+  cancel-in-progress: true
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Refresh data and build the pocket Trade Lab
+        env:
+          ESPN_SWID: ${{ secrets.ESPN_SWID }}
+          ESPN_S2: ${{ secrets.ESPN_S2 }}
+          # Worker URL for the in-page Refresh button (repo Actions VARIABLE, not a secret --
+          # the URL isn't sensitive; the GitHub token lives only inside the Worker).
+          POCKET_REFRESH_URL: ${{ vars.POCKET_REFRESH_URL }}
+        run: python trade_lab.py --refresh --out public/index.html
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+
+      - name: Deploy to GitHub Pages
+        id: deploy
+        uses: actions/deploy-pages@v4

@@ -1,0 +1,6 @@
+# Cloudflare Worker config for the Pocket Trade Lab refresh proxy.
+# Deploy with:  cd worker && npx wrangler deploy
+# The GitHub token is a SECRET, never put it here:  npx wrangler secret put GH_DISPATCH_TOKEN
+name = "pocket-tradelab-refresh"
+main = "worker.js"
+compatibility_date = "2024-11-01"
