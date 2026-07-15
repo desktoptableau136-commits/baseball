@@ -23,7 +23,7 @@ and is NOT emailable like the dashboard. It writes previews/tradelab_{team_slug}
 
 import argparse
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import send_digest as sd
@@ -390,6 +390,8 @@ def build_html(data):
                     MUTED=MUTED, TEXT=TEXT, BORDER=BORDER, SURFACE2=SURFACE2)
     my_name = _disp(data["myTeam"])
     fresh_label, fresh_color = _freshness(data.get("refreshed", ""))
+    refresh_btn = ('<button id="refreshBtn" class="refreshbtn" onclick="doRefresh()">'
+                   '&#8635; Refresh data</button>') if data.get("refreshUrl") else ""
     return f"""<!DOCTYPE html>
 <html lang="en"><head>
 <meta charset="utf-8">
@@ -403,7 +405,10 @@ def build_html(data):
       <div class="htitle">&#9878;&#65039; Trade Lab</div>
       <div class="hsub">Pick two teams, click players to build a deal, watch it get graded live. &#127919; marks partner players who fill your needs.</div>
     </div>
-    <div class="fresh" title="Snapshot refresh time — rerun with --refresh to update"><span class="dot" style="background:{fresh_color}"></span><span>Data: {fresh_label}</span></div>
+    <div class="headright">
+      <div class="fresh" title="Snapshot refresh time — rerun with --refresh to update"><span class="dot" style="background:{fresh_color}"></span><span>Data: {fresh_label}</span></div>
+      {refresh_btn}
+    </div>
   </div>
   <details id="fitboard" open>
     <summary class="fbsum">
@@ -443,6 +448,10 @@ def build_html(data):
       <div class="roster" id="rosterR"></div>
     </div>
   </div>
+  <div id="dealbar" onclick="jumpToDeal()">
+    <div id="dbsummary">Tap players to build a deal</div>
+    <div id="dbverdict"></div>
+  </div>
 </div>
 <script>const DATA = {blob};</script>
 <script>{js}</script>
@@ -454,7 +463,14 @@ _CSS = """
 body {{ margin:0; background:{BG}; color:{TEXT}; font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif; }}
 #app {{ max-width:1500px; margin:0 auto; padding:16px; }}
 #head {{ margin-bottom:12px; display:flex; justify-content:space-between; align-items:flex-start; gap:12px; flex-wrap:wrap; }}
+.headright {{ display:flex; align-items:center; gap:10px; flex-wrap:wrap; }}
 .fresh {{ font-size:11.5px; color:{MUTED}; white-space:nowrap; display:flex; align-items:center; gap:6px; padding-top:5px; }}
+.refreshbtn {{ font-size:12px; font-weight:800; color:#0b1220; background:{ACCENT}; border:1px solid {ACCENT}; border-radius:7px; padding:7px 13px; cursor:pointer; white-space:nowrap; }}
+.refreshbtn:hover {{ filter:brightness(1.08); }}
+.refreshbtn:disabled {{ background:{SURFACE2}; color:{MUTED}; border-color:{BORDER}; cursor:default; }}
+/* Bottom "deal bar" — hidden on desktop, shown only on phones (see the 640px block). */
+#dealbar {{ display:none; position:fixed; left:0; right:0; bottom:0; z-index:20; align-items:center; justify-content:space-between; gap:10px; padding:9px 14px; background:{SURFACE}; border-top:1px solid {BORDER}; box-shadow:0 -4px 16px rgba(0,0,0,.35); cursor:pointer; }}
+#dbsummary {{ font-size:13px; color:{TEXT}; }}
 .dot {{ width:9px; height:9px; border-radius:50%; display:inline-block; flex:0 0 auto; }}
 .htitle {{ font-size:22px; font-weight:800; }}
 .hsub {{ color:{MUTED}; font-size:13px; margin-top:2px; }}
@@ -554,6 +570,28 @@ body {{ margin:0; background:{BG}; color:{TEXT}; font-family:-apple-system,Segoe
   .roster {{ max-height:none; }}
   .fblist {{ grid-template-columns:1fr; }}
 }}
+/* Pocket (phone) layout — additive; desktop above is untouched. Bigger tap targets,
+   a sticky team-section header, and an always-visible bottom deal bar. */
+@media (max-width:640px) {{
+  #app {{ padding:10px 10px 76px; }}   /* bottom padding clears the fixed deal bar */
+  #head {{ margin-bottom:10px; }}
+  .htitle {{ font-size:19px; }}
+  .hsub {{ display:none; }}
+  .headright {{ width:100%; justify-content:space-between; }}
+  .refreshbtn {{ font-size:13.5px; padding:10px 16px; flex:1; }}
+  .sidehead {{ position:sticky; top:0; z-index:5; padding:11px 12px; }}
+  .teamsel {{ padding:10px; font-size:14.5px; }}
+  .roster {{ padding:10px; }}
+  .prow {{ padding:11px 10px; margin-bottom:4px; }}
+  .pname {{ font-size:14.5px; }}
+  .pill {{ font-size:13px; padding:4px 11px; }}
+  .pstat {{ font-size:12px; }}
+  .poschip {{ font-size:10px; padding:2px 5px; }}
+  #mid {{ padding:12px; }}
+  .fbtitle {{ font-size:15.5px; }}
+  .fbcard {{ padding:12px; }}
+  #dealbar {{ display:flex; }}
+}}
 """
 
 
@@ -564,6 +602,48 @@ var TARGET_NET = {{ fair:0.0, favor:0.30, fleece:0.70 }};   // value edge the co
 var STUD_CEIL  = {{ fair:99, favor:1.6, fleece:1.2 }};      // don't suggest offering my pieces above this value
 
 function setStrategy(s) {{ strategy = s; renderCoach(); }}
+
+// ---- Pocket: in-page data refresh (fires the GitHub workflow via the Worker proxy) ----
+var _pollTimer = null, _pollTries = 0;
+function doRefresh() {{
+  if (!DATA.refreshUrl) return;
+  var b = document.getElementById('refreshBtn');
+  if (b) {{ b.disabled = true; b.textContent = 'Refreshing... (~2-3 min)'; }}
+  fetch(DATA.refreshUrl, {{ method:'POST' }}).then(startPoll, startPoll);
+}}
+function startPoll() {{
+  _pollTries = 0;
+  if (_pollTimer) clearInterval(_pollTimer);
+  _pollTimer = setInterval(checkBuild, 15000);
+}}
+function checkBuild() {{
+  if (++_pollTries > 24) {{                     // ~6 min ceiling
+    clearInterval(_pollTimer);
+    var b = document.getElementById('refreshBtn');
+    if (b) {{ b.disabled = false; b.innerHTML = '&#8635; Refresh data'; }}
+    alert('Still building - give it another minute, then reload.');
+    return;
+  }}
+  fetch('build.json?t=' + Date.now(), {{ cache:'no-store' }})
+    .then(function(r) {{ return r.json(); }})
+    .then(function(j) {{ if (j && j.built_at && j.built_at !== DATA.builtAt) location.reload(); }})
+    .catch(function() {{}});
+}}
+
+// ---- Pocket: bottom deal bar (always-visible running grade on phones) ----
+function setDealBar(giveN, getN, net, label, color) {{
+  var s = document.getElementById('dbsummary'), v = document.getElementById('dbverdict');
+  if (!s) return;
+  if (!giveN && !getN) {{ s.textContent = 'Tap players to build a deal'; v.innerHTML = ''; return; }}
+  var nc = net > 0.1 ? '{GREEN}' : (net < -0.1 ? '{RED}' : '{MUTED}');
+  var nt = (net > 0 ? '+' : '') + net.toFixed(2);
+  s.innerHTML = 'Give ' + giveN + ' &middot; Get ' + getN + ' &middot; <b style="color:' + nc + '">net ' + nt + '</b>';
+  v.innerHTML = label ? '<span class="vpill" style="background:' + color + ';font-size:12px;padding:3px 11px">' + label + '</span>' : '';
+}}
+function jumpToDeal() {{
+  var m = document.getElementById('mid');
+  if (m) m.scrollIntoView({{ behavior:'smooth', block:'start' }});
+}}
 
 function pillColor(s) {{
   if (s >= 72) return '{GREEN}';
@@ -838,6 +918,7 @@ function recompute() {{
   if (!lKeys.length && !rKeys.length) {{
     vBox.innerHTML = '<span class="vpill" style="background:{BORDER};color:{MUTED}">SELECT PLAYERS</span>';
     reads.innerHTML = '';
+    setDealBar(0, 0, 0, '', '');
     return;
   }}
 
@@ -911,6 +992,7 @@ function recompute() {{
   }}
   vBox.innerHTML = '<span class="vpill" style="background:'+color+'">'+label+'</span>'
     + '<div class="vwhy">'+why+'</div>';
+  setDealBar(lKeys.length, rKeys.length, netVal, label, color);
 
   // Value tilt phrase (Trade Radar wording, +/-0.1).
   var tilt = netVal > 0.1 ? 'you win the value' : (netVal < -0.1 ? 'you pay up' : 'even value');
@@ -1103,6 +1185,12 @@ def main():
     ap.add_argument("--partner", default=None, help="Preload: RIGHT-side team key (e.g. 'The BIG Dumpers')")
     ap.add_argument("--give", default=None, help="Preload: comma-separated player names to put on YOUR side")
     ap.add_argument("--get", default=None, help="Preload: comma-separated player names to acquire from the partner")
+    ap.add_argument("--out", default=None,
+                    help="Write the HTML to this exact path (for publishing, e.g. public/index.html) "
+                         "and a sibling build.json freshness marker, instead of previews/tradelab_{slug}.html")
+    ap.add_argument("--refresh-url", default=None,
+                    help="Cloudflare Worker endpoint for the in-page Refresh button (or env POCKET_REFRESH_URL). "
+                         "When unset, the Refresh button is not rendered.")
     args = ap.parse_args()
 
     if args.refresh:
@@ -1117,13 +1205,32 @@ def main():
     if args.partner or args.give or args.get:
         data["preload"] = {"partner": " ".join((args.partner or "").split()),
                            "give": args.give or "", "get": args.get or ""}
+
+    import os
+    refresh_url = args.refresh_url or os.environ.get("POCKET_REFRESH_URL") or ""
+    if refresh_url:
+        data["refreshUrl"] = refresh_url
+    # build_at stamps the render; build.json below carries the same value so the pocket page
+    # can poll for a completed rebuild and auto-reload (see the Refresh JS).
+    built_at = datetime.now(timezone.utc).isoformat()
+    data["builtAt"] = built_at
+
     html = build_html(data)
 
-    PREVIEWS.mkdir(exist_ok=True)
-    slug = _disp(my_team).replace(" ", "_")
-    out = PREVIEWS / f"tradelab_{slug}.html"
-    out.write_text(html, encoding="utf-8")
-    print(f"Wrote {out}")
+    if args.out:
+        out = Path(args.out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(html, encoding="utf-8")
+        (out.parent / "build.json").write_text(
+            json.dumps({"built_at": built_at, "refreshed_at": data.get("refreshed", "")}),
+            encoding="utf-8")
+        print(f"Wrote {out} and {out.parent / 'build.json'}")
+    else:
+        PREVIEWS.mkdir(exist_ok=True)
+        slug = _disp(my_team).replace(" ", "_")
+        out = PREVIEWS / f"tradelab_{slug}.html"
+        out.write_text(html, encoding="utf-8")
+        print(f"Wrote {out}")
 
 
 if __name__ == "__main__":
