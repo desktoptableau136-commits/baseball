@@ -723,7 +723,16 @@ def render_hitting(ctx):
 
 
 def render_holes(ctx):
-    ranked = sorted([p for p in ctx["pos_data"] if p.get("rank")], key=lambda p: -(p["rank"] or 0))
+    # Only show GENUINE needs -- bottom-third rank -- matching the app-wide convention
+    # (_roster_suggestion / Trade Radar: rank >= n - third + 1, third = round(n/3)). Without
+    # this gate the tile force-fed the 3 weakest-ranked positions even when the 3rd was fine
+    # (e.g. 1B #7/12 anchored by an 83-score Olson), reading as a false "1B hole".
+    def _is_need(p):
+        n = p.get("n_teams") or 12
+        third = max(1, round(n / 3.0))
+        return (p.get("rank") or 0) >= n - third + 1
+    ranked = sorted([p for p in ctx["pos_data"] if p.get("rank") and _is_need(p)],
+                    key=lambda p: -(p["rank"] or 0))
     rows = []
     for p in ranked[:3]:
         worst = p.get("worst_player"); fa = (p.get("top_fa") or [None])[0]
