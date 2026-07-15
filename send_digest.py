@@ -1216,6 +1216,7 @@ def positional_breakdown(pitchers, hitters, my_team, best_recent_p=None, best_re
         results.append({
             "pos":          pos_label,
             "ptype":        ptype,
+            "starter":      my_p[0] if my_p else None,   # rank-defining anchor (top score)
             "worst_player": drop_pool[-1] if drop_pool else None,
             "my_avg":       round(my_avg, 1),
             "rank":         rank,
@@ -1406,13 +1407,15 @@ TD_S = f"padding:7px 10px;border-bottom:1px solid {BORDER};color:{TEXT};font-siz
 TDC  = f"padding:7px 10px;border-bottom:1px solid {BORDER};color:{TEXT};font-size:13px;text-align:center;vertical-align:middle;"
 
 
-def badge(score):
+def badge(score, small=False):
     s = int(score or 0)
     if s >= 72:   bg, fg = "#16a34a", "#fff"
     elif s >= 52: bg, fg = "#2563eb", "#fff"
     elif s >= 32: bg, fg = "#d97706", "#fff"
     else:          bg, fg = "#dc2626", "#fff"
-    return f'<span style="background:{bg};color:{fg};padding:2px 9px;border-radius:12px;font-size:11px;font-weight:800;">{s}</span>'
+    pad, radius, fs = ("1px 6px", "10px", "9px") if small else ("2px 9px", "12px", "11px")
+    return (f'<span style="background:{bg};color:{fg};padding:{pad};border-radius:{radius};'
+            f'font-size:{fs};font-weight:800;">{s}</span>')
 
 
 # ── Tap-to-expand Score breakdown (v2) ─────────────────────────────────────────
@@ -1675,17 +1678,19 @@ def _pitcher_score_breakdown(r, idx_recent=None):
     return html
 
 
-def score_reveal(score, breakdown_html, uid=None, colspan=1):
+def score_reveal(score, breakdown_html, uid=None, colspan=1, small=False):
     """Return (cell_html, row_html): the Score-cell badge and the full-width breakdown
     <tr> to append immediately after the player's row. The badge is an anchor to the
     hidden row, revealed via CSS :target in the browser attachment. Falls back to a
-    plain badge with an empty row when there is no breakdown or no uid."""
+    plain badge with an empty row when there is no breakdown or no uid. `small` shrinks the
+    pill to sit inline with 10px sub-text (e.g. the Positional Breakdown drop candidate)."""
     if not breakdown_html or not uid:
-        return badge(score), ""
+        return badge(score, small), ""
+    caret_fs = "8px" if small else "9px"
     cell = (
         f'<a href="#{uid}" class="bdlink" title="Tap for score breakdown" '
-        f'style="text-decoration:none;white-space:nowrap;">{badge(score)}'
-        f'<span style="color:{MUTED};font-size:9px;font-weight:700;">&nbsp;&#9662;</span></a>'
+        f'style="text-decoration:none;white-space:nowrap;">{badge(score, small)}'
+        f'<span style="color:{MUTED};font-size:{caret_fs};font-weight:700;">&nbsp;&#9662;</span></a>'
     )
     row = (
         f'<tr id="{uid}" class="scorebd-row" style="display:none;">'
@@ -1698,6 +1703,34 @@ def score_reveal(score, breakdown_html, uid=None, colspan=1):
         f'</div></td></tr>'
     )
     return cell, row
+
+
+# Progressive enhancement for the tap-to-expand Score breakdown: with JS (the
+# browser-opened attachment), clicking a score pill TOGGLES its breakdown open/closed —
+# no more hunting for the ✕. It preventDefaults so the URL fragment never changes, which
+# means the CSS `:target` rule stays a clean no-JS fallback (older/JS-off renderers still
+# get open-on-click + ✕-to-close). Handles both the <tr> (table) and <div> (trade-card)
+# breakdown variants; the ✕ still closes too. Attachment-only (Gmail strips <script> just
+# like it strips <style>), so the email body is unaffected.
+_BD_TOGGLE_SCRIPT = """<script>
+document.addEventListener('click', function(e){
+  var a = e.target.closest ? e.target.closest('a') : null;
+  if(!a) return;
+  var h = a.getAttribute('href') || '';
+  if(h.charAt(0) !== '#') return;
+  var id = h.slice(1);
+  if(a.className && a.className.indexOf('bdlink') !== -1){
+    var el = document.getElementById(id);
+    if(!el) return;
+    e.preventDefault();
+    var open = el.style.display !== 'none' && el.style.display !== '';
+    el.style.display = open ? 'none' : (el.tagName === 'TR' ? 'table-row' : 'block');
+  } else if(id.slice(-1) === 'x'){
+    var el2 = document.getElementById(id.slice(0, -1));
+    if(el2){ e.preventDefault(); el2.style.display = 'none'; }
+  }
+});
+</script>"""
 
 
 def v(val, dec=2):
@@ -3009,6 +3042,26 @@ def _deal_star_reach(ins, outs, net_val):
     return get_star >= _TRADE_STAR_SCORE and get_star > give_top and net_val > -_TRADE_STAR_PAYUP
 
 
+def _deal_star_surrender(ins, outs, net_val):
+    """The MY-side mirror of `_deal_star_reach`: would *I* balk because the deal asks me to
+    surrender my crown-jewel star at par? True when the single best player in the deal (by role
+    SCORE) is one I'd GIVE (in `outs`), he's a genuine star (bat or starter, score >=
+    _TRADE_STAR_SCORE), he outranks anything I acquire, and I'm not clearly WINNING value
+    (net_val < _TRADE_STAR_PAYUP). Relievers excluded — punt-saves arms move at par. Same
+    endowment/star bias that stops a rival shipping their best guy at par stops me shipping
+    mine: category-even `_tval` reads "fair" yet I'd hold out. Acceptance-layer only (keeps
+    `_tval` a pure value currency). Used by `_pending_verdict`."""
+    if not outs:
+        return False
+    def _is_star(p):
+        if _n(p.get("_tscore")) < _TRADE_STAR_SCORE:
+            return False
+        return p.get("_tptype") == "hit" or (p.get("_tptype") == "pit" and _is_sp(p))
+    give_star = max((_n(o.get("_tscore")) for o in outs if _is_star(o)), default=0.0)
+    get_top   = max((_n(p.get("_tscore")) for p in (ins or [])), default=0.0)
+    return give_star >= _TRADE_STAR_SCORE and give_star > get_top and net_val < _TRADE_STAR_PAYUP
+
+
 def _trade_tilt(net_val, ins=None, outs=None):
     """(value_phrase, accept_phrase, accept_color) for a trade's net_val (my value edge,
     + = I win). The value phrase is my-POV; the accept phrase is the RIVAL's-POV read on
@@ -3089,23 +3142,32 @@ def _verdict_pill(label, color):
             f'font-size:11px;padding:2px 9px;border-radius:10px;">{label}</span>')
 
 
-def _pending_verdict(net_val, addresses_need, timing, incoming):
+def _pending_verdict(net_val, addresses_need, timing, incoming, star_surrender=False):
     """Accept / Counter / Decline lean for a pending trade, from the SAME signals
     find_trades ranks on: my value edge (net_val = get − give), whether it addresses a
     real category/positional need, and timing (positive = I sell-high / buy-low, negative
     = a trap I'd be selling a riser / buying a regressor). Returns (label, color, why).
     Only meaningful for INCOMING offers (mine to decide); outgoing gets a status read
-    instead. Thresholds mirror the Trade Radar value tilt (±0.1)."""
+    instead. Thresholds mirror the Trade Radar value tilt (±0.1).
+    `star_surrender` (from `_deal_star_surrender`) is the MY-side mirror of the Trade Radar
+    star-reach: when the offer pries my crown-jewel star at par, an otherwise-ACCEPT is
+    downgraded to COUNTER (endowment/star bias — I'd hold out even at category-even value)."""
     trap = timing < 0
     if net_val >= 0.1 and not trap:
+        if star_surrender:
+            return ("COUNTER", YELLOW, "they're prying your star at par — hold out for more")
         return ("ACCEPT", GREEN, "you win the value" +
                 (" and it fills a need" if addresses_need else ""))
     if addresses_need and net_val >= -0.1 and not trap:
+        if star_surrender:
+            return ("COUNTER", YELLOW, "they're prying your star at par — hold out for more")
         return ("ACCEPT", GREEN, "roughly even value and it fills a real need")
     if addresses_need:
         why = ("you'd be paying up" if net_val < -0.1 else "the timing is a trap")
         return ("COUNTER", YELLOW, f"right direction but {why} — ask for more")
     if net_val >= 0.1:
+        if star_surrender:
+            return ("COUNTER", YELLOW, "they're prying your star at par — hold out for more")
         return ("ACCEPT", GREEN, "you win the value")
     return ("DECLINE", RED, "no need addressed and you don't gain value")
 
@@ -3237,7 +3299,8 @@ def _grade_pending_trades(pending, pitchers, hitters, roto, my_team,
         value = ("you win the value" if net_val > 0.1 else
                  "even value" if net_val >= -0.1 else "you pay up")
 
-        verdict = _pending_verdict(net_val, addresses_need, timing, incoming) if incoming else None
+        star_surrender = _deal_star_surrender(ins, outs, net_val)
+        verdict = _pending_verdict(net_val, addresses_need, timing, incoming, star_surrender) if incoming else None
         counter = ""
         if verdict and verdict[0] == "COUNTER":
             exclude = {_badge_name_key(nm) for (_r, nm) in get_rows + give_rows}
@@ -3974,7 +4037,14 @@ def _roster_suggestion(matchup, pitchers, hitters, fa_sp, fa_rp, fa_hit,
         top_fa = (p.get("top_fa") or [None])[0]
         worst  = p.get("worst_player")
         if top_fa is not None and weak and not strong and label not in leak_groups:
-            lever = _n(top_fa.get("_pscore")) - (_n(worst.get("_pscore")) if worst else 0)
+            # Upgrade size is measured against my STARTER quality (my_avg = top-K starter
+            # avg), NOT my weakest eligible body (worst._pscore). worst is often a
+            # multi-eligible backup (Caratini, a C carrying 1B eligibility) whose real
+            # weakness belongs elsewhere, so beating him over-fired the margin and
+            # recommended an FA that doesn't actually beat what I run out there -- the same
+            # starters-not-scraps fix as the digest ↑ arrow (#60). (Even the _UPGRADE_MARGIN
+            # comment already reads "over my worst starter".)
+            lever = _n(top_fa.get("_pscore")) - _n(p.get("my_avg"))
             if lever >= _UPGRADE_MARGIN:
                 need_positions.append((lever, p, top_fa, worst))
 
@@ -4517,7 +4587,8 @@ def build_glossary_section():
                "(yellow) = the right direction but you'd be paying up or selling a riser / buying a regressor — on a "
                "counter it also <b>names the best add-on to ask the other manager for</b> (a spare piece of theirs "
                "that evens the value and helps a need of yours); <b>DECLINE</b> (red) = it addresses no need and you "
-               "don't gain value. Value is judged on the same cross-role currency Trade Radar uses. Because offers "
+               "don't gain value. An even-value offer that <b>pries one of your star players at par</b> also leans "
+               "COUNTER (hold out — you'd give up a crown jewel for parity). Value is judged on the same cross-role currency Trade Radar uses. Because offers "
                "<b>expire</b>, an incoming-offer headline (verdict + days left) also shows atop Matchup at a Glance "
                "and in the email body's &ldquo;Act today&rdquo; list. An offer <b>you</b> proposed shows an "
                "&ldquo;awaiting {partner}&rdquo; status instead (it's their call)."),
@@ -6405,29 +6476,41 @@ def build_email(snap, override_team=None):
         # Role-aware breakdown for this position's players (SP/RP vs hitter)
         _is_pit_pos = p["ptype"] == "pit"
 
-        def _pb_reveal(pl, tag):
+        def _pb_reveal(pl, tag, small=False):
             bd = (_pitcher_score_breakdown(pl, best_recent_p) if _is_pit_pos
                   else _hitter_score_breakdown(pl, best_recent_h, hit_pctile))
-            return score_reveal(pl["_pscore"], bd, _bd_uid(tag, pl.get("PlayerName", "")), 4)
+            return score_reveal(pl["_pscore"], bd, _bd_uid(tag, pl.get("PlayerName", "")), 4, small=small)
 
-        _worst_bdrow = _fa_bdrow = ""
-        worst = p["worst_player"]
-        if worst:
-            _worst_badge, _worst_bdrow = _pb_reveal(worst, "posw")
+        # Lead with my STARTER (the rank-defining anchor) — that's what determines how good
+        # I am here and the bar the FA arrow is judged against, so showing him kills the old
+        # "worse body listed, better FA shows no arrow" contradiction. The weakest eligible
+        # body is the DROP candidate; show it as an explicit muted sub-line, but only when
+        # it's a different player (a 1-deep position has nothing to drop).
+        _start_bdrow = _worst_bdrow = _fa_bdrow = ""
+        starter = p.get("starter")
+        worst   = p["worst_player"]
+        if starter:
+            _start_badge, _start_bdrow = _pb_reveal(starter, "poss")
             player_cell = (
-                f'{team_logo(worst.get("Team"), 16)}'
-                f'<span style="font-weight:600;">{worst["PlayerName"]}</span>'
-                f'{inj_tag(worst)}'
-                f'{pitcher_regression_badge(worst) if _is_pit_pos else hitter_badges(worst, hit_pctile)}'
-                f' {_worst_badge}'
-                f'{pos_stat_line(worst, p["pos"])}'
+                f'{team_logo(starter.get("Team"), 16)}'
+                f'<span style="font-weight:600;">{starter["PlayerName"]}</span>'
+                f'{inj_tag(starter)}'
+                f'{pitcher_regression_badge(starter) if _is_pit_pos else hitter_badges(starter, hit_pctile)}'
+                f' {_start_badge}'
+                f'{pos_stat_line(starter, p["pos"])}'
             )
+            if worst and worst.get("PlayerName") != starter.get("PlayerName"):
+                _worst_badge, _worst_bdrow = _pb_reveal(worst, "posw", small=True)
+                player_cell += (
+                    f'<div style="color:{MUTED};font-size:10px;margin-top:2px;">'
+                    f'drop&nbsp;candidate: {team_logo(worst.get("Team"), 13)}'
+                    f'{worst["PlayerName"]} {_worst_badge}</div>'
+                )
         else:
             player_cell = f'<span style="color:{RED};font-weight:600;">EMPTY</span>'
 
         top_fa = p["top_fa"][0] if p["top_fa"] else None
         fa_score = top_fa["_pscore"] if top_fa else 0
-        worst_score = worst["_pscore"] if worst else 0
         fa_depth   = p.get("fa_depth",   0)
         fa_quality = p.get("fa_quality", 0)
         # Both score types now on shared 0-100 scale; single set of thresholds
@@ -6442,8 +6525,8 @@ def build_email(snap, override_team=None):
             f'{fa_depth} avail · {depth_label}</div>'
         )
         # The "↑ upgrade" flag compares the best FA against my STARTER quality at this
-        # position (my_avg = top-K starter avg), NOT my weakest eligible body (worst_score).
-        # worst_score is often a multi-eligible backup (e.g. Caratini, a C carrying 1B
+        # position (my_avg = top-K starter avg), NOT my weakest eligible body. That body is
+        # often a multi-eligible backup (e.g. Caratini, a C carrying 1B
         # eligibility) whose primary weakness belongs to another position, so beating him
         # painted a false "upgrade" where my real starter (Olson 83) is strong. Judge
         # against what I actually run out there -- same starters-not-scraps theme as the
@@ -6476,7 +6559,7 @@ def build_email(snap, override_team=None):
             f'{strength}<br><span style="color:{MUTED};font-size:10px;">{rank_str}</span></td>'
             f'<td style="{TD_S}font-size:12px;color:{MUTED};">{fa_cell}</td>'
             f'</tr>'
-            f'{_worst_bdrow}{_fa_bdrow}'
+            f'{_start_bdrow}{_worst_bdrow}{_fa_bdrow}'
         )
 
     pos_section = (
@@ -6485,9 +6568,9 @@ def build_email(snap, override_team=None):
         f'<table style="width:100%;border-collapse:collapse;font-size:13px;">'
         f'<thead><tr>'
         f'<th style="{TH_S}text-align:center;">Pos</th>'
-        f'<th style="{TH_S}">My Weakest Player</th>'
+        f'<th style="{TH_S}">My Starter <span style="color:{MUTED};font-size:9px;">/ drop candidate</span></th>'
         f'<th style="{TH_S}text-align:center;">Strength</th>'
-        f'<th style="{TH_S}">Best FA Available &nbsp;<span style="color:{GREEN};font-size:9px;">&#8593; = upgrade</span></th>'
+        f'<th style="{TH_S}">Best FA Available &nbsp;<span style="color:{GREEN};font-size:9px;">&#8593; = beats my starter</span></th>'
         f'</tr></thead><tbody>{pos_rows}</tbody></table>'
         f'</div>'
     )
@@ -6767,6 +6850,7 @@ def build_email(snap, override_team=None):
     Data refreshed {refreshed} &middot; ESPN League 277836 &middot; Guerrero Warfare
   </div>
 </div>
+{_BD_TOGGLE_SCRIPT}
 </body>
 </html>"""
 

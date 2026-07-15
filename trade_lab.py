@@ -635,6 +635,19 @@ function dealStarReach(getArr, giveArr, netVal) {{
   return getStar >= STAR && getStar > giveTop && netVal > -PAYUP;
 }}
 
+// MY-side mirror of dealStarReach (send_digest._deal_star_surrender): would *I* balk because
+// the deal pries my crown-jewel star at par? True when the best player by SCORE is one I GIVE,
+// he's a star (bat/starter, score >= 80), he outranks anything I acquire, and I'm not clearly
+// WINNING value (net < 0.25). Same endowment/star bias, my side — drives "Would you do it?".
+function dealStarSurrender(getArr, giveArr, netVal) {{
+  var STAR = 80, PAYUP = 0.25;
+  function isStar(p) {{ return p.score >= STAR && (p.role === 'hit' || p.role === 'sp'); }}
+  var giveStar = 0, getTop = 0;
+  giveArr.forEach(function(p) {{ if (isStar(p) && p.score > giveStar) giveStar = p.score; }});
+  getArr.forEach(function(p) {{ if (p.score > getTop) getTop = p.score; }});
+  return giveStar >= STAR && giveStar > getTop && netVal < PAYUP;
+}}
+
 function recompute() {{
   var L = picked.L, R = picked.R;                       // L = give, R = get
   var lKeys = Object.keys(L), rKeys = Object.keys(R);
@@ -716,6 +729,13 @@ function recompute() {{
   }} else {{
     label='DECLINE'; color='{RED}'; why='no need addressed and you don\'t gain value';
   }}
+  // MY-side star guard (mirror of the partner star-reach): an otherwise-ACCEPT that pries my
+  // crown-jewel star at par is downgraded to COUNTER — I'd hold out (endowment/star bias).
+  var starSurrender = dealStarSurrender(getArr, giveArr, netVal);
+  if (label === 'ACCEPT' && starSurrender) {{
+    label='COUNTER'; color='{YELLOW}';
+    why='they\'re prying your star at par &mdash; hold out for more';
+  }}
   vBox.innerHTML = '<span class="vpill" style="background:'+color+'">'+label+'</span>'
     + '<div class="vwhy">'+why+'</div>';
 
@@ -732,6 +752,16 @@ function recompute() {{
     : (partnerGets.length
         ? 'fits their needs (' + partnerGets.map(function(c){{return DATA.catLabels[c]||c;}}).join(', ') + ') &mdash; realistic'
         : (lKeys.length ? 'doesn\'t hit their category needs &mdash; may be a tough sell' : '&mdash;'));
+
+  // MY-side acceptance — the mirror of "Would they do it?". A star surrender at par is the read
+  // that makes an even deal one *I* should hold out on, no matter how well the categories fit.
+  var youFit = !lKeys.length && !rKeys.length ? '&mdash;'
+    : (starSurrender
+        ? 'you\'d be surrendering your star at par &mdash; hold out'
+        : (needFilled.length || posList.length
+            ? 'fills your needs (' + needFilled.map(function(c){{return DATA.catLabels[c]||c;}}).join(', ')
+              + (posList.length ? (needFilled.length ? ', ' : '') + posList.join(', ') + ' slot' : '') + ') &mdash; worth it'
+            : (netVal >= -0.1 ? 'fair value for you &mdash; workable' : 'you\'d be paying up &mdash; think twice')));
 
   var timingTxt = timing > 0 ? 'in your favor (selling high / buying low)'
                 : (timing < 0 ? 'a trap (dealing a riser or buying a regressor)' : 'neutral');
@@ -750,7 +780,8 @@ function recompute() {{
     + '<div class="readline"><span class="readlbl">You gain:</span> ' + gainChips + (posChips?' &nbsp; '+posChips:'') + '</div>'
     + '<div class="readline"><span class="readlbl">You lose:</span> ' + loseChips + '</div>'
     + '<div class="readline"><span class="readlbl">Timing:</span> ' + timingTxt + '</div>'
-    + '<div class="readline"><span class="readlbl">Would they do it?</span> ' + partnerFit + '</div>';
+    + '<div class="readline"><span class="readlbl">Would they do it?</span> ' + partnerFit + '</div>'
+    + '<div class="readline"><span class="readlbl">Would you do it?</span> ' + youFit + '</div>';
 }}
 
 function clearAll() {{
