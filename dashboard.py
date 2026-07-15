@@ -744,7 +744,11 @@ def render_holes(ctx):
         fa_s = ""
         if fa:
             fsc = int(fa.get("_pscore", 0))
-            gain = fsc - wsc
+            # Green "upgrade" is judged vs my STARTER quality (my_avg = top-K starter avg),
+            # NOT the worst eligible body (wsc) -- which is often a multi-eligible backup
+            # whose weakness belongs elsewhere. Matches the digest ↑ arrow (#60); the
+            # worst→FA pairing still displays the drop target, only the green is honest.
+            gain = fsc - (p.get("my_avg") or 0)
             fbadge = sd.hitter_badges(fa, ctx["hit_pctile"]) if _hit_pos else sd.pitcher_regression_badge(fa)
             fa_s = (f' &rarr; {sd.team_logo(fa.get("Team"), 13)}<span style="color:{GREEN if gain>0 else MUTED};">{fa.get("PlayerName")}</span>{fbadge} {_mini_badge(fsc)}')
         rows.append(
