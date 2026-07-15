@@ -318,7 +318,7 @@ body {{ margin:0; background:{BG}; color:{TEXT}; font-family:-apple-system,Segoe
 .dot {{ width:9px; height:9px; border-radius:50%; display:inline-block; flex:0 0 auto; }}
 .htitle {{ font-size:22px; font-weight:800; }}
 .hsub {{ color:{MUTED}; font-size:13px; margin-top:2px; }}
-#cols {{ display:grid; grid-template-columns:1fr 360px 1fr; gap:14px; align-items:start; }}
+#cols {{ display:grid; grid-template-columns:1fr 1fr 1fr; gap:14px; align-items:start; }}
 .side {{ background:{SURFACE}; border:1px solid {BORDER}; border-radius:10px; overflow:hidden; }}
 .sidehead {{ display:flex; align-items:center; gap:8px; padding:10px 12px; border-bottom:1px solid {BORDER}; background:{SURFACE2}; }}
 .sidetag {{ font-size:10px; font-weight:800; letter-spacing:.8px; color:{MUTED}; white-space:nowrap; }}
@@ -341,6 +341,8 @@ body {{ margin:0; background:{BG}; color:{TEXT}; font-family:-apple-system,Segoe
 #verdict {{ text-align:center; margin-bottom:10px; }}
 .vpill {{ display:inline-block; font-weight:800; font-size:14px; padding:4px 14px; border-radius:12px; color:#0b1220; }}
 .vwhy {{ color:{MUTED}; font-size:12px; margin-top:6px; }}
+.counteradd {{ color:{ACCENT}; cursor:pointer; font-weight:800; }}
+.counteradd:hover {{ text-decoration:underline; }}
 .ledger {{ display:grid; grid-template-columns:1fr 1fr; gap:8px; }}
 .lhead {{ font-size:10px; font-weight:800; letter-spacing:.6px; padding-bottom:4px; border-bottom:1px solid {BORDER}; margin-bottom:5px; }}
 .give-h {{ color:{RED}; }}
@@ -595,6 +597,29 @@ function renderCoach() {{
     + '<div class="nudge">' + nudge + '</div>';
 }}
 
+// When a COUNTER verdict is driven by overpaying, name the single best partner
+// add-on to REQUEST — a spare piece that closes the value gap without a fresh
+// overpay, preferring one that fills a need of mine (then buy-low, then the value
+// closest to the gap). Mirrors send_digest _counter_suggestion. Returns a player
+// (with _cr = the need-reasons array) or null. gap = how much I'm overpaying (>0).
+function counterAddon(partnerTk, myMeta, gap) {{
+  if (gap <= 0.1) return null;
+  var lo = 0.7 * gap, hi = gap + 0.45;                  // enough to close it, not a new overpay
+  var cands = flatPool(partnerTk).filter(function(p) {{
+    return !picked.L[p.id] && !picked.R[p.id] && p.tval >= lo && p.tval <= hi;
+  }});
+  if (!cands.length) return null;
+  cands.forEach(function(p) {{ p._cr = targetReasons(p, myMeta, 'your'); }});
+  cands.sort(function(a, b) {{
+    var an = a._cr.length ? 1 : 0, bn = b._cr.length ? 1 : 0;
+    if (bn !== an) return bn - an;                       // need-fillers first
+    var ab = a.buy ? 1 : 0, bb = b.buy ? 1 : 0;
+    if (bb !== ab) return bb - ab;                       // then buy-low pieces
+    return Math.abs(a.tval - gap) - Math.abs(b.tval - gap);  // then closest to the gap
+  }});
+  return cands[0];
+}}
+
 function recompute() {{
   var L = picked.L, R = picked.R;                       // L = give, R = get
   var lKeys = Object.keys(L), rKeys = Object.keys(R);
@@ -658,7 +683,19 @@ function recompute() {{
   }} else if (addressesNeed && netVal >= -0.1 && !trap) {{
     label='ACCEPT'; color='{GREEN}'; why='roughly even value and it fills a real need';
   }} else if (addressesNeed) {{
-    label='COUNTER'; color='{YELLOW}'; why='right direction but ' + (netVal < -0.1 ? "you'd be paying up" : 'the timing is a trap') + ' &mdash; ask for more';
+    label='COUNTER'; color='{YELLOW}';
+    if (netVal < -0.1) {{
+      var add = counterAddon(partnerTk, myMeta, -netVal);
+      if (add) {{
+        var rz = add._cr && add._cr.length ? ' (' + add._cr.join(', ') + ')' : '';
+        why = "right direction but you'd be paying up &mdash; counter: ask them to add "
+            + '<b class="counteradd" onclick="toggle(\'R\',\'' + add.id + '\')">' + add.name + '</b>' + rz;
+      }} else {{
+        why = "right direction but you'd be paying up &mdash; ask for more (or offer a cheaper give)";
+      }}
+    }} else {{
+      why = 'right direction but the timing is a trap &mdash; ask for more';
+    }}
   }} else if (netVal >= 0.1) {{
     label='ACCEPT'; color='{GREEN}'; why='you win the value';
   }} else {{
@@ -710,13 +747,45 @@ function initSide(side) {{
   }});
 }}
 
+// Optional preload of a specific deal, from either the URL hash
+// (#partner=<team key>&give=<names>&get=<names>) OR a baked-in DATA.preload object
+// ({{partner, give, get}}). The baked-in form is used when the OS strips the URL
+// fragment on file:// launch (Windows shell). Silent no-op when neither is present.
+function preloadFromHash() {{
+  var params = {{}};
+  var h = (location.hash || '').replace(/^#/, '');
+  if (h) {{
+    h.split('&').forEach(function(kv){{ var p = kv.split('='); params[p[0]] = decodeURIComponent((p[1]||'').replace(/\+/g,' ')); }});
+  }} else if (DATA.preload && (DATA.preload.partner || DATA.preload.give || DATA.preload.get)) {{
+    params = DATA.preload;
+  }} else {{
+    return false;
+  }}
+  if (params.partner && DATA.teamKeys.indexOf(params.partner) >= 0)
+    document.getElementById('selR').value = params.partner;
+  renderRoster('L'); renderRoster('R');
+  function pickByName(side, names) {{
+    if (!names) return;
+    var tk = document.getElementById(side === 'L' ? 'selL' : 'selR').value;
+    var pool = flatPool(tk);
+    names.split(',').forEach(function(nm){{
+      nm = nm.trim().toLowerCase(); if (!nm) return;
+      for (var i=0;i<pool.length;i++)
+        if ((pool[i].name||'').toLowerCase() === nm) {{ toggle(side, pool[i].id); break; }}
+    }});
+  }}
+  pickByName('L', params.give);
+  pickByName('R', params.get);
+  return true;
+}}
+
 (function() {{
   var keys = DATA.teamKeys;
   var rDefault = keys.find(function(k){{ return k !== DATA.myTeam; }}) || keys[0];
   teamOptions(document.getElementById('selL'), DATA.myTeam);
   teamOptions(document.getElementById('selR'), rDefault);
   initSide('L'); initSide('R');
-  renderRoster('L'); renderRoster('R'); recompute();
+  if (!preloadFromHash()) {{ renderRoster('L'); renderRoster('R'); recompute(); }}
 }})();
 """
 
@@ -725,6 +794,9 @@ def main():
     ap = argparse.ArgumentParser(description="Interactive Trade Lab (browser-only)")
     ap.add_argument("--refresh", action="store_true", help="Refresh snapshot data first (~60s)")
     ap.add_argument("--team", default=None, help="Default the LEFT (my) side to another team")
+    ap.add_argument("--partner", default=None, help="Preload: RIGHT-side team key (e.g. 'The BIG Dumpers')")
+    ap.add_argument("--give", default=None, help="Preload: comma-separated player names to put on YOUR side")
+    ap.add_argument("--get", default=None, help="Preload: comma-separated player names to acquire from the partner")
     args = ap.parse_args()
 
     if args.refresh:
@@ -736,6 +808,9 @@ def main():
 
     my_team = args.team or snap.get("my_team", MY_TEAM)
     data = build_data(snap, my_team)
+    if args.partner or args.give or args.get:
+        data["preload"] = {"partner": " ".join((args.partner or "").split()),
+                           "give": args.give or "", "get": args.get or ""}
     html = build_html(data)
 
     PREVIEWS.mkdir(exist_ok=True)
