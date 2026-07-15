@@ -6441,7 +6441,14 @@ def build_email(snap, override_team=None):
             f'<div style="color:{depth_color};font-size:10px;margin-top:1px;">'
             f'{fa_depth} avail · {depth_label}</div>'
         )
-        upgrade = top_fa and fa_score > worst_score + upgrade_thresh
+        # The "↑ upgrade" flag compares the best FA against my STARTER quality at this
+        # position (my_avg = top-K starter avg), NOT my weakest eligible body (worst_score).
+        # worst_score is often a multi-eligible backup (e.g. Caratini, a C carrying 1B
+        # eligibility) whose primary weakness belongs to another position, so beating him
+        # painted a false "upgrade" where my real starter (Olson 83) is strong. Judge
+        # against what I actually run out there -- same starters-not-scraps theme as the
+        # top-K rank and the dashboard need-gate.
+        upgrade = top_fa and fa_score > p["my_avg"] + upgrade_thresh
         if top_fa:
             _fa_badge, _fa_bdrow = _pb_reveal(top_fa, "posfa")
             fa_cell = (
