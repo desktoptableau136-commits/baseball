@@ -148,6 +148,8 @@ It's also **responsive**: on a tablet (≤1100px) the tiles reflow into two heig
 
 A hands-on, **browser-only** trade builder. Where the digest's Trade Radar hands you finished ideas, the Trade Lab lets you construct your own: pick any two teams, browse each roster grouped by role, click players onto each side of the deal, and watch it get graded in real time.
 
+At the top of the page, a **"Who should you be trading with?" board** answers the question *before* you pick anyone. It ranks every rival by how landable a deal actually is and shows **one concrete, engine-graded offer each, in plain English** — e.g. *"Get Bobby Witt Jr. (SS) + Cade Smith (SV+H) for Aaron Ashby + Jake McCarthy — Fair swap, they'd likely accept."* Cleaner deals sort to the top as **BEST TARGET** (realistic, lands a need) or **WORTH A SHOT** (good deal but an aggressive ask); the dead ends sink to the bottom *with their reason* — **ONE-WAY** (they'd help you, but you can't fill a hole of theirs, so you'd overpay) and **NO DEAL** (category twins — you share the same strengths and the same holes, so there's nothing to arbitrage). Each live card has a **Build this ▶** button that drops the deal straight into the builder below. The board is graded by the same trade engine as the digest's Trade Radar, and it re-computes for whichever team you put on the left, so you can scout any team's trade landscape.
+
 ```bash
 # Write previews/tradelab_{team}.html from the existing snapshot (fast, no email)
 python trade_lab.py

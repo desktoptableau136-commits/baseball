@@ -165,10 +165,11 @@ def build_data(snap, my_team):
     team_keys = [_key(s.get("team_name")) for s in standings] or sorted(ranks.keys())
     team_logos = {_key(s.get("team_name")): s.get("logo_url", "") for s in standings}
 
-    teams_meta, players = {}, {}
+    teams_meta, players, pos_data_by_team = {}, {}, {}
     for tk in team_keys:
         # Thin HITTER positions for this team → {pos: my_avg_score} (positional need).
         pos_data = sd.positional_breakdown(pitchers, hitters, tk, best_recent_p, best_recent_h)
+        pos_data_by_team[tk] = pos_data   # reused by the Partner Fit board (per-POV engine run)
         need_pos = {}
         for p in pos_data:
             if p.get("ptype") != "hit":
@@ -204,6 +205,12 @@ def build_data(snap, my_team):
             buckets[role].sort(key=lambda p: -p["score"])
         players[tk] = buckets
 
+    # Partner Fit board: one engine-graded deal per rival, from EVERY team's POV so the
+    # board stays correct when the LEFT dropdown switches. See build_partner_fit.
+    partner_fit = build_partner_fit(pitchers, hitters, roto, team_keys, ranks, n,
+                                    best_recent_p, best_recent_h, hit_pctile, pit_pctile,
+                                    pos_data_by_team)
+
     my_key = _key(my_team)
     if my_key not in players:
         my_key = _key(snap.get("my_team", MY_TEAM))
@@ -211,6 +218,7 @@ def build_data(snap, my_team):
         "teamKeys":  team_keys,
         "teamsMeta": teams_meta,
         "players":   players,
+        "partnerFit": partner_fit,
         "myTeam":    my_key,
         "catLabels": CAT_LABELS,
         "lowerBetter": sorted(sd._LOWER_BETTER),
@@ -251,6 +259,126 @@ def _serialize(r, role, best_recent_h, best_recent_p, hit_pctile):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# PARTNER FIT BOARD — "Who should you be trading with?"
+# One concrete, engine-graded deal per rival, tiered by how landable it is. Reuses
+# send_digest's real trade engine (find_trades_combined + _trade_tilt) so the reads
+# match the digest Trade Radar verbatim. Precomputed from EVERY team's POV at build
+# time (cheap arithmetic on already-enriched rows) so the board stays correct when the
+# LEFT dropdown changes — a deliberate, contained use of the engine server-side (like
+# dashboard.py), not the Lab's usual "JS only sums pre-computed numbers".
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Tier sort order (best target first, dead ends last).
+_FIT_TIER_ORDER = {"BEST": 0, "REACH": 1, "SLIM": 2, "ONEWAY": 3, "NOFIT": 4}
+# Needs that are genuinely scarce to fill (catcher / shortstop bats, saves+holds) — a
+# deal landing one of these is preferred when choosing the single best deal per rival.
+_FIT_SCARCE_POS = {"C", "SS"}
+
+
+def _fit_deal_words(value_phrase, accept):
+    """Plain-English one-liner for a graded deal → (sentence, tier_key)."""
+    if accept == "realistic":
+        if value_phrase == "you pay up":
+            return ("You pay a hair, but a fair ask for the need.", "BEST")
+        return ("Fair swap — they'd likely accept.", "BEST")
+    # aggressive ask
+    if value_phrase == "you win the value":
+        return ("You come out ahead, but it's an aggressive ask — expect a counter.", "REACH")
+    return ("Even on paper, but you'd be prying their guy — expect resistance.", "REACH")
+
+
+def _fit_get_tags(ins, my_needs):
+    """Short need tags an incoming player fills: thin positions (C/SS/...) + my need cats."""
+    tags = []
+    for p in ins:
+        for pos in (p.get("_tfillpos") or []):
+            if pos not in tags:
+                tags.append(pos)
+        for c in (p.get("_tcats") or []):
+            if c in my_needs:
+                lbl = CAT_LABELS.get(c, c)
+                if lbl not in tags:
+                    tags.append(lbl)
+    return tags
+
+
+def build_partner_fit(pitchers, hitters, roto, team_keys, ranks, n,
+                      best_recent_p, best_recent_h, hit_pctile, pit_pctile, pos_data_by_team):
+    """{pov_key: [rival fit record, ...]} — one engine-graded deal per rival per POV.
+
+    Each record is either ACTIONABLE ({team, tier BEST|REACH, get:[{name,tags}], give:[name],
+    verdict, whyOffer:[cat lbls], whyGet:[tags]}) or a DIAGNOSIS ({team, tier SLIM|ONEWAY|NOFIT,
+    why}). Sorted by tier then team name."""
+    third = max(1, round(n / 3.0)) if n else 1
+    needs_of   = lambda t: {c for c, rk in ranks.get(t, {}).items() if rk >= n - third + 1}
+    surplus_of = lambda t: {c for c, rk in ranks.get(t, {}).items() if rk <= third}
+
+    out = {}
+    # Raise the engine's per-team / total caps so every rival surfaces its best deal
+    # (the digest only wants the top ~6 league-wide; the board wants one per partner).
+    _save = (sd._TRADE_MAX_CARDS, sd._TRADE_PER_TEAM_CAP)
+    try:
+        sd._TRADE_MAX_CARDS, sd._TRADE_PER_TEAM_CAP = 400, 6
+        for pov in team_keys:
+            my_needs, my_surplus = needs_of(pov), surplus_of(pov)
+            deals = sd.find_trades_combined(pitchers, hitters, roto, pov, best_recent_p,
+                                            best_recent_h, pos_data_by_team.get(pov, []),
+                                            hit_pctile, pit_pctile, cards=400)
+            by_team = {}
+            for d in deals:
+                by_team.setdefault(d.get("team"), []).append(d)
+
+            records = []
+            for rival in team_keys:
+                if rival == pov:
+                    continue
+                r_needs, r_surplus = needs_of(rival), surplus_of(rival)
+                i_offer   = sorted(my_surplus & r_needs)    # my categorical reason for them
+                they_offer = sorted(r_surplus & my_needs)   # what they can spare me
+                cand = by_team.get(rival, [])
+
+                def _score(d):
+                    vp, ac, _ = sd._trade_tilt(d.get("net_val", 0), d.get("ins"), d.get("outs"))
+                    fillpos  = [pos for p in d["ins"] for pos in (p.get("_tfillpos") or [])]
+                    fillcats = [c for p in d["ins"] for c in (p.get("_tcats") or [])]
+                    scarce = any(pos in _FIT_SCARCE_POS for pos in fillpos) or ("SVHD" in fillcats)
+                    getval = sum(_n(p.get("_tval")) for p in d["ins"])
+                    return (ac == "realistic", scarce, getval)
+
+                best = max(cand, key=_score) if cand else None
+                if best:
+                    vp, ac, _ = sd._trade_tilt(best.get("net_val", 0), best.get("ins"), best.get("outs"))
+                    words, tier = _fit_deal_words(vp, ac)
+                    get = [{"name": p.get("PlayerName", ""),
+                            "tags": _fit_get_tags([p], my_needs)} for p in best["ins"]]
+                    records.append({
+                        "team": rival, "tier": tier,
+                        "get": get, "give": [p.get("PlayerName", "") for p in best["outs"]],
+                        "verdict": words,
+                        "whyOffer": [CAT_LABELS.get(c, c) for c in i_offer],
+                        "whyGet": _fit_get_tags(best["ins"], my_needs),
+                    })
+                elif not i_offer and not they_offer:
+                    records.append({"team": rival, "tier": "NOFIT",
+                        "why": "Category twins — you share the same strengths and the same holes. "
+                               "Nothing to arbitrage."})
+                elif not i_offer:
+                    records.append({"team": rival, "tier": "ONEWAY",
+                        "why": "They have pieces you'd want, but they're strong everywhere you are — "
+                               "you can't fill a hole of theirs, so you'd overpay."})
+                else:
+                    records.append({"team": rival, "tier": "SLIM",
+                        "why": "Some overlap on paper, but no clean, near-even deal came together. "
+                               "Worth a manual look."})
+
+            records.sort(key=lambda r: (_FIT_TIER_ORDER[r["tier"]], r["team"]))
+            out[pov] = records
+    finally:
+        sd._TRADE_MAX_CARDS, sd._TRADE_PER_TEAM_CAP = _save
+    return out
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # RENDER — static shell + embedded JSON + the selection/verdict JavaScript.
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -277,6 +405,18 @@ def build_html(data):
     </div>
     <div class="fresh" title="Snapshot refresh time — rerun with --refresh to update"><span class="dot" style="background:{fresh_color}"></span><span>Data: {fresh_label}</span></div>
   </div>
+  <details id="fitboard" open>
+    <summary class="fbsum">
+      <div class="fbhead"><span class="fbtitle">Who should you be trading with?</span><span class="fbtoggle">Targets</span></div>
+      <div class="fbsub" id="fbholes"></div>
+    </summary>
+    <div class="fblegend">
+      <span><b style="color:{GREEN}">BEST TARGET</b> &mdash; realistic deal, lands a need</span>
+      <span><b style="color:{YELLOW}">WORTH A SHOT</b> &mdash; good deal, aggressive ask</span>
+      <span><b style="color:{MUTED}">SLIM / ONE-WAY / NO DEAL</b> &mdash; why not</span>
+    </div>
+    <div class="fblist" id="fblist"></div>
+  </details>
   <div id="cols">
     <div class="side" id="sideL">
       <div class="sidehead">
@@ -378,10 +518,41 @@ body {{ margin:0; background:{BG}; color:{TEXT}; font-family:-apple-system,Segoe
 .sugchip .sugwhy {{ color:{MUTED}; font-size:10px; margin-left:4px; }}
 .sugchip .v {{ color:{ACCENT}; font-size:10px; font-weight:700; margin-left:5px; }}
 .nudge {{ margin-top:9px; font-size:11.5px; line-height:1.5; color:{TEXT}; background:{SURFACE2}; border:1px solid {BORDER}; border-left:3px solid {ACCENT}; border-radius:5px; padding:6px 9px; }}
+/* Partner Fit board */
+#fitboard {{ background:{SURFACE2}; border:1px solid {BORDER}; border-radius:12px; margin-bottom:16px; overflow:hidden; }}
+#fitboard > summary {{ list-style:none; cursor:pointer; padding:13px 16px; background:{SURFACE}; }}
+#fitboard[open] > summary {{ border-bottom:1px solid {BORDER}; }}
+#fitboard > summary::-webkit-details-marker {{ display:none; }}
+.fbhead {{ display:flex; align-items:center; justify-content:space-between; gap:10px; }}
+.fbtitle {{ font-size:17px; font-weight:800; }}
+.fbtoggle {{ font-size:10.5px; font-weight:800; letter-spacing:.6px; color:{MUTED}; text-transform:uppercase; }}
+#fitboard[open] .fbtoggle::after {{ content:' \\25B4'; }}
+#fitboard:not([open]) .fbtoggle::after {{ content:' \\25BE'; }}
+.fbsub {{ color:{MUTED}; font-size:12.5px; margin-top:3px; }}
+.fbsub .w {{ color:{YELLOW}; font-weight:700; }}
+.fblegend {{ display:flex; gap:16px; flex-wrap:wrap; font-size:11px; color:{MUTED}; padding:11px 16px; border-bottom:1px solid {BORDER}; }}
+.fblist {{ display:grid; grid-template-columns:1fr 1fr; gap:10px; padding:14px 16px; }}
+.fbcard {{ background:{SURFACE}; border:1px solid {BORDER}; border-radius:10px; padding:11px 13px; }}
+.fbcard.dim {{ background:{SURFACE2}; opacity:.85; }}
+.fbchead {{ display:flex; align-items:center; gap:9px; margin-bottom:7px; }}
+.fbvchip {{ font-size:9px; font-weight:800; letter-spacing:.6px; border:1px solid; border-radius:5px; padding:2px 6px; white-space:nowrap; background:rgba(255,255,255,.02); }}
+.fbteam {{ font-weight:800; font-size:14px; flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }}
+.fbbuild {{ font-size:10px; font-weight:800; color:{ACCENT}; border:1px solid {ACCENT}; border-radius:6px; padding:2px 8px; white-space:nowrap; cursor:pointer; }}
+.fbbuild:hover {{ background:rgba(59,130,246,.14); }}
+.fbdeal {{ font-size:13.5px; line-height:1.5; }}
+.fbget {{ font-size:8.5px; font-weight:800; letter-spacing:.4px; color:{GREEN}; background:rgba(34,197,94,.14); border-radius:4px; padding:1px 5px; margin-right:5px; vertical-align:middle; }}
+.fbdeal b {{ font-weight:700; }}
+.fbgive {{ color:{MUTED}; font-size:12.5px; margin-top:2px; }}
+.fbgv {{ font-size:8.5px; font-weight:800; letter-spacing:.4px; color:{RED}; background:rgba(239,68,68,.11); border-radius:4px; padding:1px 5px; margin-right:5px; vertical-align:middle; text-transform:uppercase; }}
+.fbntag {{ font-size:8.5px; font-weight:800; color:#22d3ee; background:rgba(34,211,238,.12); border:1px solid rgba(34,211,238,.4); border-radius:4px; padding:0 4px; vertical-align:middle; margin-left:2px; }}
+.fbverdict {{ font-size:12px; font-weight:700; margin-top:8px; }}
+.fbwhy {{ font-size:11.5px; color:{TEXT}; margin-top:6px; line-height:1.5; }}
+.fbwhy .wl {{ color:{MUTED}; font-weight:700; }}
 @media (max-width:1000px) {{
   #cols {{ grid-template-columns:1fr; }}
   #mid {{ position:static; order:-1; }}
   .roster {{ max-height:none; }}
+  .fblist {{ grid-template-columns:1fr; }}
 }}
 """
 
@@ -789,11 +960,93 @@ function clearAll() {{
   renderRoster('L'); renderRoster('R'); recompute();
 }}
 
+// ── Partner Fit board ─────────────────────────────────────────────────────────
+// Renders DATA.partnerFit[leftTeam] — one engine-graded deal per rival, tiered by
+// how landable it is. "Build this" drops the deal into the builder below.
+var FIT_TIER = {{ BEST:['{GREEN}','BEST TARGET'], REACH:['{YELLOW}','WORTH A SHOT'],
+                  SLIM:['{MUTED}','SLIM'], ONEWAY:['#ea580c','ONE-WAY'], NOFIT:['{RED}','NO DEAL'] }};
+
+function escAttr(s) {{ return String(s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }}
+function fitTag(t) {{ return '<span class="fbntag">' + t + '</span>'; }}
+
+function fitCard(r) {{
+  var t = FIT_TIER[r.tier] || FIT_TIER.SLIM, col = t[0], lbl = t[1];
+  var meta = DATA.teamsMeta[r.team] || {{ name:r.team }};
+  var head = '<div class="fbchead"><span class="fbvchip" style="color:' + col + ';border-color:' + col + '">'
+           + lbl + '</span><span class="fbteam">' + meta.name + '</span>';
+  if (r.tier === 'BEST' || r.tier === 'REACH') {{
+    var giveNames = (r.give || []).join(',');
+    var getNames  = (r.get || []).map(function(g) {{ return g.name; }}).join(',');
+    head += '<span class="fbbuild" data-partner="' + escAttr(r.team) + '" data-give="' + escAttr(giveNames)
+          + '" data-get="' + escAttr(getNames) + '" onclick="loadDeal(this)">Build this &#9654;</span></div>';
+    var getParts = (r.get || []).map(function(g) {{
+      return '<b>' + g.name + '</b> ' + (g.tags || []).slice(0,2).map(fitTag).join(' ');
+    }}).join('  ');
+    var deal = '<div class="fbdeal"><span class="fbget">Get</span> ' + getParts
+             + '<div class="fbgive"><span class="fbgv">for</span> ' + (r.give || []).join(' + ') + '</div></div>';
+    var vcol = r.tier === 'BEST' ? '{GREEN}' : '{YELLOW}';
+    var verdict = '<div class="fbverdict" style="color:' + vcol + '">' + r.verdict + '</div>';
+    var why = '';
+    if ((r.whyOffer && r.whyOffer.length) || (r.whyGet && r.whyGet.length)) {{
+      var off = (r.whyOffer && r.whyOffer.length) ? r.whyOffer.join('/') : 'what they lack';
+      var got = (r.whyGet && r.whyGet.length) ? r.whyGet.join('/') : 'a hole of yours';
+      why = '<div class="fbwhy"><span class="wl">Why it works:</span> you\'re deep in ' + off
+          + ' (their holes); they can spare the ' + got + ' you need.</div>';
+    }}
+    return '<div class="fbcard">' + head + deal + verdict + why + '</div>';
+  }}
+  head += '</div>';
+  return '<div class="fbcard dim">' + head
+       + '<div class="fbwhy" style="margin-top:0;color:{MUTED}">' + (r.why || '') + '</div></div>';
+}}
+
+function renderFitBoard() {{
+  var myTk = document.getElementById('selL').value;
+  var meta = DATA.teamsMeta[myTk] || {{ needs:[], need_pos:{{}}, name:myTk }};
+  var hEl = document.getElementById('fbholes');
+  if (hEl) {{
+    var holes = (meta.needs || []).map(function(c) {{ return DATA.catLabels[c] || c; }});
+    var pos = Object.keys(meta.need_pos || {{}});
+    var bits = [];
+    if (holes.length) bits.push('holes <b class="w">' + holes.join(', ') + '</b>');
+    if (pos.length)   bits.push('thin at <b class="w">' + pos.join(', ') + '</b>');
+    hEl.innerHTML = (meta.name || myTk) + (bits.length ? ' &middot; ' + bits.join(' &middot; ') : '');
+  }}
+  var recs = (DATA.partnerFit || {{}})[myTk] || [];
+  var list = document.getElementById('fblist');
+  if (list) list.innerHTML = recs.map(fitCard).join('') || '<div class="empty">No rivals.</div>';
+}}
+
+function loadDeal(el) {{
+  var partnerTk = el.getAttribute('data-partner');
+  var giveNames = el.getAttribute('data-give');
+  var getNames  = el.getAttribute('data-get');
+  clearAll();
+  var selR = document.getElementById('selR');
+  if (partnerTk && DATA.teamKeys.indexOf(partnerTk) >= 0) selR.value = partnerTk;
+  renderRoster('L'); renderRoster('R');
+  function pickByName(side, names) {{
+    if (!names) return;
+    var tk = document.getElementById(side === 'L' ? 'selL' : 'selR').value;
+    var pool = flatPool(tk);
+    names.split(',').forEach(function(nm) {{
+      nm = nm.trim().toLowerCase(); if (!nm) return;
+      for (var i=0;i<pool.length;i++)
+        if ((pool[i].name || '').toLowerCase() === nm) {{ toggle(side, pool[i].id); break; }}
+    }});
+  }}
+  pickByName('L', giveNames);
+  pickByName('R', getNames);
+  var cols = document.getElementById('cols');
+  if (cols && cols.scrollIntoView) cols.scrollIntoView({{ behavior:'smooth', block:'start' }});
+}}
+
 function initSide(side) {{
   var sel = document.getElementById(side === 'L' ? 'selL' : 'selR');
   sel.addEventListener('change', function() {{
     picked[side] = {{}};                 // reset that side's picks on team change
     renderRoster('L'); renderRoster('R'); recompute();   // R targets depend on L's needs
+    if (side === 'L') renderFitBoard();  // the board is judged from the LEFT (my) team
   }});
 }}
 
@@ -836,6 +1089,7 @@ function preloadFromHash() {{
   teamOptions(document.getElementById('selR'), rDefault);
   initSide('L'); initSide('R');
   if (!preloadFromHash()) {{ renderRoster('L'); renderRoster('R'); recompute(); }}
+  renderFitBoard();
 }})();
 """
 
