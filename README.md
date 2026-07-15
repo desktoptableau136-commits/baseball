@@ -334,7 +334,7 @@ These also appear on FA Hitters, the Positional Breakdown, and across the dashbo
 - ❄ = OPS down -0.050 or more
 
 ### Positional Breakdown
-For each position (C, 1B, 2B, 3B, SS, OF, SP, RP): your weakest rostered player vs. the best available FA at that position. **↑** = the FA is a meaningful upgrade. A player parked in one of your 2 IL roster slots is never surfaced as the weakest/drop candidate (cutting them frees no active or bench room).
+For each position (C, 1B, 2B, 3B, SS, OF, SP, RP): your weakest rostered player vs. the best available FA at that position. **↑** = the FA is a meaningful upgrade **over what you actually start there** (graded against your starter-quality at the position, not your weakest bench body) — so a multi-eligible backup (e.g. a catcher carrying 1B eligibility) can't paint a false upgrade where your real starter is strong. A player parked in one of your 2 IL roster slots is never surfaced as the weakest/drop candidate (cutting them frees no active or bench room).
 
 The league **rank** at each position compares each team on its **top starters there** (its best player at C/1B/2B/3B/SS, top 3 in OF, etc.) — *not* the average of every eligible body. This is deliberate: ranking on the raw average let bench and utility depth create *phantom needs*, where a backup catcher who happens to carry 1B eligibility, or a cold bat sitting behind a healthy starter, dragged a position into the bottom third even though your actual starter there was strong. Ranking on the starters you'd really play keeps a "need" pointed at genuine holes.
 
