@@ -589,10 +589,11 @@ body {{ margin:0; background:{BG}; color:{TEXT}; font-family:-apple-system,Segoe
 #dealsum {{ }}
 /* value-detail disclosure */
 details#vdetail {{ margin-top:12px; padding-top:10px; border-top:1px solid {BORDER}; }}
-details#vdetail > summary {{ list-style:none; cursor:pointer; font-size:10px; font-weight:800; letter-spacing:.6px; text-transform:uppercase; color:{ACCENT}; }}
+details#vdetail > summary {{ list-style:none; cursor:pointer; user-select:none; font-size:10px; font-weight:800; letter-spacing:.8px; text-transform:uppercase; color:{ACCENT}; }}
+details#vdetail > summary:hover {{ color:{TEXT}; }}
 details#vdetail > summary::-webkit-details-marker {{ display:none; }}
-details#vdetail > summary::before {{ content:'\\25B8 '; font-size:8px; }}
-details#vdetail[open] > summary::before {{ content:'\\25BE '; }}
+details#vdetail > summary::before {{ content:'\\25B6'; margin-right:6px; color:{ACCENT}; }}
+details#vdetail[open] > summary::before {{ content:'\\25BC'; }}
 .valgrid {{ display:grid; grid-template-columns:auto 1fr 1fr 1fr; gap:2px 10px; font-size:11px; margin-top:8px; padding-top:8px; border-top:1px solid {BORDER}; align-items:center; }}
 .valgrid .vgh {{ color:{MUTED}; font-weight:700; text-align:right; font-size:10px; text-transform:uppercase; letter-spacing:.03em; }}
 .valgrid .vgh:first-child {{ text-align:left; }}
@@ -1650,6 +1651,7 @@ function pocketCollapseDefaults() {{
     var cps = collapsedPos[side] || (collapsedPos[side] = {{}});
     POS_GROUPS.concat(['UTIL']).forEach(function(pos) {{ cps[pos] = true; }});
   }});
+  coachFold = true;          // Deal Coach starts folded too
   var fb = document.getElementById('fitboard');
   if (fb) fb.open = false;   // the "who to trade with" board also folds
 }}
