@@ -549,7 +549,9 @@ body {{ margin:0; background:{BG}; color:{TEXT}; font-family:-apple-system,Segoe
 #clearBtn:hover {{ color:{TEXT}; }}
 .empty {{ color:{MUTED}; font-size:12px; font-style:italic; }}
 #coach {{ margin-top:12px; padding-top:10px; border-top:1px solid {BORDER}; }}
-.coachhdr {{ font-size:10px; font-weight:800; letter-spacing:.8px; color:{ACCENT}; margin-bottom:6px; }}
+.coachhdr {{ display:flex; align-items:center; gap:6px; font-size:10px; font-weight:800; letter-spacing:.8px; color:{ACCENT}; margin-bottom:6px; cursor:pointer; user-select:none; }}
+.coachhdr:hover {{ color:{TEXT}; }}
+.coachhdr .caret {{ color:{ACCENT}; }}
 .stratrow {{ display:flex; align-items:center; gap:5px; margin-bottom:8px; flex-wrap:wrap; }}
 .stratlbl {{ font-size:10px; font-weight:700; color:{MUTED}; text-transform:uppercase; letter-spacing:.5px; margin-right:2px; }}
 .stratbtn {{ font-size:11px; font-weight:700; color:{MUTED}; background:{SURFACE2}; border:1px solid {BORDER}; border-radius:6px; padding:3px 9px; cursor:pointer; }}
@@ -634,6 +636,7 @@ _JS = r"""
 var picked = {{ L:{{}}, R:{{}} }};   // id -> player, per side
 var strategy = 'favor';              // fair | favor | fleece — how hard the coach tilts value to me
 var collapsed = {{ L:{{}}, R:{{}} }};  // side -> role -> bool; persists per-role section fold state across re-renders
+var coachFold = false;               // Deal Coach collapsed? persists across re-renders
 var TARGET_NET = {{ fair:0.0, favor:0.30, fleece:0.70 }};   // value edge the coach steers toward
 var STUD_CEIL  = {{ fair:99, favor:1.6, fleece:1.2 }};      // don't suggest offering my pieces above this value
 
@@ -984,9 +987,8 @@ function renderCoach() {{
   function stratBtn(s, lab) {{
     return '<button class="stratbtn' + (strategy === s ? ' active' : '') + '" onclick="setStrategy(\'' + s + '\')">' + lab + '</button>';
   }}
-  document.getElementById('coach').innerHTML =
-      '<div class="coachhdr">DEAL COACH</div>'
-    + '<div class="stratrow"><span class="stratlbl">Strategy</span>'
+  var body = coachFold ? '' :
+      '<div class="stratrow"><span class="stratlbl">Strategy</span>'
       + stratBtn('fair', 'Fair') + stratBtn('favor', 'Favor me') + stratBtn('fleece', 'Fleece') + '</div>'
     + '<div class="ctxline"><span class="lbl">You need:</span> ' + (youNeed.join(', ') || 'balanced everywhere') + '</div>'
     + '<div class="ctxline"><span class="lbl">They need:</span> ' + (theyNeed.join(', ') || 'balanced everywhere') + '</div>'
@@ -994,7 +996,12 @@ function renderCoach() {{
     + '<div class="sugblock"><div class="sughdr">Add to get &mdash; fills your needs</div>' + getHtml + '</div>'
     + '<div class="sugblock"><div class="sughdr">Offer them &mdash; fills their needs</div>' + giveHtml + '</div>'
     + '<div class="nudge">' + nudge + '</div>';
+  document.getElementById('coach').innerHTML =
+      '<div class="coachhdr" onclick="toggleCoach()"><span class="caret">' + (coachFold ? '&#9654;' : '&#9660;') + '</span>DEAL COACH</div>'
+    + body;
 }}
+
+function toggleCoach() {{ coachFold = !coachFold; renderCoach(); }}
 
 // When a COUNTER verdict is driven by overpaying, name the single best partner
 // add-on to REQUEST — a spare piece that closes the value gap without a fresh
