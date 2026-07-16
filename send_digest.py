@@ -2699,6 +2699,12 @@ _NEED_MULT_CAT      = 0.14  # per need-cat boost to a player's value for a team 
 _NEED_MULT_POS      = 0.20  # boost for a hitter at a team's thin position
 _NEED_MULT_SURPLUS  = 0.10  # discount when a player only helps a cat/position the team is already deep in
 _NEED_MULT_CLAMP    = (0.70, 1.60)  # bound the need multiplier so thin data can't over-swing
+# Roster-depth floor (both parties): a trade may not drop a team below POS_STARTERS bodies at a
+# hitter position without a same-position body coming back (hard veto in find_trades). A deal that
+# survives but leaves the rival at exactly the floor at a single-slot position (C/1B/2B/3B/SS) is
+# read honestly — each such thin slot subtracts this from net_them so the read flips to "aggressive
+# ask". Acceptance-read layer only; never folds into _tval. (See _leaves_position_short.)
+_TRADE_THIN_POS_PENALTY = 0.15
 # Player category coverage reuses the FA cat lists (QS/B_SO aren't per-player stats, so a
 # team need in those simply finds no matching player — intentional, same as the FA "Cats").
 
@@ -2709,19 +2715,41 @@ def _trade_pos_groups(r):
     return {label for label, slots, _ in POS_GROUPS if tags & slots}
 
 
-def _my_position_counts(hitters, my_key):
-    """Count of my rostered YEAR hitters eligible at each POS_GROUPS label (multi-eligible
-    bats count at every position they qualify for). Feeds the redundancy guard; INCLUDES
-    IL-slot players, who still occupy the position on my roster and return to it."""
+def _team_position_counts(hitters, team_key):
+    """Count of a team's rostered YEAR hitters eligible at each POS_GROUPS label (multi-eligible
+    bats count at every position they qualify for). Feeds both the my-side redundancy guard and
+    the both-parties depth floor (_leaves_position_short), so it takes any team key. INCLUDES
+    IL-slot players, who still occupy the position on the roster and return to it."""
     counts = {}
     for r in hitters:
         if int(_n(r.get("Dataset")) or 0) != YEAR:
             continue
-        if " ".join((r.get("FantasyTeam") or "").split()) != my_key:
+        if " ".join((r.get("FantasyTeam") or "").split()) != team_key:
             continue
         for g in _trade_pos_groups(r):
             counts[g] = counts.get(g, 0) + 1
     return counts
+
+
+def _leaves_position_short(team_counts, give_players, get_players):
+    """Hitter positions where GIVING `give_players` and RECEIVING `get_players` drops a team
+    below POS_STARTERS bodies (no same-position replacement). A body-count depth floor that is
+    INDEPENDENT of the _tval currency — so it catches 'only catcher for 2 OF' that the value math
+    misses (catcher category value collapses to ~0, so two productive OF out-value the lone C).
+    The rival-side mirror of the my-side surplus_pos give gate, applied to whichever team gives.
+    Hitter slots only — pitching need is category-shaped, so SP/RP floors would falsely veto
+    reasonable arm swaps. `team_counts` from _team_position_counts (multi-elig + IL aware)."""
+    short = set()
+    give_groups = {g for p in give_players for g in p.get("_tgroups", set())}
+    for P in give_groups:
+        if P not in POS_STARTERS or P in ("SP", "RP"):   # hitter slots only
+            continue
+        leaving  = sum(1 for p in give_players if P in p.get("_tgroups", set()))
+        arriving = sum(1 for p in get_players  if P in p.get("_tgroups", set()))
+        post = team_counts.get(P, 0) - leaving + arriving
+        if post < POS_STARTERS[P]:
+            short.add(P)
+    return short
 
 
 def _non_redundant_get_pos(get_pos, outs, ins, my_pos_count):
@@ -2876,7 +2904,7 @@ def find_trades(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
 
     my_players = ([enrich(r, "hit") for r in roster(hitters, my_key)] +
                   [enrich(r, "pit") for r in roster(pitchers, my_key)])
-    my_pos_count = _my_position_counts(hitters, my_key)   # redundancy guard: bodies per position
+    my_pos_count = _team_position_counts(hitters, my_key)   # redundancy + depth guard: my bodies per position
 
     all_teams = {" ".join((r.get("FantasyTeam") or "").split())
                  for r in itertools.chain(hitters, pitchers)
@@ -2901,6 +2929,7 @@ def find_trades(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
             continue
         t_players = ([enrich(r, "hit") for r in roster(hitters, team)] +
                      [enrich(r, "pit") for r in roster(pitchers, team)])
+        t_pos_count = _team_position_counts(hitters, team)   # depth guard: rival bodies per position
 
         # Give side: strong in a send cat, at a surplus position, and NOT above the value
         # ceiling (unless a sell-high regression candidate I want to move anyway). FAIR mode
@@ -2955,6 +2984,14 @@ def find_trades(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
             scov = set().union(*[o["_tcats"] for o in outs]) & send_cats
             if (not gcov and not gpos) or not scov:
                 continue
+            # DEPTH FLOOR (both parties, hard veto): a deal may not drop either team below
+            # startable bodies at a hitter position without a same-position body coming back.
+            # Catches the 'their only catcher for 2 of my OF' asymmetry the _tval math misses
+            # (catcher category value ~0, so 2 OF out-value the lone C and it reads "realistic").
+            if _leaves_position_short(t_pos_count, ins, outs):    # rival gives ins, receives outs
+                continue
+            if _leaves_position_short(my_pos_count, outs, ins):   # I give outs, receive ins
+                continue
             net_val  = sum(i["_tval"] for i in ins) - sum(o["_tval"] for o in outs)  # my base value edge (+ = I win)
             # Demand-side net from the RIVAL's POV (+ = they win by THEIR needs): what they
             # receive (my outs) valued by their needs, minus what they surrender (the ins).
@@ -2962,6 +2999,23 @@ def find_trades(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
             # "realistic vs aggressive ask" read so it's roster-aware, not just base-value.
             net_them = (sum(o["_tval"] * _need_mult(o, t_needs, t_surplus) for o in outs)
                         - sum(i["_tval"] * _need_mult(i, t_needs, t_surplus) for i in ins))
+            # HONEST READ: a surviving deal that leaves the rival at exactly the floor at a
+            # single-slot position (they give their starting C/1B/2B/3B/SS with no backup) is
+            # thin, not clean. Each such slot penalizes net_them so _trade_tilt flips the read
+            # to "aggressive ask", and names the hole for the card footer. Read layer only.
+            thin_them = set()
+            for P in {g for i in ins for g in i.get("_tgroups", set())}:
+                if POS_STARTERS.get(P) != 1:                      # single-slot hitter positions only
+                    continue
+                leaving  = sum(1 for i in ins  if P in i.get("_tgroups", set()))
+                arriving = sum(1 for o in outs if P in o.get("_tgroups", set()))
+                if t_pos_count.get(P, 0) - leaving + arriving == POS_STARTERS[P]:
+                    thin_them.add(P)
+            thin_note = ""
+            if thin_them:
+                net_them -= _TRADE_THIN_POS_PENALTY * len(thin_them)
+                _lbl = ", ".join(sorted(thin_them))
+                thin_note = f"leaves them without a backup at {_lbl}"
             # DIRECTIONAL timing: selling-high on the GIVE side and buying-low on the GET
             # side are the arbitrage (do more of it); giving away a riser or acquiring a
             # regression candidate is the reverse (penalize — these are traps).
@@ -2985,7 +3039,7 @@ def find_trades(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
                          + 4.0 * timing - 0.5 * (len(ins) - 1))
             trades.append({
                 "team": team, "outs": outs, "ins": ins, "net_val": net_val, "score": score,
-                "net_them": net_them,
+                "net_them": net_them, "thin_note": thin_note,
                 "lane": mode, "sell_out": sell_out, "buy_in": buy_in,
                 "get_cats":  sorted(gcov, key=lambda c: -ranks[my_key][c]),
                 "get_pos":   sorted(gpos, key=lambda p: -need_pos[p][0]),
@@ -3200,7 +3254,8 @@ def _verdict_pill(label, color):
             f'font-size:11px;padding:2px 9px;border-radius:10px;">{label}</span>')
 
 
-def _pending_verdict(net_val, addresses_need, timing, incoming, star_surrender=False):
+def _pending_verdict(net_val, addresses_need, timing, incoming, star_surrender=False,
+                     leaves_me_short=None):
     """Accept / Counter / Decline lean for a pending trade, from the SAME signals
     find_trades ranks on: my value edge (net_val = get − give), whether it addresses a
     real category/positional need, and timing (positive = I sell-high / buy-low, negative
@@ -3209,24 +3264,29 @@ def _pending_verdict(net_val, addresses_need, timing, incoming, star_surrender=F
     instead. Thresholds mirror the Trade Radar value tilt (±0.1).
     `star_surrender` (from `_deal_star_surrender`) is the MY-side mirror of the Trade Radar
     star-reach: when the offer pries my crown-jewel star at par, an otherwise-ACCEPT is
-    downgraded to COUNTER (endowment/star bias — I'd hold out even at category-even value)."""
+    downgraded to COUNTER (endowment/star bias — I'd hold out even at category-even value).
+    `leaves_me_short` (from `_leaves_position_short`) is the roster-depth mirror: hitter
+    positions the deal would strip me below startable depth at (my only C/SS with no body
+    back) — also downgrades an ACCEPT to COUNTER (get a replacement before dealing the slot)."""
     trap = timing < 0
-    if net_val >= 0.1 and not trap:
+    leaves_me_short = leaves_me_short or []
+    def _hold():   # the COUNTER override shared by every ACCEPT branch, star-first
         if star_surrender:
             return ("COUNTER", YELLOW, "they're prying your star at par — hold out for more")
-        return ("ACCEPT", GREEN, "you win the value" +
+        if leaves_me_short:
+            _lbl = ", ".join(leaves_me_short)
+            return ("COUNTER", YELLOW, f"leaves you thin at {_lbl} — get a replacement first")
+        return None
+    if net_val >= 0.1 and not trap:
+        return _hold() or ("ACCEPT", GREEN, "you win the value" +
                 (" and it fills a need" if addresses_need else ""))
     if addresses_need and net_val >= -0.1 and not trap:
-        if star_surrender:
-            return ("COUNTER", YELLOW, "they're prying your star at par — hold out for more")
-        return ("ACCEPT", GREEN, "roughly even value and it fills a real need")
+        return _hold() or ("ACCEPT", GREEN, "roughly even value and it fills a real need")
     if addresses_need:
         why = ("you'd be paying up" if net_val < -0.1 else "the timing is a trap")
         return ("COUNTER", YELLOW, f"right direction but {why} — ask for more")
     if net_val >= 0.1:
-        if star_surrender:
-            return ("COUNTER", YELLOW, "they're prying your star at par — hold out for more")
-        return ("ACCEPT", GREEN, "you win the value")
+        return _hold() or ("ACCEPT", GREEN, "you win the value")
     return ("DECLINE", RED, "no need addressed and you don't gain value")
 
 
@@ -3327,7 +3387,7 @@ def _grade_pending_trades(pending, pitchers, hitters, roto, my_team,
     my_need_pos    = set(need_pos.keys())
     my_surplus_pos = {p["pos"] for p in pos_data if p.get("ptype") == "hit"
                       and (p.get("rank") or _nt(p)) <= _third(p)}
-    my_pos_count = _my_position_counts(hitters, my_key)   # redundancy guard: bodies per position
+    my_pos_count = _team_position_counts(hitters, my_key)   # redundancy + depth guard: bodies per position
 
     def _resolve(entry):
         k = _badge_name_key(entry.get("name", ""))
@@ -3368,7 +3428,12 @@ def _grade_pending_trades(pending, pitchers, hitters, roto, my_team,
                  "even value" if net_val >= -0.1 else "you pay up")
 
         star_surrender = _deal_star_surrender(ins, outs, net_val)   # star reluctance stays on base value
-        verdict = _pending_verdict(net_me, addresses_need, timing, incoming, star_surrender) if incoming else None
+        # DEPTH FLOOR (soft — a real offer isn't vetoed, it's flagged): would accepting leave ME
+        # short at a hitter position (I give my only C/SS with no same-position body back)? If so,
+        # an otherwise-ACCEPT downgrades to COUNTER — get a replacement before dealing the slot.
+        leaves_me_short = sorted(_leaves_position_short(my_pos_count, outs, ins)) if incoming else []
+        verdict = _pending_verdict(net_me, addresses_need, timing, incoming, star_surrender,
+                                   leaves_me_short) if incoming else None
         counter = ""
         if verdict and verdict[0] == "COUNTER":
             exclude = {_badge_name_key(nm) for (_r, nm) in get_rows + give_rows}
@@ -3503,6 +3568,8 @@ def build_trade_radar(pitchers, hitters, roto, my_team, best_recent_p, best_rece
                  ("buy-low" if t.get("buy_in") else "")
         if thesis:
             value += f" &middot; {thesis}"
+        thin_html = (f'<span style="color:{ORANGE};"> &middot; {t["thin_note"]}</span>'
+                     if t.get("thin_note") else "")
         # Realism chip in the card header — the RIVAL's-POV read on whether they'd accept
         # (a fair/pay-up deal is realistic; a value-tilted one is a tougher sell). This is
         # what turns "which of these would actually land?" into a glance.
@@ -3528,7 +3595,7 @@ def build_trade_radar(pitchers, hitters, roto, my_team, best_recent_p, best_rece
             f'padding-top:7px;">Upgrades your '
             f'<span style="color:{ACCENT};font-weight:700;">{get_lbl}</span>; they shore up '
             f'<span style="color:{TEXT};">{send_lbl}</span>'
-            f'<span style="color:{MUTED};"> &middot; {value}</span></div>'
+            f'<span style="color:{MUTED};"> &middot; {value}</span>{thin_html}</div>'
             f'</div>'
         )
     n_fair = sum(1 for t in trades if t.get("lane") == "fair")

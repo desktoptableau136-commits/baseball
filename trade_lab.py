@@ -187,7 +187,7 @@ def build_data(snap, my_team):
             "surplus":  surplus_of(tk),
             "need_pos": need_pos,
             "surplus_pos": surplus_pos,
-            "pos_count": sd._my_position_counts(hitters, tk),   # redundancy guard: bodies per position
+            "pos_count": sd._team_position_counts(hitters, tk),   # redundancy + depth guard: bodies per position
         }
 
         buckets = {"hit": [], "sp": [], "rp": []}
@@ -234,6 +234,7 @@ def build_data(snap, my_team):
             "starCap": sd._STAR_RELUCT_CAP, "realisticMax": sd._TRADE_REALISTIC_MAX,
             "needCat": sd._NEED_MULT_CAT, "needPos": sd._NEED_MULT_POS,
             "needSurplus": sd._NEED_MULT_SURPLUS, "needClamp": list(sd._NEED_MULT_CLAMP),
+            "thinPosPenalty": sd._TRADE_THIN_POS_PENALTY,   # depth floor: read penalty per single-slot pos a team is left thin at
         },
         "refreshed": snap.get("refreshed_at", ""),
     }
@@ -714,6 +715,36 @@ function posStacked(pos, myMeta, giveList, getList) {{
   return post > cap && shed === 0;
 }}
 
+// Depth floor (mirrors send_digest._leaves_position_short): hitter positions where GIVING
+// `giveList` and RECEIVING `getList` drops a team below its startable bodies (DATA.posStarters)
+// with no same-position body back. Body-count check, INDEPENDENT of tval — catches "their only
+// catcher for 2 OF" that the value sums miss. `counts` = teamsMeta[tk].pos_count of the GIVING team.
+function leavesShort(counts, giveList, getList) {{
+  var short = [], starters = DATA.posStarters || {{}}, seen = {{}};
+  (giveList || []).forEach(function(p) {{ (p.tgroups || []).forEach(function(g) {{ seen[g] = 1; }}); }});
+  Object.keys(seen).forEach(function(P) {{
+    if (!(P in starters)) return;   // hitter slots only (SP/RP absent from posStarters)
+    var leaving  = (giveList || []).filter(function(p) {{ return (p.tgroups || []).indexOf(P) >= 0; }}).length;
+    var arriving = (getList  || []).filter(function(p) {{ return (p.tgroups || []).indexOf(P) >= 0; }}).length;
+    if (((counts || {{}})[P] || 0) - leaving + arriving < starters[P]) short.push(P);
+  }});
+  return short;
+}}
+
+// Single-slot positions where the GIVING team is left at EXACTLY the floor (starter, no backup) —
+// the "thin, not clean" borderline that the honest read flags (mirrors find_trades' thin_them).
+function thinPos(counts, giveList, getList) {{
+  var thin = [], starters = DATA.posStarters || {{}}, seen = {{}};
+  (giveList || []).forEach(function(p) {{ (p.tgroups || []).forEach(function(g) {{ seen[g] = 1; }}); }});
+  Object.keys(seen).forEach(function(P) {{
+    if (starters[P] !== 1) return;   // single-slot hitter positions only
+    var leaving  = (giveList || []).filter(function(p) {{ return (p.tgroups || []).indexOf(P) >= 0; }}).length;
+    var arriving = (getList  || []).filter(function(p) {{ return (p.tgroups || []).indexOf(P) >= 0; }}).length;
+    if (((counts || {{}})[P] || 0) - leaving + arriving === starters[P]) thin.push(P);
+  }});
+  return thin;
+}}
+
 // Why a partner player is worth targeting for MY (left) team: fills a category need
 // or (hitter) upgrades one of my thin positions. Reused from the digest's need logic.
 function targetReasons(p, myMeta, poss) {{
@@ -1061,9 +1092,18 @@ function recompute() {{
   // MY-side star guard (mirror of the partner star-reach): an otherwise-ACCEPT that pries my
   // crown-jewel star at par is downgraded to COUNTER — I'd hold out (endowment/star bias).
   var starSurrender = dealStarSurrender(getArr, giveArr, netVal);
+  // Depth floor (both parties, mirrors _leaves_position_short): who is left below startable
+  // bodies at a hitter position. I give giveArr / receive getArr; the partner gives getArr
+  // (what I take) / receives giveArr. thinThem = single-slot positions they're left at the floor.
+  var leavesMeShort   = leavesShort(myMeta.pos_count, giveArr, getArr);
+  var leavesThemShort = leavesShort(partnerMeta.pos_count, getArr, giveArr);
+  var thinThem        = thinPos(partnerMeta.pos_count, getArr, giveArr);
   if (label === 'ACCEPT' && starSurrender) {{
     label='COUNTER'; color='{YELLOW}';
     why='they\'re prying your star at par &mdash; hold out for more';
+  }} else if (label === 'ACCEPT' && leavesMeShort.length) {{
+    label='COUNTER'; color='{YELLOW}';
+    why='leaves you thin at '+leavesMeShort.join(', ')+' &mdash; get a replacement first';
   }}
   vBox.innerHTML = '<span class="vpill" style="background:'+color+'">'+label+'</span>'
     + '<div class="vwhy">'+why+'</div>';
@@ -1081,15 +1121,21 @@ function recompute() {{
   // color + thumb icon — the reader should grok "how each side feels" at a glance, then read why.
   var partnerNeeds = partnerMeta.needs || [];
   var partnerGets = lost.filter(function(c){{ return partnerNeeds.indexOf(c) >= 0; }});
+  // Honest read: a thin single-slot loss penalizes their demand-side net (read only — the
+  // displayed Their-value row stays pure), so the tilt naturally flips toward "aggressive ask".
+  var thinNote = thinThem.length ? ' (no backup at ' + thinThem.join(', ') + ')' : '';
+  var netThemRead = netThem - (DATA.tune.thinPosPenalty || 0) * thinThem.length;
   var pfTier, pfReason;
   if (!lKeys.length && !rKeys.length) {{
     pfTier = 'na'; pfReason = '&mdash;';
+  }} else if (leavesThemShort.length) {{
+    pfTier = 'no'; pfReason = 'they won\'t gut their ' + leavesThemShort.join(', ') + ' &mdash; no backup left';
   }} else if (dealStarReach(getArr, giveArr, netVal)) {{
     pfTier = 'no'; pfReason = 'they won\'t ship their star at even value';
-  }} else if (netThem < -DATA.tune.realisticMax) {{
-    pfTier = 'maybe'; pfReason = 'they come out behind on their own needs &mdash; you\'d have to sweeten it';
+  }} else if (netThemRead < -DATA.tune.realisticMax) {{
+    pfTier = 'maybe'; pfReason = 'they come out behind on their own needs' + thinNote + ' &mdash; you\'d have to sweeten it';
   }} else if (partnerGets.length) {{
-    pfTier = 'yes'; pfReason = 'it fills their needs (' + partnerGets.map(function(c){{return DATA.catLabels[c]||c;}}).join(', ') + ')';
+    pfTier = 'yes'; pfReason = 'it fills their needs (' + partnerGets.map(function(c){{return DATA.catLabels[c]||c;}}).join(', ') + ')' + thinNote;
   }} else {{
     pfTier = 'no'; pfReason = 'it doesn\'t address anything they need';
   }}
@@ -1101,6 +1147,8 @@ function recompute() {{
     yfTier = 'na'; yfReason = '&mdash;';
   }} else if (starSurrender) {{
     yfTier = 'no'; yfReason = 'you\'d ship your star at even value &mdash; hold out for more';
+  }} else if (leavesMeShort.length) {{
+    yfTier = 'no'; yfReason = 'it leaves you without a backup at ' + leavesMeShort.join(', ') + ' &mdash; get a replacement first';
   }} else if (needFilled.length || posList.length) {{
     yfTier = 'yes';
     yfReason = 'it fills your needs (' + needFilled.map(function(c){{return DATA.catLabels[c]||c;}}).join(', ')
