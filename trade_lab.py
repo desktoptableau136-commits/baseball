@@ -431,7 +431,7 @@ def build_html(data):
   <div id="head">
     <div class="headmain">
       <div class="htitle">&#9878;&#65039; Trade Lab</div>
-      <div class="hsub">Pick two teams, click players to build a deal, watch it get graded live. &#127919; marks partner players who fill your needs.</div>
+      <div class="hsub">Pick two teams, click players to build a deal, watch it get graded live. &#127919; = fills your need &middot; <span style="color:{YELLOW};font-weight:800">&#9656;</span> send (your surplus they value more) &middot; <span style="color:{GREEN};font-weight:800">&#9666;</span> grab (their surplus you value more).</div>
     </div>
     <div class="headright">
       <div class="fresh" title="Snapshot refresh time — rerun with --refresh to update"><span class="dot" style="background:{fresh_color}"></span><span>Data: {fresh_label}</span></div>
@@ -461,10 +461,13 @@ def build_html(data):
     <div id="mid">
       <div id="verdict"></div>
       <div class="ledger">
-        <div class="give"><div class="lhead give-h">YOU GIVE</div><div id="giveList" class="llist"></div></div>
-        <div class="get"><div class="lhead get-h">YOU GET</div><div id="getList" class="llist"></div></div>
+        <div class="rail give"><div class="lhead give-h">&#9660; YOU GIVE</div><div id="giveList" class="llist"></div><div id="giveSub"></div></div>
+        <div class="rail get"><div class="lhead get-h">&#9650; YOU GET</div><div id="getList" class="llist"></div><div id="getSub"></div></div>
       </div>
+      <div id="fairbar"></div>
+      <div id="dealsum"></div>
       <div id="reads"></div>
+      <details id="vdetail"><summary>Value detail</summary><div id="vdetailBody"></div></details>
       <div id="coach"></div>
       <button id="clearBtn" onclick="clearAll()">Clear deal</button>
     </div>
@@ -502,7 +505,7 @@ body {{ margin:0; background:{BG}; color:{TEXT}; font-family:-apple-system,Segoe
 .dot {{ width:9px; height:9px; border-radius:50%; display:inline-block; flex:0 0 auto; }}
 .htitle {{ font-size:22px; font-weight:800; }}
 .hsub {{ color:{MUTED}; font-size:13px; margin-top:2px; }}
-#cols {{ display:grid; grid-template-columns:1fr 1fr 1fr; gap:14px; align-items:start; }}
+#cols {{ display:grid; grid-template-columns:3fr 4fr 3fr; gap:14px; align-items:start; }}
 .side {{ background:{SURFACE}; border:1px solid {BORDER}; border-radius:10px; overflow:hidden; }}
 .sidehead {{ display:flex; align-items:center; gap:8px; padding:10px 12px; border-bottom:1px solid {BORDER}; background:{SURFACE2}; }}
 .sidetag {{ font-size:10px; font-weight:800; letter-spacing:.8px; color:{MUTED}; white-space:nowrap; }}
@@ -521,7 +524,20 @@ body {{ margin:0; background:{BG}; color:{TEXT}; font-family:-apple-system,Segoe
 .prow {{ padding:6px 8px; border-radius:7px; cursor:pointer; border:1px solid transparent; margin-bottom:2px; }}
 .prow:hover {{ background:{SURFACE2}; }}
 .prow.sel {{ background:rgba(59,130,246,.14); border-color:{ACCENT}; }}
-.prow.target {{ box-shadow:inset 3px 0 0 {GREEN}; }}
+/* Target = need-fit (🎯 icon). Edge is a SOFT WHITE hint — green is reserved for the arb
+   marker below, so a green edge always means "value edge", never merely "fills a need". */
+.prow.target {{ box-shadow:inset 3px 0 0 rgba(226,232,240,.28); }}
+/* Value-asymmetry ("arb") marker — a glyph-first signal DISTINCT from 🎯 target (need-fit)
+   and from the $/▼ luck badges. Amber ▸ = your surplus they value more (send); green ◂ =
+   their surplus you value more (grab). The GREEN edge belongs to grab; it overrides the
+   soft-white target edge when a partner player is BOTH a target and a grab. */
+.arb {{ font-weight:900; cursor:help; flex:0 0 auto; letter-spacing:-1px; }}
+.arb.bait {{ color:{YELLOW}; }}
+.arb.grab {{ color:{GREEN}; }}
+.prow.abait {{ box-shadow:inset -3px 0 0 {YELLOW}; }}   /* left panel — send edge */
+.prow.agrab {{ box-shadow:inset 3px 0 0 {GREEN}; }}     /* right panel — grab edge (wins over target) */
+.prow.strong.abait {{ background:linear-gradient(90deg,transparent,rgba(245,158,11,.10)); }}
+.prow.strong.agrab {{ background:linear-gradient(90deg,rgba(34,197,94,.10),transparent); }}
 .prow-top {{ display:flex; align-items:center; gap:6px; }}
 .pname {{ font-weight:700; font-size:13px; }}
 .poschip {{ display:inline-block; font-size:9px; font-weight:800; letter-spacing:.4px; color:{TEXT}; background:{SURFACE2}; border:1px solid {BORDER}; border-radius:4px; padding:1px 4px; vertical-align:middle; }}
@@ -544,6 +560,39 @@ body {{ margin:0; background:{BG}; color:{TEXT}; font-family:-apple-system,Segoe
 .litem {{ font-size:12px; padding:3px 0; display:flex; align-items:center; gap:5px; }}
 .litem .x {{ color:{MUTED}; cursor:pointer; font-weight:800; }}
 .totrow {{ display:flex; justify-content:space-between; font-size:11px; color:{MUTED}; margin-top:8px; padding-top:8px; border-top:1px solid {BORDER}; }}
+/* calm two-rail ledger */
+.rail {{ min-width:0; }}
+.litem .lname {{ cursor:pointer; }}
+.litem .lv {{ margin-left:auto; color:{MUTED}; font-weight:700; font-variant-numeric:tabular-nums; cursor:pointer; }}
+.litem .arb {{ margin-left:4px; }}
+.litem .lv + .x {{ margin-left:6px; }}
+.lsub {{ display:flex; justify-content:space-between; font-size:11px; color:{MUTED}; margin-top:5px; padding-top:5px; border-top:1px solid {BORDER}; }}
+.lsub b {{ color:{TEXT}; font-weight:700; font-variant-numeric:tabular-nums; }}
+/* per-player value story (tap a name or value to reveal) */
+.vstory {{ background:{BG}; border:1px solid {BORDER}; border-left:3px solid {ACCENT}; border-radius:6px; padding:8px 10px; margin:2px 0 5px; font-size:11px; line-height:1.5; }}
+.vstory .vs-base {{ color:#c4cdda; margin-bottom:5px; }}
+.vstory .vs-base b {{ color:{TEXT}; font-variant-numeric:tabular-nums; }}
+.vstory .vs-ln {{ display:flex; gap:8px; align-items:baseline; padding:1px 0; }}
+.vstory .who {{ flex:0 0 auto; min-width:70px; color:{MUTED}; font-weight:700; }}
+.vstory .val {{ flex:0 0 42px; font-weight:800; font-variant-numeric:tabular-nums; }}
+.vstory .val.up {{ color:{GREEN}; }} .vstory .val.dn {{ color:{RED}; }}
+.vstory .rz {{ color:{MUTED}; }}
+/* fairness bar */
+#fairbar {{ margin-top:14px; }}
+.btrack {{ position:relative; height:9px; border-radius:6px; overflow:hidden; display:flex; border:1px solid {BORDER}; }}
+.bgive {{ background:linear-gradient(90deg,rgba(239,68,68,.55),rgba(239,68,68,.30)); }}
+.bget {{ background:linear-gradient(90deg,rgba(34,197,94,.30),rgba(34,197,94,.55)); }}
+.bmid {{ position:absolute; left:50%; top:-2px; bottom:-2px; width:2px; background:{MUTED}; opacity:.55; }}
+.blabels {{ display:flex; justify-content:space-between; font-size:10.5px; margin-top:5px; color:{MUTED}; font-variant-numeric:tabular-nums; }}
+.blabels b {{ color:{TEXT}; font-weight:700; }}
+.btag {{ text-align:center; font-size:11px; color:{MUTED}; margin-top:5px; }}
+#dealsum {{ }}
+/* value-detail disclosure */
+details#vdetail {{ margin-top:12px; padding-top:10px; border-top:1px solid {BORDER}; }}
+details#vdetail > summary {{ list-style:none; cursor:pointer; font-size:10px; font-weight:800; letter-spacing:.6px; text-transform:uppercase; color:{ACCENT}; }}
+details#vdetail > summary::-webkit-details-marker {{ display:none; }}
+details#vdetail > summary::before {{ content:'\\25B8 '; font-size:8px; }}
+details#vdetail[open] > summary::before {{ content:'\\25BE '; }}
 .valgrid {{ display:grid; grid-template-columns:auto 1fr 1fr 1fr; gap:2px 10px; font-size:11px; margin-top:8px; padding-top:8px; border-top:1px solid {BORDER}; align-items:center; }}
 .valgrid .vgh {{ color:{MUTED}; font-weight:700; text-align:right; font-size:10px; text-transform:uppercase; letter-spacing:.03em; }}
 .valgrid .vgh:first-child {{ text-align:left; }}
@@ -833,7 +882,7 @@ function groupHitters(rows) {{
 // One player row. `gkey` makes the DOM ids unique when a multi-eligible hitter is
 // duplicated across position groups; selection stays in sync because toggle() keys off
 // data-pid across EVERY copy on the side, not a single element id.
-function playerRowHtml(side, p, gkey, myMeta) {{
+function playerRowHtml(side, p, gkey, myMeta, holderMeta, otherMeta) {{
   var on = picked[side][p.id] ? ' sel' : '';
   var pos = (p.posTokens || []).map(function(t) {{ return '<span class="poschip">' + t + '</span>'; }}).join(' ');
   if (pos) pos = ' ' + pos;
@@ -842,11 +891,18 @@ function playerRowHtml(side, p, gkey, myMeta) {{
     var tr = targetReasons(p, myMeta);
     if (tr.length) {{ tgt = ' <span class="tgt" title="Target &mdash; ' + tr.join('; ') + '">&#127919;</span>'; tgtCls = ' target'; }}
   }}
+  // Arb marker — lives ALONGSIDE the target (different question: value edge, not need-fit).
+  var m = arbMarker(p, holderMeta || {{}}, otherMeta || {{}}), arb = '', arbCls = '';
+  if (m) {{
+    var oName = side === 'L' ? ((otherMeta||{{}}).name || 'They') : 'You';
+    arb = arbGlyph(side, m, arbReasons(p, holderMeta || {{}}, otherMeta || {{}}, oName));
+    arbCls = (side === 'L' ? ' abait' : ' agrab') + (m.tier === 'strong' ? ' strong' : '');
+  }}
   var bid = 'bd-' + side + '-' + gkey + '-' + p.id;
-  return '<div class="prow' + on + tgtCls + '" id="row-' + side + '-' + gkey + '-' + p.id + '" '
+  return '<div class="prow' + on + tgtCls + arbCls + '" id="row-' + side + '-' + gkey + '-' + p.id + '" '
     + 'data-pid="' + p.id + '" data-side="' + side + '">'
     + '<div class="prow-top" onclick="toggle(\'' + side + '\',\'' + p.id + '\')">'
-    + p.logo + '<span class="pname">' + p.name + '</span>' + pos + p.badges + tgt
+    + p.logo + '<span class="pname">' + p.name + '</span>' + pos + p.badges + tgt + arb
     + '<span class="pill" style="background:' + pillColor(p.score) + '" '
     + 'onclick="event.stopPropagation();openBd(\'' + bid + '\')">' + p.score + '</span>'
     + '</div>'
@@ -864,6 +920,9 @@ function renderRoster(side) {{
   // League-rank tags use the RENDERED side's own team meta (correct for either column).
   var meta = DATA.teamsMeta[tk] || {{}};
   var pr_rank = meta.pos_rank || {{}};
+  // Arb markers judge THIS side's players (holder=meta) against the OTHER dropdown's team.
+  var otherTk = document.getElementById(side === 'L' ? 'selR' : 'selL').value;
+  var otherMeta = DATA.teamsMeta[otherTk] || {{}};
   var cs = collapsed[side] || (collapsed[side] = {{}});
   var cps = collapsedPos[side] || (collapsedPos[side] = {{}});
   var html = '';
@@ -896,7 +955,7 @@ function renderRoster(side) {{
           + (showRank ? rankText(pr_rank[pos], pos) : '')
           + '</div>'
           + '<div class="possecbody"' + (pfold ? ' style="display:none"' : '') + '>';
-        pr.forEach(function(p) {{ html += playerRowHtml(side, p, pos, myMeta); }});
+        pr.forEach(function(p) {{ html += playerRowHtml(side, p, pos, myMeta, meta, otherMeta); }});
         html += '</div>';
       }};
       POS_GROUPS.forEach(function(pos) {{
@@ -905,7 +964,7 @@ function renderRoster(side) {{
       }});
       if (g.util.length) emit('UTIL', g.util, false);   // UTIL has no positional rank
     }} else {{
-      rows.forEach(function(p) {{ html += playerRowHtml(side, p, role, myMeta); }});
+      rows.forEach(function(p) {{ html += playerRowHtml(side, p, role, myMeta, meta, otherMeta); }});
     }}
     html += '</div>';
   }});
@@ -960,9 +1019,86 @@ function catChip(c, cls) {{
   return '<span class="chip ' + cls + '">' + lbl + '</span>';
 }}
 
+// ── Value-asymmetry ("arb") marker + per-player value story ──────────────────
+// A tune delta -> signed 2-dec label, e.g. 0.14 -> "+.14", -0.10 -> "-.10".
+function _d(x) {{ return (x>=0?'+':'-') + Math.abs(x).toFixed(2).replace(/^0/,''); }}
+
+// The ± components of needMult(p, meta) as plain-English strings — a faithful mirror of
+// needMult's branches, so the story/tooltip can never drift from the value math.
+function multParts(p, meta) {{
+  var T=DATA.tune, cats=p.tcats||[], needs=meta.needs||[], surplus=meta.surplus||[], out=[];
+  var nc = cats.filter(function(c){{ return needs.indexOf(c)>=0; }});
+  nc.forEach(function(c){{ out.push({{s:1, t:_d(T.needCat)+' '+(DATA.catLabels[c]||c)+' need'}}); }});
+  if (cats.length && !nc.length && cats.some(function(c){{ return surplus.indexOf(c)>=0; }}))
+    out.push({{s:-1, t:_d(-T.needSurplus)+' only helps where deep'}});
+  if (p.role==='hit') {{
+    var groups=p.tgroups||[], needPos=meta.need_pos||{{}}, surplusPos=meta.surplus_pos||[];
+    var fills=groups.filter(function(g){{ return g in needPos; }});
+    if (fills.length) out.push({{s:1, t:_d(T.needPos)+' fills thin '+fills.join('/')}});
+    else if (surplusPos.length && groups.length && groups.every(function(g){{ return surplusPos.indexOf(g)>=0; }}))
+      out.push({{s:-1, t:_d(-T.needSurplus)+' stacks a deep slot'}});
+  }}
+  return out;
+}}
+
+// Does the OTHER team value him more than his HOLDER? (favorable to move inward.)
+function arbMarker(p, holderMeta, otherMeta) {{
+  var gap = needMult(p, otherMeta) - needMult(p, holderMeta);
+  if (gap < DATA.tune.needCat) return null;
+  return {{ tier: gap >= (DATA.tune.needCat + DATA.tune.needSurplus) ? 'strong' : 'mild' }};
+}}
+
+// Tooltip: why the other side values him more (+ a note when the holder is deep).
+function arbReasons(p, holderMeta, otherMeta, otherName) {{
+  var pos = multParts(p, otherMeta).filter(function(x){{ return x.s>0; }}).map(function(x){{ return x.t; }});
+  var deep = multParts(p, holderMeta).some(function(x){{ return x.s<0; }});
+  var s = (otherName||'They') + ' value him more: ' + (pos.join(' &#183; ') || 'fits their build');
+  if (deep) s += ' &#183; you are deep here';
+  return s;
+}}
+
+// The inward arrow glyph (L=amber send, R=green grab; doubled on a strong gap).
+function arbGlyph(side, m, title) {{
+  if (!m) return '';
+  var strong = m.tier==='strong', cls = side==='L' ? 'bait' : 'grab';
+  // HTML entities (not \\u escapes): _JS is a raw string, so \\u would survive literally.
+  var g = side==='L' ? (strong?'&#9656;&#9656;':'&#9656;') : (strong?'&#9666;&#9666;':'&#9666;');
+  return ' <span class="arb '+cls+'" title="'+title+'">'+g+'</span>';
+}}
+
+function openVs(id) {{ var e=document.getElementById(id); if(e) e.style.display = (e.style.display==='none'?'block':'none'); }}
+
+// Per-player value story: base drivers, then the same player re-priced by each side's needs.
+function valueStory(p) {{
+  var myMeta=DATA.teamsMeta[document.getElementById('selL').value]||{{}};
+  var partnerMeta=DATA.teamsMeta[document.getElementById('selR').value]||{{}};
+  var pn = partnerMeta.name || 'them';
+  var driv = (p.tcats||[]).map(function(c){{ return DATA.catLabels[c]||c; }}).join(', ') || 'role production';
+  var posd = (p.role==='hit' && (p.tgroups||[]).length) ? ' &middot; ' + p.tgroups.join('/') : '';
+  function line(lbl, meta) {{
+    var m=needMult(p,meta), val=p.tval*m, parts=multParts(p,meta);
+    var cls = m>1.001?'up':(m<0.999?'dn':'');
+    var rz = parts.length ? parts.map(function(x){{ return x.t; }}).join(' &middot; ') : 'no change';
+    return '<div class="vs-ln"><span class="who">'+lbl+'</span><span class="val '+cls+'">'+val.toFixed(2)+'</span><span class="rz">'+rz+'</span></div>';
+  }}
+  return '<div class="vs-base"><b>Base '+p.tval.toFixed(2)+'</b> &mdash; strong in '+driv+posd+'</div>'
+    + line('To you', myMeta) + line('To '+pn, partnerMeta);
+}}
+
 function ledgerItem(side, p) {{
-  return '<div class="litem">' + p.logo + '<span>' + p.name + '</span>'
-    + '<span class="x" onclick="toggle(\'' + side + '\',\'' + p.id + '\')">&times;</span></div>';
+  var myMeta=DATA.teamsMeta[document.getElementById('selL').value]||{{}};
+  var partnerMeta=DATA.teamsMeta[document.getElementById('selR').value]||{{}};
+  var holderMeta = side==='L' ? myMeta : partnerMeta;
+  var otherMeta  = side==='L' ? partnerMeta : myMeta;
+  var otherName  = side==='L' ? (partnerMeta.name||'They') : 'You';
+  var m = arbMarker(p, holderMeta, otherMeta);
+  var arb = arbGlyph(side, m, m ? arbReasons(p, holderMeta, otherMeta, otherName) : '');
+  var vsId = 'vs-'+side+'-'+p.id;
+  return '<div class="litem">' + p.logo
+    + '<span class="lname" onclick="openVs(\'' + vsId + '\')">' + p.name + '</span>' + arb
+    + '<span class="lv" onclick="openVs(\'' + vsId + '\')">' + p.tval.toFixed(2) + '</span>'
+    + '<span class="x" onclick="toggle(\'' + side + '\',\'' + p.id + '\')">&times;</span></div>'
+    + '<div class="vstory" id="' + vsId + '" style="display:none">' + valueStory(p) + '</div>';
 }}
 
 function flatPool(tk) {{
@@ -1149,6 +1285,7 @@ function recompute() {{
   if (!lKeys.length && !rKeys.length) {{
     vBox.innerHTML = '<span class="vpill" style="background:{BORDER};color:{MUTED}">SELECT PLAYERS</span>';
     reads.innerHTML = '';
+    ['giveSub','getSub','fairbar','dealsum','vdetailBody'].forEach(function(idv){{ var e=document.getElementById(idv); if(e) e.innerHTML=''; }});
     setDealBar(0, 0, 0, '', '');
     return;
   }}
@@ -1340,20 +1477,36 @@ function recompute() {{
          + '<div class="vgc">'+g.toFixed(2)+'</div><div class="vgc">'+gt.toFixed(2)+'</div>'
          + '<div class="vgc '+_ncls(net)+'">'+_sg(net)+'</div>';
   }}
-  reads.innerHTML =
-      '<div class="valgrid">'
+  // Per-rail subtotals.
+  document.getElementById('giveSub').innerHTML = lKeys.length ? '<div class="lsub"><span>give</span><b>'+giveVal.toFixed(2)+'</b></div>' : '';
+  document.getElementById('getSub').innerHTML  = rKeys.length ? '<div class="lsub"><span>get</span><b>'+getVal.toFixed(2)+'</b></div>' : '';
+
+  // Fairness bar — one glance at who pays up on paper (BASE value, the neutral yardstick).
+  var tot = giveVal + getVal, gpct = tot>0 ? Math.round(giveVal/tot*100) : 50;
+  var btag = netVal > 0.1 ? 'A shade your way &mdash; you come out ahead on paper'
+           : (netVal < -0.1 ? 'You pay up a touch on paper' : 'Roughly even on paper');
+  document.getElementById('fairbar').innerHTML =
+      '<div class="btrack"><div class="bgive" style="flex:0 0 '+gpct+'%"></div>'
+    + '<div class="bget" style="flex:0 0 '+(100-gpct)+'%"></div><div class="bmid"></div></div>'
+    + '<div class="blabels"><span>give <b>'+giveVal.toFixed(2)+'</b></span><span>get <b>'+getVal.toFixed(2)+'</b></span></div>'
+    + '<div class="btag">'+btag+'</div>';
+
+  // Plain-English takeaway.
+  document.getElementById('dealsum').innerHTML = '<div class="dealsum">' + dealSummary(netVal, netMe, netThem, addressesNeed) + '</div>';
+
+  // Resting reads — just the two acceptance lines; everything numeric moves to Value detail.
+  reads.innerHTML = accLine('Would they do it?', pfTier, pfReason) + accLine('Would you do it?', yfTier, yfReason);
+
+  // Value detail (collapsed): the 3-POV matrix + category gain/lose chips.
+  document.getElementById('vdetailBody').innerHTML =
+      '<div class="valgrid" style="margin-top:8px">'
         + '<div class="vgh"></div><div class="vgh">Give</div><div class="vgh">Get</div><div class="vgh">Net</div>'
         + _vrow('Base', giveVal, getVal, netVal, 'Universal value (tval) &mdash; ' + tilt)
         + _vrow('My value', myGive, myGet, netMe, 'Re-valued by your roster needs')
-        + _vrow('Their value', thGive, thGet, netThem, 'Re-valued by ' + (partnerMeta.name||'their') + ' needs (Net = give &minus; get, their surplus)')
+        + _vrow('Their value', thGive, thGet, netThem, 'Re-valued by ' + (partnerMeta.name||'their') + ' needs')
       + '</div>'
-    + ((lKeys.length || rKeys.length)
-         ? '<div class="dealsum">' + dealSummary(netVal, netMe, netThem, addressesNeed) + '</div>'
-         : '')
-    + '<div class="readline"><span class="readlbl">You gain:</span> ' + gainChips + (posChips?' &nbsp; '+posChips:'') + '</div>'
-    + '<div class="readline"><span class="readlbl">You lose:</span> ' + loseChips + '</div>'
-    + accLine('Would they do it?', pfTier, pfReason)
-    + accLine('Would you do it?', yfTier, yfReason);
+    + '<div class="readline" style="margin-top:8px"><span class="readlbl">You gain:</span> ' + gainChips + (posChips?' &nbsp; '+posChips:'') + '</div>'
+    + '<div class="readline"><span class="readlbl">You lose:</span> ' + loseChips + '</div>';
 }}
 
 function clearAll() {{
