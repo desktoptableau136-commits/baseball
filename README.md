@@ -184,6 +184,7 @@ The Trade Lab also runs as a **phone-first web app** you open from a single GitH
 - **`--refresh-url URL`** (or env `POCKET_REFRESH_URL`) bakes a **↻ Refresh data** button into the header. Left unset (normal local runs), no button renders.
 - **How refresh works:** the button POSTs to a tiny **Cloudflare Worker** (the only holder of a narrowly-scoped GitHub token), which fires the `pocket-tradelab.yml` workflow. That workflow re-fetches data, rebuilds the page, and redeploys to Pages; the phone polls `build.json` and auto-reloads when the new build lands (~2–3 min).
 - The layout has a **pocket redesign** below 640px: single column, big tap targets, a sticky team-section header, and an always-visible **bottom deal bar** (Give N · Get N · net · verdict) that jumps you to the full grade. Desktop is unchanged.
+- **The hosted page opens fully collapsed on any device** — every roster section (Hitters / SP / RP), each hitter position sub-group, and the "who to trade with" board start folded, so you land on a short list of headers and expand only what you want. This is keyed to the published build (the `--refresh-url` flag), so running `python trade_lab.py` locally on a laptop still opens fully expanded for development.
 
 **One-time setup** (Pages, a fine-grained token, the Worker, and the `POCKET_REFRESH_URL` repo variable) is documented step-by-step in [`worker/README.md`](worker/README.md).
 
