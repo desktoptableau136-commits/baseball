@@ -1593,6 +1593,8 @@ function loadDeal(el) {{
   }}
   pickByName('L', giveNames);
   pickByName('R', getNames);
+  var fb = document.getElementById('fitboard');
+  if (fb) fb.open = false;   // fold the "who to trade with" board once a deal is loaded
   var cols = document.getElementById('cols');
   if (cols && cols.scrollIntoView) cols.scrollIntoView({{ behavior:'smooth', block:'start' }});
 }}
