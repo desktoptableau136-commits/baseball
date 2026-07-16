@@ -1060,33 +1060,49 @@ function recompute() {{
   // an overpay) is always a tough sell; then, if they come out clearly behind by THEIR own
   // valuation (netThem < -realisticMax) it's an aggressive ask; else if my give hits their
   // category needs it's realistic; otherwise a likely tough sell.
+  // Each acceptance read carries a SENTIMENT tier (yes/maybe/no) so it renders with a quick
+  // color + thumb icon — the reader should grok "how each side feels" at a glance, then read why.
   var partnerNeeds = partnerMeta.needs || [];
   var partnerGets = lost.filter(function(c){{ return partnerNeeds.indexOf(c) >= 0; }});
-  var partnerFit;
+  var pfTier, pfReason;
   if (!lKeys.length && !rKeys.length) {{
-    partnerFit = '&mdash;';
+    pfTier = 'na'; pfReason = '&mdash;';
   }} else if (dealStarReach(getArr, giveArr, netVal)) {{
-    partnerFit = 'you\'d be prying their star at par &mdash; tough sell';
+    pfTier = 'no'; pfReason = 'they won\'t ship their star at even value';
   }} else if (netThem < -DATA.tune.realisticMax) {{
-    partnerFit = 'they come out behind on value &mdash; aggressive ask';
+    pfTier = 'maybe'; pfReason = 'they come out behind on their own needs &mdash; you\'d have to sweeten it';
   }} else if (partnerGets.length) {{
-    partnerFit = 'fits their needs (' + partnerGets.map(function(c){{return DATA.catLabels[c]||c;}}).join(', ') + ') &mdash; realistic';
+    pfTier = 'yes'; pfReason = 'it fills their needs (' + partnerGets.map(function(c){{return DATA.catLabels[c]||c;}}).join(', ') + ')';
   }} else {{
-    partnerFit = 'doesn\'t hit their category needs &mdash; may be a tough sell';
+    pfTier = 'no'; pfReason = 'it doesn\'t address anything they need';
   }}
 
   // MY-side acceptance — the mirror of "Would they do it?". A star surrender at par is the read
   // that makes an even deal one *I* should hold out on, no matter how well the categories fit.
-  var youFit = !lKeys.length && !rKeys.length ? '&mdash;'
-    : (starSurrender
-        ? 'you\'d be surrendering your star at par &mdash; hold out'
-        : (needFilled.length || posList.length
-            ? 'fills your needs (' + needFilled.map(function(c){{return DATA.catLabels[c]||c;}}).join(', ')
-              + (posList.length ? (needFilled.length ? ', ' : '') + posList.join(', ') + ' slot' : '') + ') &mdash; worth it'
-            : (netMe >= -0.1 ? 'fair value for you &mdash; workable' : 'you\'d be paying up &mdash; think twice')));
+  var yfTier, yfReason;
+  if (!lKeys.length && !rKeys.length) {{
+    yfTier = 'na'; yfReason = '&mdash;';
+  }} else if (starSurrender) {{
+    yfTier = 'no'; yfReason = 'you\'d ship your star at even value &mdash; hold out for more';
+  }} else if (needFilled.length || posList.length) {{
+    yfTier = 'yes';
+    yfReason = 'it fills your needs (' + needFilled.map(function(c){{return DATA.catLabels[c]||c;}}).join(', ')
+             + (posList.length ? (needFilled.length ? ', ' : '') + posList.join(', ') + ' slot' : '') + ')';
+  }} else if (netMe >= -0.1) {{
+    yfTier = 'maybe'; yfReason = 'fair value, but nothing you\'re short on';
+  }} else {{
+    yfTier = 'no'; yfReason = 'you\'d overpay without filling a need';
+  }}
 
-  var timingTxt = timing > 0 ? 'in your favor (selling high / buying low)'
-                : (timing < 0 ? 'a trap (dealing a riser or buying a regressor)' : 'neutral');
+  // Sentiment marker: thumb icon + color, keyed to the tier. Same mapping both sides so the
+  // color/icon language is learned once (green = this side likes it, red = this side balks).
+  var ACC = {{ yes:['&#128077;','{GREEN}'], maybe:['&#129300;','{YELLOW}'], no:['&#128078;','{RED}'], na:['','{MUTED}'] }};
+  function accLine(lbl, tier, reason) {{
+    var m = ACC[tier] || ACC.na;
+    var ic = m[0] ? m[0] + ' ' : '';
+    return '<div class="readline"><span class="readlbl">' + lbl + '</span> '
+         + '<span style="color:' + m[1] + '">' + ic + reason + '</span></div>';
+  }}
 
   var gainChips = gained.length ? gained.map(function(c){{
         return catChip(c, needFilled.indexOf(c)>=0 ? 'need':''); }}).join('') : '<span class="empty">none</span>';
@@ -1116,9 +1132,8 @@ function recompute() {{
       + '</div>'
     + '<div class="readline"><span class="readlbl">You gain:</span> ' + gainChips + (posChips?' &nbsp; '+posChips:'') + '</div>'
     + '<div class="readline"><span class="readlbl">You lose:</span> ' + loseChips + '</div>'
-    + '<div class="readline"><span class="readlbl">Timing:</span> ' + timingTxt + '</div>'
-    + '<div class="readline"><span class="readlbl">Would they do it?</span> ' + partnerFit + '</div>'
-    + '<div class="readline"><span class="readlbl">Would you do it?</span> ' + youFit + '</div>';
+    + accLine('Would they do it?', pfTier, pfReason)
+    + accLine('Would you do it?', yfTier, yfReason);
 }}
 
 function clearAll() {{
