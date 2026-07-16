@@ -165,13 +165,16 @@ def build_data(snap, my_team):
     team_keys = [_key(s.get("team_name")) for s in standings] or sorted(ranks.keys())
     team_logos = {_key(s.get("team_name")): s.get("logo_url", "") for s in standings}
 
-    teams_meta, players, pos_data_by_team = {}, {}, {}
+    teams_meta, players, pos_data_by_team, hit_agg = {}, {}, {}, {}
     for tk in team_keys:
         # Thin HITTER positions for this team → {pos: my_avg_score} (positional need).
         pos_data = sd.positional_breakdown(pitchers, hitters, tk, best_recent_p, best_recent_h)
         pos_data_by_team[tk] = pos_data   # reused by the Partner Fit board (per-POV engine run)
-        need_pos, surplus_pos = {}, []
+        need_pos, surplus_pos, pos_rank = {}, [], {}
         for p in pos_data:
+            # League rank at this position/role (1 = best crew) → collapsed-section gauge.
+            if p.get("rank") and p.get("n_teams"):
+                pos_rank[p["pos"]] = {"rank": p["rank"], "n": p["n_teams"]}
             if p.get("ptype") != "hit":
                 continue
             nt = p.get("n_teams") or n
@@ -180,6 +183,11 @@ def build_data(snap, my_team):
                 need_pos[p["pos"]] = round(p.get("my_avg") or 0, 1)
             elif (p.get("rank") or nt) <= pt:
                 surplus_pos.append(p["pos"])            # deep hitter positions (demand-side discount)
+        # Aggregate lineup-hitting score = Σ starter-avg × slots — ranked across teams
+        # after the loop → the Hitters role-header "Xth-best hitters" gauge. Same my_avg
+        # values shown per position, so a folded Hitters section summarizes its parts.
+        hit_agg[tk] = sum((p.get("my_avg") or 0) * sd.POS_STARTERS.get(p["pos"], 1)
+                          for p in pos_data if p.get("ptype") == "hit")
         teams_meta[tk] = {
             "name":     _disp(tk),
             "logo":     sd.fantasy_logo(team_logos.get(tk, ""), 24, tk),
@@ -187,6 +195,7 @@ def build_data(snap, my_team):
             "surplus":  surplus_of(tk),
             "need_pos": need_pos,
             "surplus_pos": surplus_pos,
+            "pos_rank": pos_rank,   # {pos: {rank, n}} → collapsed-section league-rank gauge
             "pos_count": sd._team_position_counts(hitters, tk),   # redundancy + depth guard: bodies per position
         }
 
@@ -207,6 +216,11 @@ def build_data(snap, my_team):
         for role in buckets:
             buckets[role].sort(key=lambda p: -p["score"])
         players[tk] = buckets
+
+    # Rank teams by aggregate lineup-hitting score → each team's overall Hitters rank.
+    _hn = len(hit_agg)
+    for i, (tk, _) in enumerate(sorted(hit_agg.items(), key=lambda kv: -kv[1])):
+        teams_meta[tk]["hit_rank"] = {"rank": i + 1, "n": _hn}
 
     # Partner Fit board: one engine-graded deal per rival, from EVERY team's POV so the
     # board stays correct when the LEFT dropdown switches. See build_partner_fit.
@@ -499,10 +513,11 @@ body {{ margin:0; background:{BG}; color:{TEXT}; font-family:-apple-system,Segoe
 .caret {{ font-size:9px; color:{MUTED}; width:10px; flex:0 0 auto; }}
 .rolelbl {{ flex:0 0 auto; }}
 .rolecount {{ font-size:9px; font-weight:700; color:{MUTED}; background:{SURFACE2}; border-radius:8px; padding:0 6px; }}
-.possubhdr {{ display:flex; align-items:center; gap:6px; margin:8px 4px 3px 10px; }}
+.possubhdr {{ display:flex; align-items:center; gap:6px; margin:8px 4px 3px 10px; cursor:pointer; user-select:none; }}
+.possubhdr:hover {{ background:{SURFACE2}; border-radius:6px; }}
 .posname {{ font-size:10px; font-weight:800; letter-spacing:.5px; color:{TEXT}; }}
 .poscount {{ font-size:9px; font-weight:700; color:{MUTED}; }}
-.gauge {{ margin-left:auto; font-size:9.5px; font-weight:800; color:#0b1220; border-radius:8px; padding:1px 7px; }}
+.ranktxt {{ margin-left:auto; font-size:10.5px; font-weight:800; letter-spacing:.3px; }}
 .prow {{ padding:6px 8px; border-radius:7px; cursor:pointer; border:1px solid transparent; margin-bottom:2px; }}
 .prow:hover {{ background:{SURFACE2}; }}
 .prow.sel {{ background:rgba(59,130,246,.14); border-color:{ACCENT}; }}
@@ -621,9 +636,9 @@ body {{ margin:0; background:{BG}; color:{TEXT}; font-family:-apple-system,Segoe
   .pstat {{ font-size:12px; }}
   .poschip {{ font-size:10px; padding:2px 5px; }}
   .rolehdr {{ padding:9px 4px 5px; font-size:11.5px; }}   /* bigger fold tap target */
-  .possubhdr {{ margin:9px 6px 4px 8px; }}
+  .possubhdr {{ margin:9px 6px 4px 8px; padding:3px 4px; }}   /* bigger fold tap target */
   .posname {{ font-size:11.5px; }}
-  .gauge {{ font-size:11px; padding:2px 9px; }}
+  .ranktxt {{ font-size:12px; }}
   #mid {{ padding:12px; }}
   .fbtitle {{ font-size:15.5px; }}
   .fbcard {{ padding:12px; }}
@@ -636,6 +651,7 @@ _JS = r"""
 var picked = {{ L:{{}}, R:{{}} }};   // id -> player, per side
 var strategy = 'favor';              // fair | favor | fleece — how hard the coach tilts value to me
 var collapsed = {{ L:{{}}, R:{{}} }};  // side -> role -> bool; persists per-role section fold state across re-renders
+var collapsedPos = {{ L:{{}}, R:{{}} }};  // side -> position -> bool; per-hitter-position fold state
 var coachFold = false;               // Deal Coach collapsed? persists across re-renders
 var TARGET_NET = {{ fair:0.0, favor:0.30, fleece:0.70 }};   // value edge the coach steers toward
 var STUD_CEIL  = {{ fair:99, favor:1.6, fleece:1.2 }};      // don't suggest offering my pieces above this value
@@ -705,6 +721,27 @@ function pillColor(s) {{
   if (s >= 52) return '{ACCENT}';
   if (s >= 32) return '{YELLOW}';
   return '{RED}';
+}}
+
+// League-rank tag for a section header: at a glance "these are the #2 SP crew" /
+// "these bats are 2nd-worst" is more contextual than the top player's score. Rendered
+// as plain COLORED TEXT (not a pill) so it doesn't read like a player's score badge.
+function ordinal(k) {{
+  var s = ['th','st','nd','rd'], v = k % 100;
+  return k + (s[(v - 20) % 10] || s[v] || s[0]);
+}}
+function rankPhrase(rank, n) {{
+  if (rank <= 1) return 'best of ' + n;
+  if (rank >= n) return 'worst of ' + n;
+  if (rank <= n / 2) return ordinal(rank) + '-best of ' + n;
+  return ordinal(n - rank + 1) + '-worst of ' + n;
+}}
+function rankText(rd, label) {{
+  if (!rd || !rd.n) return '';
+  var rank = rd.rank, n = rd.n, third = Math.max(1, Math.round(n / 3));
+  var col = rank <= third ? '{GREEN}' : (rank >= n - third + 1 ? '{RED}' : '{YELLOW}');
+  return '<span class="ranktxt" style="color:' + col + '" '
+    + 'title="' + label + ': ' + rankPhrase(rank, n) + ' in the league">#' + rank + '</span>';
 }}
 
 function teamOptions(sel, chosen) {{
@@ -793,15 +830,6 @@ function groupHitters(rows) {{
   return {{ groups: groups, util: util }};
 }}
 
-// A small colored strength gauge for a section header = the group's BEST role score,
-// so a FOLDED section still says "worth digging?" at a glance. Empty for empty groups.
-function gaugeHtml(rows) {{
-  if (!rows.length) return '';
-  var best = rows.reduce(function(m, p) {{ return p.score > m ? p.score : m; }}, 0);
-  return '<span class="gauge" style="background:' + pillColor(best) + '" '
-    + 'title="Best role score here">' + best + '</span>';
-}}
-
 // One player row. `gkey` makes the DOM ids unique when a multi-eligible hitter is
 // duplicated across position groups; selection stays in sync because toggle() keys off
 // data-pid across EVERY copy on the side, not a single element id.
@@ -833,35 +861,49 @@ function renderRoster(side) {{
   var pl = DATA.players[tk] || {{ hit:[], sp:[], rp:[] }};
   // Targets are shown on the PARTNER (right) side, judged against MY (left) team's needs.
   var myMeta = DATA.teamsMeta[document.getElementById('selL').value] || {{ needs:[], need_pos:{{}} }};
+  // League-rank tags use the RENDERED side's own team meta (correct for either column).
+  var meta = DATA.teamsMeta[tk] || {{}};
+  var pr_rank = meta.pos_rank || {{}};
   var cs = collapsed[side] || (collapsed[side] = {{}});
+  var cps = collapsedPos[side] || (collapsedPos[side] = {{}});
   var html = '';
   ['hit','sp','rp'].forEach(function(role) {{
     var rows = pl[role] || [];
     if (!rows.length) return;
     var fold = !!cs[role];
-    // Role header is a tap target (fold/unfold). Hitters carry per-position gauges
-    // inside, so only SP/RP get a whole-section gauge on the header itself.
+    // Role header is a tap target (fold/unfold) with a league-rank tag: SP/RP show the
+    // positional-crew rank; Hitters show the AGGREGATE lineup-hitting rank (so a folded
+    // Hitters section says "Xth-best hitters in the league" at a glance).
+    var roleRank = role === 'hit' ? meta.hit_rank
+                 : pr_rank[role === 'sp' ? 'SP' : 'RP'];
     html += '<div class="rolehdr" onclick="toggleSection(\'' + side + '\',\'' + role + '\')">'
       + '<span class="caret">' + (fold ? '&#9654;' : '&#9660;') + '</span>'
       + '<span class="rolelbl">' + ROLE_LABEL[role] + '</span>'
       + '<span class="rolecount">' + rows.length + '</span>'
-      + (role === 'hit' ? '' : gaugeHtml(rows))
+      + rankText(roleRank, ROLE_LABEL[role])
       + '</div>';
     html += '<div class="secbody"' + (fold ? ' style="display:none"' : '') + '>';
     if (role === 'hit') {{
       var g = groupHitters(rows);
+      // Each position sub-group is INDEPENDENTLY collapsible (its own fold state), so a
+      // folded group still shows its league-rank tag — a quick per-slot strength scan.
+      var emit = function(pos, pr, showRank) {{
+        var pfold = !!cps[pos];
+        html += '<div class="possubhdr" onclick="togglePos(\'' + side + '\',\'' + pos + '\')">'
+          + '<span class="caret">' + (pfold ? '&#9654;' : '&#9660;') + '</span>'
+          + '<span class="posname">' + pos + '</span>'
+          + '<span class="poscount">' + pr.length + '</span>'
+          + (showRank ? rankText(pr_rank[pos], pos) : '')
+          + '</div>'
+          + '<div class="possecbody"' + (pfold ? ' style="display:none"' : '') + '>';
+        pr.forEach(function(p) {{ html += playerRowHtml(side, p, pos, myMeta); }});
+        html += '</div>';
+      }};
       POS_GROUPS.forEach(function(pos) {{
         var pr = g.groups[pos];
-        if (!pr.length) return;
-        html += '<div class="possubhdr"><span class="posname">' + pos + '</span>'
-          + '<span class="poscount">' + pr.length + '</span>' + gaugeHtml(pr) + '</div>';
-        pr.forEach(function(p) {{ html += playerRowHtml(side, p, pos, myMeta); }});
+        if (pr.length) emit(pos, pr, true);
       }});
-      if (g.util.length) {{
-        html += '<div class="possubhdr"><span class="posname">UTIL</span>'
-          + '<span class="poscount">' + g.util.length + '</span>' + gaugeHtml(g.util) + '</div>';
-        g.util.forEach(function(p) {{ html += playerRowHtml(side, p, 'util', myMeta); }});
-      }}
+      if (g.util.length) emit('UTIL', g.util, false);   // UTIL has no positional rank
     }} else {{
       rows.forEach(function(p) {{ html += playerRowHtml(side, p, role, myMeta); }});
     }}
@@ -873,6 +915,12 @@ function renderRoster(side) {{
 function toggleSection(side, role) {{
   var cs = collapsed[side] || (collapsed[side] = {{}});
   cs[role] = !cs[role];
+  renderRoster(side);
+}}
+
+function togglePos(side, pos) {{
+  var cps = collapsedPos[side] || (collapsedPos[side] = {{}});
+  cps[pos] = !cps[pos];
   renderRoster(side);
 }}
 
