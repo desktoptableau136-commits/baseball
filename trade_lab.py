@@ -1637,11 +1637,13 @@ function preloadFromHash() {{
   return true;
 }}
 
-// Pocket (phone) opens fully folded — every roster role section AND hitter position
-// sub-group starts collapsed so the page is a short list of headers you expand as you
-// want. Desktop is untouched. Seeded BEFORE the first render; taps still toggle live.
+// The HOSTED build (GitHub Pages / pocket) opens fully folded — every roster role
+// section AND hitter position sub-group starts collapsed so the page is a short list
+// of headers you expand as you want, on ANY device. Keyed off DATA.refreshUrl (baked
+// only into the --refresh-url pocket build), so local desktop dev runs stay expanded.
+// Seeded BEFORE the first render; taps still toggle live.
 function pocketCollapseDefaults() {{
-  if (!(window.matchMedia && window.matchMedia('(max-width:640px)').matches)) return;
+  if (!DATA.refreshUrl) return;
   ['L','R'].forEach(function(side) {{
     var cs = collapsed[side] || (collapsed[side] = {{}});
     ['hit','sp','rp'].forEach(function(role) {{ cs[role] = true; }});
@@ -1649,7 +1651,7 @@ function pocketCollapseDefaults() {{
     POS_GROUPS.concat(['UTIL']).forEach(function(pos) {{ cps[pos] = true; }});
   }});
   var fb = document.getElementById('fitboard');
-  if (fb) fb.open = false;   // the "who to trade with" board also folds on pocket
+  if (fb) fb.open = false;   // the "who to trade with" board also folds
 }}
 
 (function() {{
