@@ -170,8 +170,11 @@ def build_data(snap, my_team):
         # Thin HITTER positions for this team → {pos: my_avg_score} (positional need).
         pos_data = sd.positional_breakdown(pitchers, hitters, tk, best_recent_p, best_recent_h)
         pos_data_by_team[tk] = pos_data   # reused by the Partner Fit board (per-POV engine run)
-        need_pos, surplus_pos = {}, []
+        need_pos, surplus_pos, pos_rank = {}, [], {}
         for p in pos_data:
+            # League rank at this position/role (1 = best crew) → collapsed-section gauge.
+            if p.get("rank") and p.get("n_teams"):
+                pos_rank[p["pos"]] = {"rank": p["rank"], "n": p["n_teams"]}
             if p.get("ptype") != "hit":
                 continue
             nt = p.get("n_teams") or n
@@ -187,6 +190,7 @@ def build_data(snap, my_team):
             "surplus":  surplus_of(tk),
             "need_pos": need_pos,
             "surplus_pos": surplus_pos,
+            "pos_rank": pos_rank,   # {pos: {rank, n}} → collapsed-section league-rank gauge
             "pos_count": sd._team_position_counts(hitters, tk),   # redundancy + depth guard: bodies per position
         }
 
@@ -707,6 +711,26 @@ function pillColor(s) {{
   return '{RED}';
 }}
 
+// League-rank gauge for a collapsed section header: at a glance "this is the #2 SP
+// crew" / "these bats are 2nd-worst" is more contextual than the top player's score.
+function ordinal(k) {{
+  var s = ['th','st','nd','rd'], v = k % 100;
+  return k + (s[(v - 20) % 10] || s[v] || s[0]);
+}}
+function rankPhrase(rank, n) {{
+  if (rank <= 1) return 'best of ' + n;
+  if (rank >= n) return 'worst of ' + n;
+  if (rank <= n / 2) return ordinal(rank) + '-best of ' + n;
+  return ordinal(n - rank + 1) + '-worst of ' + n;
+}}
+function rankBadge(rd, label) {{
+  if (!rd || !rd.n) return '';
+  var rank = rd.rank, n = rd.n, third = Math.max(1, Math.round(n / 3));
+  var col = rank <= third ? '{GREEN}' : (rank >= n - third + 1 ? '{RED}' : '{YELLOW}');
+  return '<span class="gauge" style="background:' + col + '" '
+    + 'title="' + label + ': ' + rankPhrase(rank, n) + ' in the league">#' + rank + '</span>';
+}}
+
 function teamOptions(sel, chosen) {{
   sel.innerHTML = '';
   DATA.teamKeys.forEach(function(tk) {{
@@ -833,6 +857,8 @@ function renderRoster(side) {{
   var pl = DATA.players[tk] || {{ hit:[], sp:[], rp:[] }};
   // Targets are shown on the PARTNER (right) side, judged against MY (left) team's needs.
   var myMeta = DATA.teamsMeta[document.getElementById('selL').value] || {{ needs:[], need_pos:{{}} }};
+  // League-rank gauges use the RENDERED side's own team meta (correct for either column).
+  var pr_rank = (DATA.teamsMeta[tk] || {{}}).pos_rank || {{}};
   var cs = collapsed[side] || (collapsed[side] = {{}});
   var html = '';
   ['hit','sp','rp'].forEach(function(role) {{
@@ -845,7 +871,7 @@ function renderRoster(side) {{
       + '<span class="caret">' + (fold ? '&#9654;' : '&#9660;') + '</span>'
       + '<span class="rolelbl">' + ROLE_LABEL[role] + '</span>'
       + '<span class="rolecount">' + rows.length + '</span>'
-      + (role === 'hit' ? '' : gaugeHtml(rows))
+      + (role === 'hit' ? '' : (rankBadge(pr_rank[role === 'sp' ? 'SP' : 'RP'], ROLE_LABEL[role]) || gaugeHtml(rows)))
       + '</div>';
     html += '<div class="secbody"' + (fold ? ' style="display:none"' : '') + '>';
     if (role === 'hit') {{
@@ -854,7 +880,8 @@ function renderRoster(side) {{
         var pr = g.groups[pos];
         if (!pr.length) return;
         html += '<div class="possubhdr"><span class="posname">' + pos + '</span>'
-          + '<span class="poscount">' + pr.length + '</span>' + gaugeHtml(pr) + '</div>';
+          + '<span class="poscount">' + pr.length + '</span>'
+          + (rankBadge(pr_rank[pos], pos) || gaugeHtml(pr)) + '</div>';
         pr.forEach(function(p) {{ html += playerRowHtml(side, p, pos, myMeta); }});
       }});
       if (g.util.length) {{
