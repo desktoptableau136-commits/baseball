@@ -1637,11 +1637,27 @@ function preloadFromHash() {{
   return true;
 }}
 
+// Pocket (phone) opens fully folded — every roster role section AND hitter position
+// sub-group starts collapsed so the page is a short list of headers you expand as you
+// want. Desktop is untouched. Seeded BEFORE the first render; taps still toggle live.
+function pocketCollapseDefaults() {{
+  if (!(window.matchMedia && window.matchMedia('(max-width:640px)').matches)) return;
+  ['L','R'].forEach(function(side) {{
+    var cs = collapsed[side] || (collapsed[side] = {{}});
+    ['hit','sp','rp'].forEach(function(role) {{ cs[role] = true; }});
+    var cps = collapsedPos[side] || (collapsedPos[side] = {{}});
+    POS_GROUPS.concat(['UTIL']).forEach(function(pos) {{ cps[pos] = true; }});
+  }});
+  var fb = document.getElementById('fitboard');
+  if (fb) fb.open = false;   // the "who to trade with" board also folds on pocket
+}}
+
 (function() {{
   var keys = DATA.teamKeys;
   var rDefault = keys.find(function(k){{ return k !== DATA.myTeam; }}) || keys[0];
   teamOptions(document.getElementById('selL'), DATA.myTeam);
   teamOptions(document.getElementById('selR'), rDefault);
+  pocketCollapseDefaults();
   initSide('L'); initSide('R');
   if (!preloadFromHash()) {{ renderRoster('L'); renderRoster('R'); recompute(); }}
   renderFitBoard();
