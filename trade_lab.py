@@ -494,7 +494,15 @@ body {{ margin:0; background:{BG}; color:{TEXT}; font-family:-apple-system,Segoe
 .sidetag {{ font-size:10px; font-weight:800; letter-spacing:.8px; color:{MUTED}; white-space:nowrap; }}
 .teamsel {{ flex:1; background:{BG}; color:{TEXT}; border:1px solid {BORDER}; border-radius:6px; padding:6px 8px; font-size:13px; font-weight:700; }}
 .roster {{ max-height:74vh; overflow-y:auto; padding:8px; }}
-.rolehdr {{ font-size:10px; font-weight:800; letter-spacing:.8px; color:{MUTED}; text-transform:uppercase; margin:10px 4px 4px; border-bottom:1px solid {BORDER}; padding-bottom:3px; }}
+.rolehdr {{ display:flex; align-items:center; gap:6px; font-size:10px; font-weight:800; letter-spacing:.8px; color:{MUTED}; text-transform:uppercase; margin:10px 4px 4px; border-bottom:1px solid {BORDER}; padding-bottom:3px; cursor:pointer; user-select:none; }}
+.rolehdr:hover {{ color:{TEXT}; }}
+.caret {{ font-size:9px; color:{MUTED}; width:10px; flex:0 0 auto; }}
+.rolelbl {{ flex:0 0 auto; }}
+.rolecount {{ font-size:9px; font-weight:700; color:{MUTED}; background:{SURFACE2}; border-radius:8px; padding:0 6px; }}
+.possubhdr {{ display:flex; align-items:center; gap:6px; margin:8px 4px 3px 10px; }}
+.posname {{ font-size:10px; font-weight:800; letter-spacing:.5px; color:{TEXT}; }}
+.poscount {{ font-size:9px; font-weight:700; color:{MUTED}; }}
+.gauge {{ margin-left:auto; font-size:9.5px; font-weight:800; color:#0b1220; border-radius:8px; padding:1px 7px; }}
 .prow {{ padding:6px 8px; border-radius:7px; cursor:pointer; border:1px solid transparent; margin-bottom:2px; }}
 .prow:hover {{ background:{SURFACE2}; }}
 .prow.sel {{ background:rgba(59,130,246,.14); border-color:{ACCENT}; }}
@@ -610,6 +618,10 @@ body {{ margin:0; background:{BG}; color:{TEXT}; font-family:-apple-system,Segoe
   .pill {{ font-size:13px; padding:4px 11px; }}
   .pstat {{ font-size:12px; }}
   .poschip {{ font-size:10px; padding:2px 5px; }}
+  .rolehdr {{ padding:9px 4px 5px; font-size:11.5px; }}   /* bigger fold tap target */
+  .possubhdr {{ margin:9px 6px 4px 8px; }}
+  .posname {{ font-size:11.5px; }}
+  .gauge {{ font-size:11px; padding:2px 9px; }}
   #mid {{ padding:12px; }}
   .fbtitle {{ font-size:15.5px; }}
   .fbcard {{ padding:12px; }}
@@ -621,6 +633,7 @@ body {{ margin:0; background:{BG}; color:{TEXT}; font-family:-apple-system,Segoe
 _JS = r"""
 var picked = {{ L:{{}}, R:{{}} }};   // id -> player, per side
 var strategy = 'favor';              // fair | favor | fleece — how hard the coach tilts value to me
+var collapsed = {{ L:{{}}, R:{{}} }};  // side -> role -> bool; persists per-role section fold state across re-renders
 var TARGET_NET = {{ fair:0.0, favor:0.30, fleece:0.70 }};   // value edge the coach steers toward
 var STUD_CEIL  = {{ fair:99, favor:1.6, fleece:1.2 }};      // don't suggest offering my pieces above this value
 
@@ -702,6 +715,7 @@ function teamOptions(sel, chosen) {{
 }}
 
 var ROLE_LABEL = {{ hit:'Hitters', sp:'Starting Pitchers', rp:'Relief Pitchers' }};
+var POS_GROUPS = ['C','1B','2B','3B','SS','OF','DH'];   // hitters group under EACH eligible slot (mirrors _POS_ORDER)
 
 // Redundancy guard (mirrors send_digest._non_redundant_get_pos): a position is "stacked"
 // when acquiring these players leaves me more eligible bodies than startable slots + one
@@ -762,38 +776,101 @@ function targetReasons(p, myMeta, poss) {{
   return out;
 }}
 
+// Bucket hitters under EVERY eligible position (a 2B/SS/OF bat appears in all three)
+// so each group reads as "the team's strength at that slot". Rows keep their incoming
+// score-desc order; a bat with no recognized slot lands in UTIL so nobody is dropped.
+function groupHitters(rows) {{
+  var groups = {{}}; POS_GROUPS.forEach(function(p) {{ groups[p] = []; }});
+  var util = [];
+  rows.forEach(function(p) {{
+    var toks = (p.posTokens || []).filter(function(t) {{ return POS_GROUPS.indexOf(t) >= 0; }});
+    if (!toks.length) {{ util.push(p); return; }}
+    toks.forEach(function(t) {{ groups[t].push(p); }});
+  }});
+  return {{ groups: groups, util: util }};
+}}
+
+// A small colored strength gauge for a section header = the group's BEST role score,
+// so a FOLDED section still says "worth digging?" at a glance. Empty for empty groups.
+function gaugeHtml(rows) {{
+  if (!rows.length) return '';
+  var best = rows.reduce(function(m, p) {{ return p.score > m ? p.score : m; }}, 0);
+  return '<span class="gauge" style="background:' + pillColor(best) + '" '
+    + 'title="Best role score here">' + best + '</span>';
+}}
+
+// One player row. `gkey` makes the DOM ids unique when a multi-eligible hitter is
+// duplicated across position groups; selection stays in sync because toggle() keys off
+// data-pid across EVERY copy on the side, not a single element id.
+function playerRowHtml(side, p, gkey, myMeta) {{
+  var on = picked[side][p.id] ? ' sel' : '';
+  var pos = (p.posTokens || []).map(function(t) {{ return '<span class="poschip">' + t + '</span>'; }}).join(' ');
+  if (pos) pos = ' ' + pos;
+  var tgt = '', tgtCls = '';
+  if (side === 'R') {{
+    var tr = targetReasons(p, myMeta);
+    if (tr.length) {{ tgt = ' <span class="tgt" title="Target &mdash; ' + tr.join('; ') + '">&#127919;</span>'; tgtCls = ' target'; }}
+  }}
+  var bid = 'bd-' + side + '-' + gkey + '-' + p.id;
+  return '<div class="prow' + on + tgtCls + '" id="row-' + side + '-' + gkey + '-' + p.id + '" '
+    + 'data-pid="' + p.id + '" data-side="' + side + '">'
+    + '<div class="prow-top" onclick="toggle(\'' + side + '\',\'' + p.id + '\')">'
+    + p.logo + '<span class="pname">' + p.name + '</span>' + pos + p.badges + tgt
+    + '<span class="pill" style="background:' + pillColor(p.score) + '" '
+    + 'onclick="event.stopPropagation();openBd(\'' + bid + '\')">' + p.score + '</span>'
+    + '</div>'
+    + '<div class="pstat">' + p.stat + '</div>'
+    + '<div class="bd" id="' + bid + '">' + (p.breakdown || 'No breakdown.') + '</div>'
+    + '</div>';
+}}
+
 function renderRoster(side) {{
   var box = document.getElementById(side === 'L' ? 'rosterL' : 'rosterR');
   var tk = document.getElementById(side === 'L' ? 'selL' : 'selR').value;
   var pl = DATA.players[tk] || {{ hit:[], sp:[], rp:[] }};
   // Targets are shown on the PARTNER (right) side, judged against MY (left) team's needs.
   var myMeta = DATA.teamsMeta[document.getElementById('selL').value] || {{ needs:[], need_pos:{{}} }};
+  var cs = collapsed[side] || (collapsed[side] = {{}});
   var html = '';
   ['hit','sp','rp'].forEach(function(role) {{
     var rows = pl[role] || [];
     if (!rows.length) return;
-    html += '<div class="rolehdr">' + ROLE_LABEL[role] + '</div>';
-    rows.forEach(function(p) {{
-      var on = picked[side][p.id] ? ' sel' : '';
-      var pos = (p.posTokens || []).map(function(t) {{ return '<span class="poschip">' + t + '</span>'; }}).join(' ');
-      if (pos) pos = ' ' + pos;
-      var tgt = '', tgtCls = '';
-      if (side === 'R') {{
-        var tr = targetReasons(p, myMeta);
-        if (tr.length) {{ tgt = ' <span class="tgt" title="Target &mdash; ' + tr.join('; ') + '">&#127919;</span>'; tgtCls = ' target'; }}
+    var fold = !!cs[role];
+    // Role header is a tap target (fold/unfold). Hitters carry per-position gauges
+    // inside, so only SP/RP get a whole-section gauge on the header itself.
+    html += '<div class="rolehdr" onclick="toggleSection(\'' + side + '\',\'' + role + '\')">'
+      + '<span class="caret">' + (fold ? '&#9654;' : '&#9660;') + '</span>'
+      + '<span class="rolelbl">' + ROLE_LABEL[role] + '</span>'
+      + '<span class="rolecount">' + rows.length + '</span>'
+      + (role === 'hit' ? '' : gaugeHtml(rows))
+      + '</div>';
+    html += '<div class="secbody"' + (fold ? ' style="display:none"' : '') + '>';
+    if (role === 'hit') {{
+      var g = groupHitters(rows);
+      POS_GROUPS.forEach(function(pos) {{
+        var pr = g.groups[pos];
+        if (!pr.length) return;
+        html += '<div class="possubhdr"><span class="posname">' + pos + '</span>'
+          + '<span class="poscount">' + pr.length + '</span>' + gaugeHtml(pr) + '</div>';
+        pr.forEach(function(p) {{ html += playerRowHtml(side, p, pos, myMeta); }});
+      }});
+      if (g.util.length) {{
+        html += '<div class="possubhdr"><span class="posname">UTIL</span>'
+          + '<span class="poscount">' + g.util.length + '</span>' + gaugeHtml(g.util) + '</div>';
+        g.util.forEach(function(p) {{ html += playerRowHtml(side, p, 'util', myMeta); }});
       }}
-      html += '<div class="prow' + on + tgtCls + '" id="row-' + side + '-' + p.id + '">'
-        + '<div class="prow-top" onclick="toggle(\'' + side + '\',\'' + p.id + '\')">'
-        + p.logo + '<span class="pname">' + p.name + '</span>' + pos + p.badges + tgt
-        + '<span class="pill" style="background:' + pillColor(p.score) + '" '
-        + 'onclick="event.stopPropagation();openBd(\'' + side + '\',\'' + p.id + '\')">' + p.score + '</span>'
-        + '</div>'
-        + '<div class="pstat">' + p.stat + '</div>'
-        + '<div class="bd" id="bd-' + side + '-' + p.id + '">' + (p.breakdown || 'No breakdown.') + '</div>'
-        + '</div>';
-    }});
+    }} else {{
+      rows.forEach(function(p) {{ html += playerRowHtml(side, p, role, myMeta); }});
+    }}
+    html += '</div>';
   }});
   box.innerHTML = html || '<div class="empty">No rostered players.</div>';
+}}
+
+function toggleSection(side, role) {{
+  var cs = collapsed[side] || (collapsed[side] = {{}});
+  cs[role] = !cs[role];
+  renderRoster(side);
 }}
 
 function findPlayer(tk, id) {{
@@ -807,13 +884,15 @@ function toggle(side, id) {{
   var tk = document.getElementById(side === 'L' ? 'selL' : 'selR').value;
   if (picked[side][id]) delete picked[side][id];
   else picked[side][id] = findPlayer(tk, id);
-  var row = document.getElementById('row-' + side + '-' + id);
-  if (row) row.classList.toggle('sel', !!picked[side][id]);
+  var on = !!picked[side][id];
+  // A multi-eligible hitter has one row per position group — keep every copy in sync.
+  var rows = document.querySelectorAll('.prow[data-side="' + side + '"][data-pid="' + id + '"]');
+  for (var i = 0; i < rows.length; i++) rows[i].classList.toggle('sel', on);
   recompute();
 }}
 
-function openBd(side, id) {{
-  var bd = document.getElementById('bd-' + side + '-' + id);
+function openBd(bid) {{
+  var bd = document.getElementById(bid);
   if (bd) bd.classList.toggle('open');
 }}
 
