@@ -15,9 +15,18 @@ Repo → **Settings → Pages → Build and deployment → Source = GitHub Actio
 GitHub → **Settings (your account) → Developer settings → Personal access tokens →
 Fine-grained tokens → Generate new token**:
 - **Repository access:** *Only select repositories* → `baseball`.
-- **Permissions → Repository permissions → Actions: Read and write.**
+- **Permissions → Repository permissions → Contents: Read and write.**
+  ⚠️ This must be **Contents**, not Actions — the `repository_dispatch` REST endpoint the
+  Worker calls is gated on the *Contents* write permission. Granting only *Actions* returns
+  `403 "Resource not accessible by personal access token"` and the Refresh button fails.
 - (Leave everything else at *No access*.) The token's only power is triggering this workflow.
 - Copy the token (starts with `github_pat_...`).
+
+> **Already set up with the wrong permission?** You don't need a new token or a Worker
+> redeploy — just edit the existing one: GitHub → **Settings → Developer settings →
+> Fine-grained tokens → (your token) → Edit → Repository permissions → set Contents to
+> *Read and write* → Save**. The token string stays the same, so the Worker secret is
+> unchanged.
 
 ### 3. Deploy the Worker
 Install Cloudflare's CLI once (`npm i -g wrangler`) or use `npx`:
