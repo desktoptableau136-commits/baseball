@@ -546,7 +546,7 @@ body {{ margin:0; background:{BG}; color:{TEXT}; font-family:-apple-system,Segoe
 .pstat {{ color:{MUTED}; font-size:11px; margin-top:1px; }}
 .bd {{ display:none; margin-top:5px; padding:7px 8px; background:{SURFACE2}; border:1px solid {BORDER}; border-radius:6px; font-size:11.5px; line-height:1.5; color:{TEXT}; }}
 .bd.open {{ display:block; }}
-#mid {{ position:sticky; top:12px; background:{SURFACE}; border:1px solid {BORDER}; border-radius:10px; padding:14px; }}
+#mid {{ position:sticky; top:12px; min-width:0; background:{SURFACE}; border:1px solid {BORDER}; border-radius:10px; padding:14px; }}
 #verdict {{ text-align:center; margin-bottom:10px; }}
 .vpill {{ display:inline-block; font-weight:800; font-size:14px; padding:4px 14px; border-radius:12px; color:#0b1220; }}
 .vwhy {{ color:{MUTED}; font-size:12px; margin-top:6px; }}
@@ -557,12 +557,12 @@ body {{ margin:0; background:{BG}; color:{TEXT}; font-family:-apple-system,Segoe
 .give-h {{ color:{RED}; }}
 .get-h {{ color:{GREEN}; }}
 .llist {{ min-height:40px; }}
-.litem {{ font-size:12px; padding:3px 0; display:flex; align-items:center; gap:5px; }}
+.litem {{ font-size:12px; padding:3px 0; display:flex; align-items:center; gap:5px; min-width:0; }}
 .litem .x {{ color:{MUTED}; cursor:pointer; font-weight:800; }}
 .totrow {{ display:flex; justify-content:space-between; font-size:11px; color:{MUTED}; margin-top:8px; padding-top:8px; border-top:1px solid {BORDER}; }}
 /* calm two-rail ledger */
 .rail {{ min-width:0; }}
-.litem .lname {{ cursor:pointer; }}
+.litem .lname {{ cursor:pointer; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }}
 .litem .lv {{ margin-left:auto; color:{MUTED}; font-weight:700; font-variant-numeric:tabular-nums; cursor:pointer; }}
 .litem .arb {{ margin-left:4px; }}
 .litem .lv + .x {{ margin-left:6px; }}
