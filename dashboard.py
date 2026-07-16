@@ -880,6 +880,7 @@ def render_trade_radar(ctx):
             f'<div style="font-size:9.5px;color:{accent};font-weight:600;margin-top:1px;">{val}</div>'
             f'<div style="font-size:9px;color:{acc_color};font-weight:600;">{accept}</div>'
             + (f'<div style="font-size:9px;color:{MUTED};">{thesis}</div>' if thesis else "")
+            + (f'<div style="font-size:8.5px;color:{ORANGE};">{t["thin_note"]}</div>' if t.get("thin_note") else "")
             + f'</div>'
             f'<div style="flex:1 1 0;min-width:0;">'
             f'<div style="{_colhdr}color:{RED};">Give</div>{give}</div>'
