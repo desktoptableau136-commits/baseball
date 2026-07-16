@@ -528,6 +528,7 @@ body {{ margin:0; background:{BG}; color:{TEXT}; font-family:-apple-system,Segoe
 .valgrid .vgpos {{ color:{GREEN}; font-weight:700; }}
 .valgrid .vgneg {{ color:{RED}; font-weight:700; }}
 .valgrid .vgeven {{ color:{TEXT}; font-weight:700; }}
+.dealsum {{ color:{TEXT}; font-size:12px; font-style:italic; margin-top:8px; padding-top:8px; border-top:1px solid {BORDER}; }}
 #reads {{ margin-top:10px; font-size:12px; line-height:1.6; }}
 .chip {{ display:inline-block; font-size:10px; font-weight:700; padding:1px 6px; border-radius:8px; margin:1px 2px; border:1px solid {BORDER}; color:{MUTED}; }}
 .chip.need {{ background:rgba(34,197,94,.16); border-color:{GREEN}; color:{GREEN}; }}
@@ -1132,6 +1133,24 @@ function recompute() {{
   // still be win-win (both team rows positive).
   function _sg(v) {{ return (v>=0?'+':'') + v.toFixed(2); }}
   function _ncls(v) {{ return v > 0.1 ? 'vgpos' : (v < -0.1 ? 'vgneg' : 'vgeven'); }}
+  // Plain-English takeaway under the block: base clause = raw-value tilt (netVal, roster-blind),
+  // tail = how it lands once each side re-prices by needs (netMe / netThem). Same +/-0.1 band as _ncls.
+  function dealSummary(netVal, netMe, netThem, addressesNeed) {{
+    var B = 0.1;
+    var base = netVal >  0.5 ? 'You win the raw value'
+             : netVal >  B   ? 'A small raw-value edge to you'
+             : netVal < -0.5 ? 'You pay up on paper'
+             : netVal < -B   ? 'A slight overpay on paper'
+             :                 'Even on paper';
+    var mine = netMe > B, theirs = netThem > B;
+    var tail;
+    if (mine && theirs)       tail = "but it fills both sides' needs &mdash; a win-win";
+    else if (mine && !theirs) tail = 'and it fills your needs (a tougher sell for them)';
+    else if (!mine && theirs) tail = 'but it mostly helps them &mdash; ask for more';
+    else                      tail = addressesNeed ? 'even on needs for both sides'
+                                                   : 'and neither side gains much';
+    return base + ', ' + tail + '.';
+  }}
   var myGive = sumEff(giveArr, myMeta), myGet = sumEff(getArr, myMeta);
   var thGive = sumEff(giveArr, partnerMeta), thGet = sumEff(getArr, partnerMeta);
   function _vrow(lbl, g, gt, net, hint) {{
@@ -1146,6 +1165,9 @@ function recompute() {{
         + _vrow('My value', myGive, myGet, netMe, 'Re-valued by your roster needs')
         + _vrow('Their value', thGive, thGet, netThem, 'Re-valued by ' + (partnerMeta.name||'their') + ' needs (Net = give &minus; get, their surplus)')
       + '</div>'
+    + ((lKeys.length || rKeys.length)
+         ? '<div class="dealsum">' + dealSummary(netVal, netMe, netThem, addressesNeed) + '</div>'
+         : '')
     + '<div class="readline"><span class="readlbl">You gain:</span> ' + gainChips + (posChips?' &nbsp; '+posChips:'') + '</div>'
     + '<div class="readline"><span class="readlbl">You lose:</span> ' + loseChips + '</div>'
     + accLine('Would they do it?', pfTier, pfReason)
