@@ -170,7 +170,7 @@ def build_data(snap, my_team):
         # Thin HITTER positions for this team → {pos: my_avg_score} (positional need).
         pos_data = sd.positional_breakdown(pitchers, hitters, tk, best_recent_p, best_recent_h)
         pos_data_by_team[tk] = pos_data   # reused by the Partner Fit board (per-POV engine run)
-        need_pos = {}
+        need_pos, surplus_pos = {}, []
         for p in pos_data:
             if p.get("ptype") != "hit":
                 continue
@@ -178,12 +178,15 @@ def build_data(snap, my_team):
             pt = max(1, round(nt / 3.0))
             if (p.get("rank") or nt) >= nt - pt + 1:
                 need_pos[p["pos"]] = round(p.get("my_avg") or 0, 1)
+            elif (p.get("rank") or nt) <= pt:
+                surplus_pos.append(p["pos"])            # deep hitter positions (demand-side discount)
         teams_meta[tk] = {
             "name":     _disp(tk),
             "logo":     sd.fantasy_logo(team_logos.get(tk, ""), 24, tk),
             "needs":    needs_of(tk),
             "surplus":  surplus_of(tk),
             "need_pos": need_pos,
+            "surplus_pos": surplus_pos,
             "pos_count": sd._my_position_counts(hitters, tk),   # redundancy guard: bodies per position
         }
 
@@ -224,6 +227,14 @@ def build_data(snap, my_team):
         "lowerBetter": sorted(sd._LOWER_BETTER),
         "posStarters": {p: sd.POS_STARTERS.get(p, 1) for p in ("C","1B","2B","3B","SS","OF")},
         "posSlack":  sd._POS_DEPTH_SLACK,   # redundancy guard: bench/flex bodies allowed beyond starters
+        # Acceptance-model tuning baked from send_digest so the Lab JS can't drift from the digest:
+        # graduated star reluctance + aggressive realistic band + demand-side need multiplier.
+        "tune": {
+            "starFloor": sd._STAR_RELUCT_FLOOR, "starSlope": sd._STAR_RELUCT_SLOPE,
+            "starCap": sd._STAR_RELUCT_CAP, "realisticMax": sd._TRADE_REALISTIC_MAX,
+            "needCat": sd._NEED_MULT_CAT, "needPos": sd._NEED_MULT_POS,
+            "needSurplus": sd._NEED_MULT_SURPLUS, "needClamp": list(sd._NEED_MULT_CLAMP),
+        },
         "refreshed": snap.get("refreshed_at", ""),
     }
 
@@ -507,6 +518,14 @@ body {{ margin:0; background:{BG}; color:{TEXT}; font-family:-apple-system,Segoe
 .litem {{ font-size:12px; padding:3px 0; display:flex; align-items:center; gap:5px; }}
 .litem .x {{ color:{MUTED}; cursor:pointer; font-weight:800; }}
 .totrow {{ display:flex; justify-content:space-between; font-size:11px; color:{MUTED}; margin-top:8px; padding-top:8px; border-top:1px solid {BORDER}; }}
+.valgrid {{ display:grid; grid-template-columns:auto 1fr 1fr 1fr; gap:2px 10px; font-size:11px; margin-top:8px; padding-top:8px; border-top:1px solid {BORDER}; align-items:center; }}
+.valgrid .vgh {{ color:{MUTED}; font-weight:700; text-align:right; font-size:10px; text-transform:uppercase; letter-spacing:.03em; }}
+.valgrid .vgh:first-child {{ text-align:left; }}
+.valgrid .vgl {{ color:{TEXT}; font-weight:700; }}
+.valgrid .vgc {{ text-align:right; color:{MUTED}; font-variant-numeric:tabular-nums; }}
+.valgrid .vgpos {{ color:{GREEN}; font-weight:700; }}
+.valgrid .vgneg {{ color:{RED}; font-weight:700; }}
+.valgrid .vgeven {{ color:{TEXT}; font-weight:700; }}
 #reads {{ margin-top:10px; font-size:12px; line-height:1.6; }}
 .chip {{ display:inline-block; font-size:10px; font-weight:700; padding:1px 6px; border-radius:8px; margin:1px 2px; border:1px solid {BORDER}; color:{MUTED}; }}
 .chip.need {{ background:rgba(34,197,94,.16); border-color:{GREEN}; color:{GREEN}; }}
@@ -871,35 +890,63 @@ function counterAddon(partnerTk, myMeta, gap) {{
   return cands[0];
 }}
 
-// JS mirror of send_digest._deal_star_reach: a market-perception (NOT value) check —
-// a rival won't ship their crown-jewel star at par. True when the single best player in
-// the deal by SCORE is one I'd ACQUIRE, he's a genuine star (bat or starter, score >= 80),
-// he outranks anything I send back, and I'm not clearly paying up (net > -0.25). Relievers
-// excluded (punt-saves arms move at par). Keeps tval a pure value currency; the star
-// premium lives only in the acceptance ("Would they do it?") read, matching the Trade Radar.
-function dealStarReach(getArr, giveArr, netVal) {{
-  var STAR = 80, PAYUP = 0.25;
-  function starRole(p) {{ return p.role === 'hit' || p.role === 'sp'; }}  // relievers not cross-role comparable
-  function isStar(p) {{ return p.score >= STAR && starRole(p); }}
-  var getStar = 0, giveTop = 0;
-  getArr.forEach(function(p) {{ if (isStar(p) && p.score > getStar) getStar = p.score; }});
-  giveArr.forEach(function(p) {{ if (starRole(p) && p.score > giveTop) giveTop = p.score; }});
-  return getStar >= STAR && getStar > giveTop && netVal > -PAYUP;
+function starRole(p) {{ return p.role === 'hit' || p.role === 'sp'; }}  // relievers not cross-role comparable
+
+// JS mirror of send_digest._star_reluctance: graduated endowment premium (in tval) by role
+// SCORE — 0 below the floor, rising per point, capped. Better player => bigger overpay to pry.
+function starReluctance(score) {{
+  var T = DATA.tune;
+  return Math.max(0, Math.min(T.starCap, (score - T.starFloor) * T.starSlope));
 }}
 
-// MY-side mirror of dealStarReach (send_digest._deal_star_surrender): would *I* balk because
-// the deal pries my crown-jewel star at par? True when the best player by SCORE is one I GIVE,
-// he's a star (bat/starter, score >= 80), he outranks anything I acquire, and I'm not clearly
-// WINNING value (net < 0.25). Same endowment/star bias, my side — drives "Would you do it?".
-function dealStarSurrender(getArr, giveArr, netVal) {{
-  var STAR = 80, PAYUP = 0.25;
-  function starRole(p) {{ return p.role === 'hit' || p.role === 'sp'; }}  // relievers not cross-role comparable
-  function isStar(p) {{ return p.score >= STAR && starRole(p); }}
-  var giveStar = 0, getTop = 0;
-  giveArr.forEach(function(p) {{ if (isStar(p) && p.score > giveStar) giveStar = p.score; }});
-  getArr.forEach(function(p) {{ if (starRole(p) && p.score > getTop) getTop = p.score; }});
-  return giveStar >= STAR && giveStar > getTop && netVal < PAYUP;
+// JS mirror of send_digest._deal_star_reach: would a rival balk at parting with a prized
+// player without a real overpay? Required overpay = premium(their best star-role acquire)
+// minus premium(my best star-role give) (a star-for-star swap needs little). Reach (they
+// balk) when that's positive AND I'm not paying up by at least it (net > -req). Relievers
+// excluded both sides. Acceptance-layer only — drives the "Would they do it?" read.
+function dealStarReach(getArr, giveArr, netVal) {{
+  var getPrem = 0, givePrem = 0;
+  getArr.forEach(function(p) {{ if (starRole(p)) getPrem = Math.max(getPrem, starReluctance(p.score)); }});
+  giveArr.forEach(function(p) {{ if (starRole(p)) givePrem = Math.max(givePrem, starReluctance(p.score)); }});
+  var req = Math.max(0, getPrem - givePrem);
+  return req > 0 && netVal > -req;
 }}
+
+// MY-side mirror (send_digest._deal_star_surrender): would *I* balk at parting with a prized
+// player without a real value win? Required premium = premium(my best star-role give) minus
+// premium(my best star-role acquire). I hold out when that's positive AND I'm not winning by
+// at least it (net < req). Same graduated curve, my side — drives "Would you do it?".
+function dealStarSurrender(getArr, giveArr, netVal) {{
+  var givePrem = 0, getPrem = 0;
+  giveArr.forEach(function(p) {{ if (starRole(p)) givePrem = Math.max(givePrem, starReluctance(p.score)); }});
+  getArr.forEach(function(p) {{ if (starRole(p)) getPrem = Math.max(getPrem, starReluctance(p.score)); }});
+  var req = Math.max(0, givePrem - getPrem);
+  return req > 0 && netVal < req;
+}}
+
+// JS mirror of send_digest._need_mult: demand-side team-need multiplier. A player is worth
+// MORE to a team that needs his category/position, LESS if he only helps where they're deep.
+// effective_value = tval * needMult. Acceptance-read layer only (never touches tval). This is
+// what makes the same catcher worth more to a team that needs the slot than one already set.
+function needMult(p, meta) {{
+  var T = DATA.tune, cats = p.tcats || [], needs = meta.needs || [], surplus = meta.surplus || [];
+  var m = 1.0;
+  var inNeed = cats.filter(function(c) {{ return needs.indexOf(c) >= 0; }}).length;
+  m += T.needCat * inNeed;
+  var inSurplus = cats.some(function(c) {{ return surplus.indexOf(c) >= 0; }});
+  if (cats.length && inNeed === 0 && inSurplus) m -= T.needSurplus;
+  if (p.role === 'hit') {{
+    var groups = p.tgroups || [], needPos = meta.need_pos || {{}}, surplusPos = meta.surplus_pos || [];
+    if (groups.some(function(g) {{ return g in needPos; }})) {{
+      m += T.needPos;
+    }} else if (surplusPos.length && groups.length &&
+               groups.every(function(g) {{ return surplusPos.indexOf(g) >= 0; }})) {{
+      m -= T.needSurplus;
+    }}
+  }}
+  return Math.max(T.needClamp[0], Math.min(T.needClamp[1], m));
+}}
+function sumEff(arr, meta) {{ var s = 0; arr.forEach(function(p) {{ s += (p.tval || 0) * needMult(p, meta); }}); return s; }}
 
 function recompute() {{
   var L = picked.L, R = picked.R;                       // L = give, R = get
@@ -940,6 +987,13 @@ function recompute() {{
   // filling a need (unless the deal also sheds a body there). Package-aware: give=L, get=R.
   var giveArr = lKeys.map(function(k){{ return L[k]; }});
   var getArr  = rKeys.map(function(k){{ return R[k]; }});
+
+  // Demand-side team-modified value (both POVs): each side re-values the same players by ITS
+  // own needs. netMe drives MY verdict; netThem drives the "Would they do it?" read. Base
+  // (netVal) stays the universal yardstick, shown alongside. Mirrors send_digest net_me/net_them.
+  var netMe   = sumEff(getArr, myMeta) - sumEff(giveArr, myMeta);        // + = I win by MY needs
+  var netThem = sumEff(giveArr, partnerMeta) - sumEff(getArr, partnerMeta);  // + = they win by THEIRS
+
   var posFilled = {{}};
   rKeys.forEach(function(k){{
     var p = R[k];
@@ -958,15 +1012,17 @@ function recompute() {{
   rKeys.forEach(function(k){{ timing += (R[k].buy?1:0) - (R[k].sell?1:0); }});
   var trap = timing < 0;
 
-  // Verdict — the exact _pending_verdict thresholds (from my/left perspective).
+  // Verdict — the exact _pending_verdict thresholds, now on netMe (my demand-side value) so it's
+  // roster-aware: a need-filler is worth accepting even at slight base-value cost. The counter
+  // gap stays on BASE value (what actually evens the deal).
   var label, color, why;
-  if (netVal >= 0.1 && !trap) {{
+  if (netMe >= 0.1 && !trap) {{
     label='ACCEPT'; color='{GREEN}'; why='you win the value' + (addressesNeed?' and it fills a need':'');
-  }} else if (addressesNeed && netVal >= -0.1 && !trap) {{
+  }} else if (addressesNeed && netMe >= -0.1 && !trap) {{
     label='ACCEPT'; color='{GREEN}'; why='roughly even value and it fills a real need';
   }} else if (addressesNeed) {{
     label='COUNTER'; color='{YELLOW}';
-    if (netVal < -0.1) {{
+    if (netMe < -0.1) {{
       var add = counterAddon(partnerTk, myMeta, -netVal);
       if (add) {{
         var rz = add._cr && add._cr.length ? ' (' + add._cr.join(', ') + ')' : '';
@@ -978,7 +1034,7 @@ function recompute() {{
     }} else {{
       why = 'right direction but the timing is a trap &mdash; ask for more';
     }}
-  }} else if (netVal >= 0.1) {{
+  }} else if (netMe >= 0.1) {{
     label='ACCEPT'; color='{GREEN}'; why='you win the value';
   }} else {{
     label='DECLINE'; color='{RED}'; why='no need addressed and you don\'t gain value';
@@ -997,16 +1053,25 @@ function recompute() {{
   // Value tilt phrase (Trade Radar wording, +/-0.1).
   var tilt = netVal > 0.1 ? 'you win the value' : (netVal < -0.1 ? 'you pay up' : 'even value');
 
-  // Partner-fit: does what I give address THEIR needs? A STAR REACH (prying their best
-  // player at par) overrides — a rival won't do it no matter how well my give fits their
-  // needs, matching the Trade Radar's "aggressive ask" read (send_digest._deal_star_reach).
+  // Partner-fit ("Would they do it?"): would the RIVAL accept? Aggressive & demand-side aware,
+  // mirroring send_digest._trade_tilt(net_them). A STAR REACH (prying their best player without
+  // an overpay) is always a tough sell; then, if they come out clearly behind by THEIR own
+  // valuation (netThem < -realisticMax) it's an aggressive ask; else if my give hits their
+  // category needs it's realistic; otherwise a likely tough sell.
   var partnerNeeds = partnerMeta.needs || [];
   var partnerGets = lost.filter(function(c){{ return partnerNeeds.indexOf(c) >= 0; }});
-  var partnerFit = dealStarReach(getArr, giveArr, netVal)
-    ? 'you\'d be prying their star at par &mdash; tough sell'
-    : (partnerGets.length
-        ? 'fits their needs (' + partnerGets.map(function(c){{return DATA.catLabels[c]||c;}}).join(', ') + ') &mdash; realistic'
-        : (lKeys.length ? 'doesn\'t hit their category needs &mdash; may be a tough sell' : '&mdash;'));
+  var partnerFit;
+  if (!lKeys.length && !rKeys.length) {{
+    partnerFit = '&mdash;';
+  }} else if (dealStarReach(getArr, giveArr, netVal)) {{
+    partnerFit = 'you\'d be prying their star at par &mdash; tough sell';
+  }} else if (netThem < -DATA.tune.realisticMax) {{
+    partnerFit = 'they come out behind on value &mdash; aggressive ask';
+  }} else if (partnerGets.length) {{
+    partnerFit = 'fits their needs (' + partnerGets.map(function(c){{return DATA.catLabels[c]||c;}}).join(', ') + ') &mdash; realistic';
+  }} else {{
+    partnerFit = 'doesn\'t hit their category needs &mdash; may be a tough sell';
+  }}
 
   // MY-side acceptance — the mirror of "Would they do it?". A star surrender at par is the read
   // that makes an even deal one *I* should hold out on, no matter how well the categories fit.
@@ -1016,7 +1081,7 @@ function recompute() {{
         : (needFilled.length || posList.length
             ? 'fills your needs (' + needFilled.map(function(c){{return DATA.catLabels[c]||c;}}).join(', ')
               + (posList.length ? (needFilled.length ? ', ' : '') + posList.join(', ') + ' slot' : '') + ') &mdash; worth it'
-            : (netVal >= -0.1 ? 'fair value for you &mdash; workable' : 'you\'d be paying up &mdash; think twice')));
+            : (netMe >= -0.1 ? 'fair value for you &mdash; workable' : 'you\'d be paying up &mdash; think twice')));
 
   var timingTxt = timing > 0 ? 'in your favor (selling high / buying low)'
                 : (timing < 0 ? 'a trap (dealing a riser or buying a regressor)' : 'neutral');
@@ -1028,10 +1093,25 @@ function recompute() {{
         return catChip(c, strong ? '' : 'lose'); }}).join('') : '<span class="empty">none</span>';
   var posChips = posList.length ? posList.map(function(p){{ return '<span class="chip pos">'+p+'</span>'; }}).join('') : '';
 
+  // Three-row value block: Base (universal tval) + each side's team-modified value. A positive
+  // Net in a row = that side comes out ahead by its own valuation — so a base-negative deal can
+  // still be win-win (both team rows positive).
+  function _sg(v) {{ return (v>=0?'+':'') + v.toFixed(2); }}
+  function _ncls(v) {{ return v > 0.1 ? 'vgpos' : (v < -0.1 ? 'vgneg' : 'vgeven'); }}
+  var myGive = sumEff(giveArr, myMeta), myGet = sumEff(getArr, myMeta);
+  var thGive = sumEff(giveArr, partnerMeta), thGet = sumEff(getArr, partnerMeta);
+  function _vrow(lbl, g, gt, net, hint) {{
+    return '<div class="vgl" title="'+hint+'">'+lbl+'</div>'
+         + '<div class="vgc">'+g.toFixed(2)+'</div><div class="vgc">'+gt.toFixed(2)+'</div>'
+         + '<div class="vgc '+_ncls(net)+'">'+_sg(net)+'</div>';
+  }}
   reads.innerHTML =
-      '<div class="totrow"><span>Give value ' + giveVal.toFixed(2) + '</span>'
-        + '<span>Net ' + (netVal>=0?'+':'') + netVal.toFixed(2) + ' &middot; ' + tilt + '</span>'
-        + '<span>Get value ' + getVal.toFixed(2) + '</span></div>'
+      '<div class="valgrid">'
+        + '<div class="vgh"></div><div class="vgh">Give</div><div class="vgh">Get</div><div class="vgh">Net</div>'
+        + _vrow('Base', giveVal, getVal, netVal, 'Universal value (tval) &mdash; ' + tilt)
+        + _vrow('My value', myGive, myGet, netMe, 'Re-valued by your roster needs')
+        + _vrow('Their value', thGive, thGet, netThem, 'Re-valued by ' + (partnerMeta.name||'their') + ' needs (Net = give &minus; get, their surplus)')
+      + '</div>'
     + '<div class="readline"><span class="readlbl">You gain:</span> ' + gainChips + (posChips?' &nbsp; '+posChips:'') + '</div>'
     + '<div class="readline"><span class="readlbl">You lose:</span> ' + loseChips + '</div>'
     + '<div class="readline"><span class="readlbl">Timing:</span> ' + timingTxt + '</div>'
