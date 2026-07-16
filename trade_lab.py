@@ -349,7 +349,8 @@ def build_partner_fit(pitchers, hitters, roto, team_keys, ranks, n,
                 cand = by_team.get(rival, [])
 
                 def _score(d):
-                    vp, ac, _ = sd._trade_tilt(d.get("net_val", 0), d.get("ins"), d.get("outs"))
+                    vp, ac, _ = sd._trade_tilt(d.get("net_val", 0), d.get("ins"), d.get("outs"),
+                                               net_them=d.get("net_them"))
                     fillpos  = [pos for p in d["ins"] for pos in (p.get("_tfillpos") or [])]
                     fillcats = [c for p in d["ins"] for c in (p.get("_tcats") or [])]
                     scarce = any(pos in _FIT_SCARCE_POS for pos in fillpos) or ("SVHD" in fillcats)
@@ -358,7 +359,8 @@ def build_partner_fit(pitchers, hitters, roto, team_keys, ranks, n,
 
                 best = max(cand, key=_score) if cand else None
                 if best:
-                    vp, ac, _ = sd._trade_tilt(best.get("net_val", 0), best.get("ins"), best.get("outs"))
+                    vp, ac, _ = sd._trade_tilt(best.get("net_val", 0), best.get("ins"), best.get("outs"),
+                                               net_them=best.get("net_them"))
                     words, tier = _fit_deal_words(vp, ac)
                     get = [{"name": p.get("PlayerName", ""),
                             "tags": _fit_get_tags([p], my_needs)} for p in best["ins"]]
