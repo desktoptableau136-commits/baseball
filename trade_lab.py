@@ -630,7 +630,23 @@ function doRefresh() {{
   if (!DATA.refreshUrl) return;
   var b = document.getElementById('refreshBtn');
   if (b) {{ b.disabled = true; b.textContent = 'Refreshing... (~2-3 min)'; }}
-  fetch(DATA.refreshUrl, {{ method:'POST' }}).then(startPoll, startPoll);
+  // Only start polling if the Worker actually FIRED the dispatch (202 {{ok:true}}). A 502
+  // (bad/insufficient token) or a network/CORS failure must surface, not silently poll
+  // forever for a build that will never come.
+  fetch(DATA.refreshUrl, {{ method:'POST' }})
+    .then(function(r) {{
+      return r.json().catch(function() {{ return {{}}; }}).then(function(j) {{ return {{ ok:r.ok, body:j }}; }});
+    }})
+    .then(function(res) {{
+      if (res.ok && res.body && res.body.ok) {{ startPoll(); }}
+      else {{ refreshFailed(b, res.body); }}
+    }}, function() {{ refreshFailed(b, null); }});
+}}
+function refreshFailed(b, body) {{
+  if (b) {{ b.disabled = false; b.innerHTML = '&#8635; Refresh data'; }}
+  var code = body && body.status ? ' (GitHub ' + body.status + ')' : '';
+  alert('Refresh could not start' + code + ' - the page was NOT updated. The refresh '
+      + 'token likely needs "Contents: Read and write" permission (see worker/README.md).');
 }}
 function startPoll() {{
   _pollTries = 0;
