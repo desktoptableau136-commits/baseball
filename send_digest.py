@@ -2685,8 +2685,20 @@ _TRADE_MAX_CARDS    = 6     # trades surfaced
 _TRADE_PER_TEAM_CAP = 2     # max cards per partner team (variety)
 _TRADE_POOL_WIDTH   = 4     # top-N of each side fed into the 2-for-2 combinations
 _POS_DEPTH_SLACK    = 1     # bodies beyond POS_STARTERS I can still use (bench/flex) before a position reads "stacked"
-_TRADE_STAR_SCORE   = 80    # role SCORE at/above which a rival won't ship a player at par (endowment/star bias) -- an ACCEPTANCE knob, NOT a value one
-_TRADE_STAR_PAYUP   = 0.25  # tval you must be PAYING UP by for acquiring such a star to still read as a realistic ask
+# Graduated endowment/star reluctance (supply-side, ACCEPTANCE-layer only -- never folds
+# into _tval): the better a player's role SCORE, the bigger the overpay a manager needs to
+# part with him. Replaces the old binary score>=80 / 0.25-payup cliff. Premium in _tval:
+# 74->0.00, 78->0.20, 82->0.40, 88->0.70, 94->1.00 (capped).
+_STAR_RELUCT_FLOOR  = 74    # role score below which a player moves freely (no endowment premium)
+_STAR_RELUCT_SLOPE  = 0.05  # tval premium added per point above the floor
+_STAR_RELUCT_CAP    = 1.10  # ceiling so a 95+ score can't demand an impossible overpay
+_TRADE_REALISTIC_MAX = 0.05 # rival "realistic" read: most value I may win and still call it realistic (aggressive)
+# Demand-side team-need value: a piece is worth more to a team that needs his position/cats.
+# effective_value = _tval * need_mult(player, team); acceptance-read layer only.
+_NEED_MULT_CAT      = 0.14  # per need-cat boost to a player's value for a team short there
+_NEED_MULT_POS      = 0.20  # boost for a hitter at a team's thin position
+_NEED_MULT_SURPLUS  = 0.10  # discount when a player only helps a cat/position the team is already deep in
+_NEED_MULT_CLAMP    = (0.70, 1.60)  # bound the need multiplier so thin data can't over-swing
 # Player category coverage reuses the FA cat lists (QS/B_SO aren't per-player stats, so a
 # team need in those simply finds no matching player — intentional, same as the FA "Cats").
 
@@ -2882,8 +2894,9 @@ def find_trades(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
     for team in all_teams:
         if team == my_key or team not in ranks:
             continue
-        send_cats = my_surplus & needs_of(team)   # cats I can help THEM in (they must benefit)
-        get_cats  = surplus_of(team) & my_needs    # cats they can help ME in
+        t_needs, t_surplus = needs_of(team), surplus_of(team)   # rival's demand-side context
+        send_cats = my_surplus & t_needs           # cats I can help THEM in (they must benefit)
+        get_cats  = t_surplus & my_needs           # cats they can help ME in
         if not send_cats:                          # no mutual benefit possible → skip
             continue
         t_players = ([enrich(r, "hit") for r in roster(hitters, team)] +
@@ -2942,7 +2955,13 @@ def find_trades(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
             scov = set().union(*[o["_tcats"] for o in outs]) & send_cats
             if (not gcov and not gpos) or not scov:
                 continue
-            net_val  = sum(i["_tval"] for i in ins) - sum(o["_tval"] for o in outs)  # my value edge (+ = I win)
+            net_val  = sum(i["_tval"] for i in ins) - sum(o["_tval"] for o in outs)  # my base value edge (+ = I win)
+            # Demand-side net from the RIVAL's POV (+ = they win by THEIR needs): what they
+            # receive (my outs) valued by their needs, minus what they surrender (the ins).
+            # Category-based (rival positional need isn't plumbed into the digest) — drives the
+            # "realistic vs aggressive ask" read so it's roster-aware, not just base-value.
+            net_them = (sum(o["_tval"] * _need_mult(o, t_needs, t_surplus) for o in outs)
+                        - sum(i["_tval"] * _need_mult(i, t_needs, t_surplus) for i in ins))
             # DIRECTIONAL timing: selling-high on the GIVE side and buying-low on the GET
             # side are the arbitrage (do more of it); giving away a riser or acquiring a
             # regression candidate is the reverse (penalize — these are traps).
@@ -2966,6 +2985,7 @@ def find_trades(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
                          + 4.0 * timing - 0.5 * (len(ins) - 1))
             trades.append({
                 "team": team, "outs": outs, "ins": ins, "net_val": net_val, "score": score,
+                "net_them": net_them,
                 "lane": mode, "sell_out": sell_out, "buy_in": buy_in,
                 "get_cats":  sorted(gcov, key=lambda c: -ranks[my_key][c]),
                 "get_pos":   sorted(gpos, key=lambda p: -need_pos[p][0]),
@@ -3021,60 +3041,95 @@ def find_trades_combined(pitchers, hitters, roto, my_team, best_recent_p, best_r
     return picked
 
 
+def _star_role(p):
+    """Star-comparison eligibility: hitters and starters only. Relievers are excluded from
+    BOTH sides of every star comparison — a closer's within-role score isn't cross-role
+    comparable to a hitter's, so counting him would falsely mask a genuine star on the other
+    side (the Witt-for-McCarthy+reliever bug). Punt-saves arms move at par."""
+    return p.get("_tptype") == "hit" or (p.get("_tptype") == "pit" and _is_sp(p))
+
+
+def _star_reluctance(score):
+    """Graduated endowment/star premium (in _tval) a manager attaches to a player of this role
+    SCORE: 0 below _STAR_RELUCT_FLOOR, rising _STAR_RELUCT_SLOPE per point, capped at
+    _STAR_RELUCT_CAP. Acceptance-layer only (NEVER folds into _tval). The better the player,
+    the bigger the overpay needed to pry him loose. 74->0.00, 78->0.20, 82->0.40, 88->0.70,
+    94->1.00. Replaces the old binary score>=80 cliff so good-not-elite players (76-79) carry
+    real reluctance too."""
+    return max(0.0, min(_STAR_RELUCT_CAP, (_n(score) - _STAR_RELUCT_FLOOR) * _STAR_RELUCT_SLOPE))
+
+
+def _need_mult(row, need_cats, surplus_cats, need_pos=None, surplus_pos=None):
+    """Demand-side team-need multiplier: how much MORE (or less) this player is worth to a
+    given team, given that team's category needs/surpluses and (hitters) thin/deep positions.
+    effective_value(player, team) = _tval * _need_mult. ACCEPTANCE-READ layer only -- never
+    folds into _tval or the find_trades ranking (which already rewards need coverage), so the
+    universal currency stays intact. Reuses the enriched `_tcats`/`_tgroups` fields. This is
+    what lets the same catcher be worth more to a team that needs the position than to one
+    already set there. Clamped to _NEED_MULT_CLAMP."""
+    cats = row.get("_tcats") or set()
+    need_cats, surplus_cats = (need_cats or set()), (surplus_cats or set())
+    m = 1.0
+    m += _NEED_MULT_CAT * len(cats & need_cats)           # each need cat he covers is worth more here
+    if cats and not (cats & need_cats) and (cats & surplus_cats):
+        m -= _NEED_MULT_SURPLUS                            # only helps where they're already deep
+    if row.get("_tptype") == "hit":
+        groups = row.get("_tgroups") or set()
+        if need_pos and (groups & set(need_pos)):
+            m += _NEED_MULT_POS                            # fills a thin position for this team
+        elif surplus_pos and groups and groups <= set(surplus_pos):
+            m -= _NEED_MULT_SURPLUS                        # only stacks positions they're deep in
+    lo, hi = _NEED_MULT_CLAMP
+    return max(lo, min(hi, m))
+
+
 def _deal_star_reach(ins, outs, net_val):
     """Market-perception (NOT value) check: would a rival balk because the deal asks them to
-    surrender their crown-jewel star at par? True when the single best player in the deal (by
-    role SCORE) is one I'd ACQUIRE, he's a genuine star (bat or starter, score >=
-    _TRADE_STAR_SCORE), he outranks anything I send back, and I'm not clearly paying up for
-    him (net_val > -_TRADE_STAR_PAYUP). Relievers are excluded — punt-saves arms move at par.
-    This is why a Witt-Jr.-for-two-OF-depth deal reads even by _tval yet a tough manager
-    rejects it on sight: _tval measures category value honestly, but managers won't ship a
-    star at par. Keeps `_tval` a pure value currency; the premium lives in the acceptance
-    layer only. Relievers are excluded from BOTH sides of the comparison — not just as an
-    acquired star, but from `give_top` too: a closer's within-role score (e.g. 89) is not
-    cross-role comparable to a hitter's, so counting him in `give_top` would falsely mask a
-    genuine star on the get side (the Witt-for-McCarthy+reliever bug). Called by `_trade_tilt`."""
+    part with a prized player without a real overpay? Uses the GRADUATED reluctance curve
+    (`_star_reluctance`): the overpay required to pry their best star-role acquire is his
+    premium minus my best star-role give's premium (so a star-for-star swap needs little/none).
+    Reach (they balk) when that required overpay is positive AND I'm NOT paying up by at least
+    that much (`net_val > -req`). Because `_star_reluctance` is monotonic in score, `req > 0`
+    also encodes the old "acquired star outranks anything I send back" condition — just
+    graduated by how good he is. Relievers excluded both sides (see `_star_role`). Keeps
+    `_tval` a pure value currency; the premium lives in the acceptance layer only. Called by
+    `_trade_tilt`."""
     if not ins:
         return False
-    def _star_role(p):
-        return p.get("_tptype") == "hit" or (p.get("_tptype") == "pit" and _is_sp(p))
-    get_star = max((_n(p.get("_tscore")) for p in ins
-                    if _star_role(p) and _n(p.get("_tscore")) >= _TRADE_STAR_SCORE), default=0.0)
-    give_top = max((_n(o.get("_tscore")) for o in (outs or []) if _star_role(o)), default=0.0)
-    return get_star >= _TRADE_STAR_SCORE and get_star > give_top and net_val > -_TRADE_STAR_PAYUP
+    get_prem  = max((_star_reluctance(p.get("_tscore")) for p in ins if _star_role(p)), default=0.0)
+    give_prem = max((_star_reluctance(o.get("_tscore")) for o in (outs or []) if _star_role(o)), default=0.0)
+    req = max(0.0, get_prem - give_prem)
+    return req > 0.0 and net_val > -req
 
 
 def _deal_star_surrender(ins, outs, net_val):
-    """The MY-side mirror of `_deal_star_reach`: would *I* balk because the deal asks me to
-    surrender my crown-jewel star at par? True when the single best player in the deal (by role
-    SCORE) is one I'd GIVE (in `outs`), he's a genuine star (bat or starter, score >=
-    _TRADE_STAR_SCORE), he outranks anything I acquire, and I'm not clearly WINNING value
-    (net_val < _TRADE_STAR_PAYUP). Relievers excluded — punt-saves arms move at par. Same
-    endowment/star bias that stops a rival shipping their best guy at par stops me shipping
-    mine: category-even `_tval` reads "fair" yet I'd hold out. Acceptance-layer only (keeps
-    `_tval` a pure value currency). Relievers are excluded from BOTH sides — as a surrendered
-    star AND from `get_top` — for the same cross-role-incomparability reason as `_deal_star_reach`.
-    Used by `_pending_verdict`."""
+    """The MY-side mirror of `_deal_star_reach`: would *I* balk at parting with a prized player
+    without a real value win? Required premium = my best star-role give's `_star_reluctance`
+    minus my best star-role acquire's (a star-for-star swap needs little). I hold out when
+    that's positive AND I'm NOT winning by at least that much (`net_val < req`). Same graduated
+    curve, relievers excluded both sides, acceptance-layer only. Used by `_pending_verdict`."""
     if not outs:
         return False
-    def _star_role(p):
-        return p.get("_tptype") == "hit" or (p.get("_tptype") == "pit" and _is_sp(p))
-    give_star = max((_n(o.get("_tscore")) for o in outs
-                     if _star_role(o) and _n(o.get("_tscore")) >= _TRADE_STAR_SCORE), default=0.0)
-    get_top   = max((_n(p.get("_tscore")) for p in (ins or []) if _star_role(p)), default=0.0)
-    return give_star >= _TRADE_STAR_SCORE and give_star > get_top and net_val < _TRADE_STAR_PAYUP
+    give_prem = max((_star_reluctance(o.get("_tscore")) for o in outs if _star_role(o)), default=0.0)
+    get_prem  = max((_star_reluctance(p.get("_tscore")) for p in (ins or []) if _star_role(p)), default=0.0)
+    req = max(0.0, give_prem - get_prem)
+    return req > 0.0 and net_val < req
 
 
-def _trade_tilt(net_val, ins=None, outs=None):
-    """(value_phrase, accept_phrase, accept_color) for a trade's net_val (my value edge,
-    + = I win). The value phrase is my-POV; the accept phrase is the RIVAL's-POV read on
-    whether they'd say yes — a deal where I win value is a tougher sell, an even/pay-up deal
-    is realistic. Pass the deal's `ins`/`outs` so a STAR REACH (acquiring their best player at
-    par — a deal even _tval calls fair but no manager accepts) also reads "aggressive ask",
-    not "realistic". Shared by the digest Trade Radar + the dashboard tile so they agree."""
+def _trade_tilt(net_val, ins=None, outs=None, net_them=None):
+    """(value_phrase, accept_phrase, accept_color) for a trade. `net_val` is MY base value edge
+    (+ = I win) and sets the my-POV value phrase. The accept phrase is the RIVAL's-POV read on
+    whether they'd say yes. It's now AGGRESSIVE: the rival must not clearly lose. When
+    `net_them` (their demand-side net, + = they win by THEIR needs) is supplied it drives that
+    read (`net_them >= -_TRADE_REALISTIC_MAX`); otherwise it falls back to the base symmetric
+    proxy (`net_val <= _TRADE_REALISTIC_MAX`, i.e. their base loss is small). A STAR REACH
+    (prying their best player without an overpay) also forces "aggressive ask". Pass `ins`/`outs`
+    so the graduated star check runs. Shared by the digest Trade Radar + the dashboard tile."""
     value = ("you win the value" if net_val > 0.1 else
              "even value" if net_val >= -0.1 else "you pay up")
-    realistic = net_val <= _TRADE_FAIR_BAND and not _deal_star_reach(ins, outs, net_val)
+    rival_ok = (net_them >= -_TRADE_REALISTIC_MAX) if net_them is not None \
+        else (net_val <= _TRADE_REALISTIC_MAX)
+    realistic = rival_ok and not _deal_star_reach(ins, outs, net_val)
     if realistic:
         return value, "realistic", GREEN
     return value, "aggressive ask", YELLOW
@@ -3260,14 +3315,18 @@ def _grade_pending_trades(pending, pitchers, hitters, roto, my_team,
 
     ranks, n = team_category_ranks(roto)
     third = max(1, round(n / 3.0)) if n else 1
-    needs_of = lambda tk: {c for c, rk in ranks.get(tk, {}).items() if rk >= n - third + 1}
+    needs_of   = lambda tk: {c for c, rk in ranks.get(tk, {}).items() if rk >= n - third + 1}
+    surplus_of = lambda tk: {c for c, rk in ranks.get(tk, {}).items() if rk <= third}
     my_key   = " ".join(my_team.split())
-    my_needs = needs_of(my_key)
+    my_needs, my_surplus = needs_of(my_key), surplus_of(my_key)   # my demand-side context
     _nt    = lambda p: (p.get("n_teams") or n or 1)
     _third = lambda p: max(1, round(_nt(p) / 3.0))
     need_pos = {p["pos"]: ((p.get("rank") or _nt(p)), (p.get("my_avg") or 0))
                 for p in pos_data if p.get("ptype") == "hit"
                 and (p.get("rank") or _nt(p)) >= _nt(p) - _third(p) + 1}
+    my_need_pos    = set(need_pos.keys())
+    my_surplus_pos = {p["pos"] for p in pos_data if p.get("ptype") == "hit"
+                      and (p.get("rank") or _nt(p)) <= _third(p)}
     my_pos_count = _my_position_counts(hitters, my_key)   # redundancy guard: bodies per position
 
     def _resolve(entry):
@@ -3291,7 +3350,13 @@ def _grade_pending_trades(pending, pitchers, hitters, roto, my_team,
         for r in ins:
             r["_tfillpos"] = sorted(_hitter_fills_need_pos(r, need_pos))
 
-        net_val = sum(r["_tval"] for r in ins) - sum(r["_tval"] for r in outs)
+        net_val = sum(r["_tval"] for r in ins) - sum(r["_tval"] for r in outs)   # base value edge
+        # Demand-side net from MY POV (+ = I win by MY needs): incoming valued by my needs
+        # minus outgoing. Drives the ACCEPT/COUNTER/DECLINE verdict so it's roster-aware — a
+        # need-filling piece is worth accepting even at slight base-value cost. The displayed
+        # `value` phrase + the counter-gap stay on BASE value (the universal read).
+        _mm = lambda r: _need_mult(r, my_needs, my_surplus, my_need_pos, my_surplus_pos)
+        net_me = sum(r["_tval"] * _mm(r) for r in ins) - sum(r["_tval"] * _mm(r) for r in outs)
         gcov = set().union(*[r["_tcats"] for r in ins]) & my_needs if ins else set()
         gpos = (_non_redundant_get_pos(set().union(*[set(r.get("_tfillpos", [])) for r in ins]),
                                        outs, ins, my_pos_count) if ins else set())
@@ -3302,8 +3367,8 @@ def _grade_pending_trades(pending, pitchers, hitters, roto, my_team,
         value = ("you win the value" if net_val > 0.1 else
                  "even value" if net_val >= -0.1 else "you pay up")
 
-        star_surrender = _deal_star_surrender(ins, outs, net_val)
-        verdict = _pending_verdict(net_val, addresses_need, timing, incoming, star_surrender) if incoming else None
+        star_surrender = _deal_star_surrender(ins, outs, net_val)   # star reluctance stays on base value
+        verdict = _pending_verdict(net_me, addresses_need, timing, incoming, star_surrender) if incoming else None
         counter = ""
         if verdict and verdict[0] == "COUNTER":
             exclude = {_badge_name_key(nm) for (_r, nm) in get_rows + give_rows}
@@ -3432,7 +3497,7 @@ def build_trade_radar(pitchers, hitters, roto, my_team, best_recent_p, best_rece
         get_lbl  = ", ".join(gains) or "depth"
         send_lbl = ", ".join(_CAT_DISPLAY.get(c, c) for c in t["send_cats"])
         net = t.get("net_val", 0.0)
-        value, accept, acc_color = _trade_tilt(net, t["ins"], t["outs"])
+        value, accept, acc_color = _trade_tilt(net, t["ins"], t["outs"], net_them=t.get("net_them"))
         thesis = ("sell-high" if t.get("sell_out") else "") + \
                  (" · " if t.get("sell_out") and t.get("buy_in") else "") + \
                  ("buy-low" if t.get("buy_in") else "")
