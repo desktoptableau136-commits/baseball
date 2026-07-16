@@ -572,11 +572,11 @@ body {{ margin:0; background:{BG}; color:{TEXT}; font-family:-apple-system,Segoe
 .vstory {{ background:{BG}; border:1px solid {BORDER}; border-left:3px solid {ACCENT}; border-radius:6px; padding:8px 10px; margin:2px 0 5px; font-size:11px; line-height:1.5; }}
 .vstory .vs-base {{ color:#c4cdda; margin-bottom:5px; }}
 .vstory .vs-base b {{ color:{TEXT}; font-variant-numeric:tabular-nums; }}
-.vstory .vs-ln {{ display:flex; gap:8px; align-items:baseline; padding:1px 0; }}
+.vstory .vs-ln {{ display:flex; gap:8px; align-items:baseline; padding:3px 0 0; }}
 .vstory .who {{ flex:0 0 auto; min-width:70px; color:{MUTED}; font-weight:700; }}
-.vstory .val {{ flex:0 0 42px; font-weight:800; font-variant-numeric:tabular-nums; }}
+.vstory .val {{ font-weight:800; font-variant-numeric:tabular-nums; }}
 .vstory .val.up {{ color:{GREEN}; }} .vstory .val.dn {{ color:{RED}; }}
-.vstory .rz {{ color:{MUTED}; }}
+.vstory .vs-rz {{ color:{MUTED}; padding:1px 0 3px 8px; line-height:1.4; }}
 /* fairness bar */
 #fairbar {{ margin-top:14px; }}
 .btrack {{ position:relative; height:9px; border-radius:6px; overflow:hidden; display:flex; border:1px solid {BORDER}; }}
@@ -1079,7 +1079,8 @@ function valueStory(p) {{
     var m=needMult(p,meta), val=p.tval*m, parts=multParts(p,meta);
     var cls = m>1.001?'up':(m<0.999?'dn':'');
     var rz = parts.length ? parts.map(function(x){{ return x.t; }}).join(' &middot; ') : 'no change';
-    return '<div class="vs-ln"><span class="who">'+lbl+'</span><span class="val '+cls+'">'+val.toFixed(2)+'</span><span class="rz">'+rz+'</span></div>';
+    return '<div class="vs-ln"><span class="who">'+lbl+'</span><span class="val '+cls+'">'+val.toFixed(2)+'</span></div>'
+         + '<div class="vs-rz">'+rz+'</div>';
   }}
   return '<div class="vs-base"><b>Base '+p.tval.toFixed(2)+'</b> &mdash; strong in '+driv+posd+'</div>'
     + line('To you', myMeta) + line('To '+pn, partnerMeta);
