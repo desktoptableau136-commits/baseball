@@ -27,6 +27,10 @@ from pathlib import Path
 from urllib.parse import quote
 
 from name_utils import _name_key  # canonical player-name join key (shared leaf module)
+from fantasy.ui import *          # re-exported UI/presentation primitives (F5 split, part 1)
+from fantasy.scoring import *     # re-exported scoring/calibration + YEAR (F5 split, part 2)
+from fantasy.analytics import *   # re-exported shared analytics + score-breakdown prose (F5 split, part 3)
+from fantasy.trades import *      # re-exported trade engine + pending-offer grader/renderers (F5 split, part 4)
 
 try:
     from zoneinfo import ZoneInfo
@@ -34,54 +38,10 @@ try:
 except Exception:                       # zoneinfo missing (very old Python / no tzdata)
     _ET = None
 
-
-def _fmt_refresh_time(iso_str):
-    """Format a snapshot's refreshed_at ISO timestamp as a display clock in ET, e.g.
-    '6:32 AM ET'. tz-aware timestamps (UTC from CI) are converted to Eastern; naive ones
-    (older manual local runs on the user's ET box) are shown as-is. Returns '' on any
-    parse failure so the caller degrades to the plain date-only badge."""
-    if not iso_str:
-        return ""
-    try:
-        dt = datetime.fromisoformat(iso_str)
-    except Exception:
-        return ""
-    if dt.tzinfo is not None and _ET is not None:
-        dt = dt.astimezone(_ET)
-    h = dt.hour % 12 or 12
-    ampm = "AM" if dt.hour < 12 else "PM"
-    return f"{h}:{dt.minute:02d} {ampm} ET"
-
-
-def _fmt_game_time_et(iso_str):
-    """Format an MLB StatsAPI game UTC time (ISO, e.g. '2026-07-11T23:10:00Z') as a
-    compact ET clock like '7:10p ET'. Returns '' on any parse failure."""
-    if not iso_str:
-        return ""
-    try:
-        dt = datetime.fromisoformat(str(iso_str).replace("Z", "+00:00"))
-    except Exception:
-        return ""
-    if dt.tzinfo is not None and _ET is not None:
-        dt = dt.astimezone(_ET)
-    h = dt.hour % 12 or 12
-    ap = "a" if dt.hour < 12 else "p"
-    return f"{h}:{dt.minute:02d}{ap} ET"
-
-
-def _ascii_lower(s):
-    """Accent-stripped, lowercased name for loose cross-source matching (ESPN roster
-    names vs MLB StatsAPI probable-pitcher names differ by accents)."""
-    import unicodedata
-    return "".join(c for c in unicodedata.normalize("NFKD", str(s or ""))
-                   if not unicodedata.combining(c)).lower().strip()
-
-
 # Back-compat alias: this name matches a roster/ESPN player name to a FantasyPros stat
 # row. It used to be its own near-duplicate of the name-key logic; it now points at the
 # single canonical `_name_key` (shared with fetch_data/weekly_recap). Kept as an alias so
 # existing internal call sites and `sd._badge_name_key` references (dashboard, docs) work.
-_badge_name_key = _name_key
 
 try:
     from dotenv import load_dotenv
@@ -95,24 +55,19 @@ TO_EMAIL   = "desktoptableau136@gmail.com"
 CC_EMAIL   = "katzsam@duck.com"
 FROM_EMAIL = "desktoptableau136@gmail.com"
 MY_TEAM    = "Guerrero Warfare"
-YEAR       = 2026
 SNAPSHOT   = Path(__file__).parent / "data" / "snapshot.json"
 LOG_DIR    = Path(__file__).parent / "logs"
-TRADE_LAB_URL = "https://desktoptableau136-commits.github.io/baseball/"  # hosted pocket Trade Lab
 
 # ── SCORING ────────────────────────────────────────────────────────────────────
 
-_DL_STATUSES = {"TEN_DAY_DL", "FIFTEEN_DAY_DL", "SIXTY_DAY_DL", "IL", "OUT"}
 _FP_IL_TAGS  = {"IL10", "IL15", "IL60", "IL", "DTD", "O"}   # suffixes in FantasyPros "Player" field
 _STATUS_LABELS = {
     "TEN_DAY_DL": "10-Day IL", "FIFTEEN_DAY_DL": "15-Day IL", "SIXTY_DAY_DL": "60-Day IL",
     "IL10": "10-Day IL", "IL15": "15-Day IL", "IL60": "60-Day IL",
 }
 
-
 def _fmt_status(s):
     return _STATUS_LABELS.get(s, s)
-
 
 def _get_injury_status(r):
     """Return the best available injury status string for any player (rostered or FA)."""
@@ -132,101 +87,14 @@ def _get_injury_status(r):
             return last_word
     return ""
 
-
 def _is_healthy(r):
     return not bool(_get_injury_status(r))
-
-
-def _on_il(r):
-    """True if the player occupies one of the league's dedicated IL roster slots.
-    League has 2 IL slots that don't consume active/bench room, so dropping such a
-    player frees nothing usable — never suggest it. ESPN_OnIL is a native bool from
-    fetch_data (lineupSlot == 'IL'); guard against a stringified value just in case."""
-    v = r.get("ESPN_OnIL")
-    if isinstance(v, str):
-        return v.strip().lower() == "true"
-    return bool(v)
-
-
-def _n(val):
-    """Coerce to float, return 0 for falsy/negative sentinel values."""
-    try:
-        v = float(val or 0)
-        return v if v > 0 else 0
-    except (TypeError, ValueError):
-        return 0
-
-
-def _is_sp(r):
-    """Usage-based SP/RP detection. Priority: ESPN season GS/GP → dataset GS/G → IP/G → Position."""
-    pos      = str(r.get("Position") or "")
-    gs       = _n(r.get("GS"))
-    g        = _n(r.get("G"))
-    ip_per_g = _n(r.get("IP_per_G"))
-    espn_gs  = _n(r.get("ESPN_GS"))
-    espn_gp  = _n(r.get("ESPN_GP"))
-
-    # ESPN season GS/GP — full-season sample, most reliable
-    if espn_gp >= 5:
-        rate = espn_gs / espn_gp
-        if rate >= 0.80:
-            return True
-        if rate <= 0.20:
-            return False
-        # 20–80%: ambiguous, fall through
-
-    # Dataset GS/G — only trust with enough appearances
-    if g >= 4:
-        rate = gs / g
-        if rate >= 0.80:
-            return True
-        if rate <= 0.20 and ip_per_g < 4.0:
-            return False
-
-    # IP/G — catches bulk/opener cases regardless of GS rate
-    if ip_per_g >= 4.5:
-        return True
-    if 0 < ip_per_g < 2.5:
-        return False
-
-    # Position field last resort
-    if "SP" in pos and "RP" not in pos:
-        return True
-    if "RP" in pos and "SP" not in pos:
-        return False
-    if "SP" in pos:  # dual-eligible: lean SP if decent IP/G
-        return ip_per_g >= 3.0
-
-    return False
-
-
-_BLEND_W = 0.35   # recent-form weight in the displayed blended score (season weight = 1 - _BLEND_W)
-
-def _blend(r, score_fn, idx_recent, w=None):
-    """Blend of best-available recent stats and season score. Default weight _BLEND_W
-    (35% recent / 65% season): the composite leans on the stable season signal, since
-    hot/cold streaks are already surfaced explicitly in the Hot/Cold sections."""
-    if w is None:
-        w = _BLEND_W
-    s_year = score_fn(r)
-    r_rec = idx_recent.get(r.get("PlayerName", ""))
-    if not r_rec:
-        return s_year
-    s_rec = score_fn(r_rec)
-    return round(w * s_rec + (1 - w) * s_year) if s_rec > 0 else s_year
-
 
 # Role-aware pitcher volume benchmarks, derived per snapshot (compute_pitcher_benchmarks)
 # so "enough of a sample" and "a real workload" scale with the season instead of a fixed
 # IP/GS/GP minimum that goes stale. Keyed by (window, role) → leader IP/GS/GP for that
 # slice; the fractions below turn a leader into a threshold. Cold-start fallbacks are the
 # old hard-coded minimums, used when a window/role slice has too few pitchers.
-_PIT_BENCH      = {}      # (window:int, role:"SP"|"RP") -> {"IP":.., "GS":.., "GP":..}
-_IP_RELY_FRAC   = 0.20    # rate stats trusted once IP reaches this fraction of the role/window leader
-_GS_VIABLE_FRAC = 0.17    # a viable SP has made this fraction of the leader's starts
-_GP_VIABLE_FRAC = 0.30    # a viable RP has this fraction of the leader's appearances…
-_IP_VIABLE_FRAC = 0.38    # …or this fraction of the leader's innings
-_PIT_FALLBACK   = {"IP_RELY": 20.0, "GS_VIABLE": 3.0, "GP_VIABLE": 12.0, "IP_VIABLE": 20.0}
 
 # Live score calibration (approach A). The SP/RP raw-score distributions are re-anchored each
 # run so raw p50 -> 50 and p90 -> 80 on the shared 0-100 scale (same math as
@@ -236,166 +104,12 @@ _PIT_FALLBACK   = {"IP_RELY": 20.0, "GS_VIABLE": 3.0, "GP_VIABLE": 12.0, "IP_VIA
 # FALLBACK: when a role's qualified pool is below _MIN_CALIB_POOL (early season / thin sample)
 # or degenerate, that role KEEPS these hand-tuned constants so a noisy distribution can't
 # produce a wild transform. Populated by compute_score_calibration() at the top of build_email.
-_SCORE_CALIB = {
-    "sp": (1.5070, -44.3346),   # recalibrated 2026-07-06 — also the small-pool fallback
-    "rp": (1.6543, -28.0645),
-}
-_MIN_CALIB_POOL = 30            # qualified pitchers a role needs before live re-anchoring kicks in
-
-
-def compute_pitcher_benchmarks(pitchers):
-    """Leader IP/GS/GP per (window, role) from the live snapshot, so pitcher volume
-    thresholds (small-sample reliability + positional viability) track the season rather
-    than tripping a fixed minimum. Uses p95 as an outlier-robust 'leader'. Writes the
-    module global _PIT_BENCH; slices with too few pitchers are left unset (→ fallback)."""
-    _PIT_BENCH.clear()
-    for ds in (7, 15, 30, YEAR):
-        rows = [r for r in pitchers if int(_n(r.get("Dataset")) or 0) == ds]
-        for role in ("SP", "RP"):
-            grp = [r for r in rows if _is_sp(r) == (role == "SP")]
-            def _p95(field):
-                v = sorted(_n(x.get(field)) for x in grp if _n(x.get(field)) > 0)
-                return v[int(len(v) * 0.95)] if len(v) >= 12 else 0.0
-            _PIT_BENCH[(ds, role)] = {"IP": _p95("IP"),
-                                      "GS": _p95("GS") or _p95("ESPN_GS"),
-                                      "GP": _p95("ESPN_GP") or _p95("GP")}
-    return _PIT_BENCH
-
-
-def _ip_reliability_mult(r):
-    """Small-sample multiplier (≤ 1.0) for pitcher_score: rate stats are trusted once a
-    pitcher reaches _IP_RELY_FRAC of the role/window leader's innings, scaling down below
-    that. Role- and window-aware so an SP and an RP aren't held to the same absolute IP."""
-    ip = _n(r.get("IP"))
-    if ip <= 0:
-        return 1.0
-    ds = int(_n(r.get("Dataset")) or 0) or 7
-    role = "SP" if _is_sp(r) else "RP"
-    leader = _PIT_BENCH.get((ds, role), {}).get("IP") or 0
-    thresh = leader * _IP_RELY_FRAC if leader > 0 else _PIT_FALLBACK["IP_RELY"]
-    return min(1.0, ip / thresh) if thresh > 0 else 1.0
-
-
-def _pit_viable_min(role, stat):
-    """Season (YEAR) volume floor for the positional-breakdown 'viable FA' filter and the
-    recalibration population — a fraction of the role's season leader, so 'getting real
-    opportunities' scales with the season. Falls back to the old hard-coded minimum."""
-    b = _PIT_BENCH.get((YEAR, role), {})
-    if stat == "GS":
-        return (b.get("GS") or 0) * _GS_VIABLE_FRAC or _PIT_FALLBACK["GS_VIABLE"]
-    if stat == "GP":
-        return (b.get("GP") or 0) * _GP_VIABLE_FRAC or _PIT_FALLBACK["GP_VIABLE"]
-    return (b.get("IP") or 0) * _IP_VIABLE_FRAC or _PIT_FALLBACK["IP_VIABLE"]
-
-
-def pitcher_score(r, _raw=False, _parts=False):
-    kip   = _n(r.get("K/IP") or r.get("KIP"))
-    era   = _n(r.get("ERA"))
-    whip  = _n(r.get("WHIP"))
-    gs    = _n(r.get("GS"))
-    svhd  = _n(r.get("SVHD")) or _n(r.get("SV"))
-    kpct  = _n(r.get("Kpct_P"))
-    w     = _n(r.get("ESPN_W")) or _n(r.get("W"))
-    ip_g  = _n(r.get("IP_per_G"))
-    xera     = _n(r.get("xERA"))            # Baseball Savant deserved-ERA (absolute)
-    xwoba_ag = _n(r.get("xwOBA_against"))   # xwOBA allowed (absolute, ~.315 avg)
-    brl_ag   = _n(r.get("BarrelPctAllowed"))
-    whiff_pt = _n(r.get("WhiffPctile"))     # league whiff PERCENTILE 0-100 (not a rate)
-    is_sp = _is_sp(r)
-
-    if not kip and not era and not kpct:
-        return ({}, 1.0) if _parts else 0
-
-    c = {}
-    # ── Strikeouts (28): results-based K% (or K/IP) blended 60/40 with the
-    #    predictive whiff% percentile, which leads K% start-to-start.
-    if kpct > 0:
-        k_comp = min(28, kpct / 0.28 * 28)
-    else:
-        k_comp = min(28, kip / 1.5 * 28)
-    if whiff_pt > 0:
-        k_comp = 0.6 * k_comp + 0.4 * min(28, whiff_pt / 100 * 28)
-    c["K"] = k_comp
-
-    # ── Run prevention (28): actual ERA (a league category) blended 55/45 with
-    #    xERA (deserved, strips defense/sequencing luck).
-    era_base = 0.55 * era + 0.45 * xera if (era > 0 and xera > 0) else era
-    c["RunPrev"] = max(0, min(28, (6.0 - era_base) / 4.0 * 28))
-
-    # ── WHIP (20): results only — no clean predictive twin in the feed.
-    c["WHIP"] = max(0, min(20, (2.0 - whip) / 1.1 * 20))
-
-    # ── Contact quality allowed (0-12): barrel%-allowed + xwOBA-against, both
-    #    lower-is-better. Rewards suppressing hard contact regardless of results.
-    contact = 0.0
-    if brl_ag > 0:
-        contact += max(0, min(5, (10.0 - brl_ag) / 6.0 * 5))
-    if xwoba_ag > 0:
-        contact += max(0, min(7, (0.360 - xwoba_ag) / 0.110 * 7))
-    c["Contact"] = contact
-
-    if is_sp:
-        # SP role: reward starts volume; SVHD is irrelevant
-        c["Role"] = 12 if gs > 10 else 9
-    else:
-        # RP role: SVHD first, then W and IP/G as opportunity signals
-        c["Role"] = (5 + min(7, svhd / 15 * 7)
-                     + min(6, w / 10 * 6)       # wins
-                     + min(5, ip_g / 1.2 * 5))  # opportunity: IP per appearance
-
-    # Small-sample penalty: rate stats are unreliable below a role/window-relative innings
-    # floor (derived from the leader, so it scales with the season — not a fixed 20 IP).
-    mult = _ip_reliability_mult(r)
-    if _parts:
-        return c, mult
-
-    s = sum(c.values()) * mult
-    if _raw:
-        return s
-    # Calibrate to shared 0-100 scale (p50→50, p90→80) — re-anchored live per snapshot by
-    # compute_score_calibration(); falls back to the hand-tuned constants for a thin pool.
-    A, C = _SCORE_CALIB["sp"]
-    s = s * A + C
-    return max(0, min(100, round(s)))
-
 
 # Full-time AB benchmark per window, used to scale a hitter's score by playing time
 # (a part-time bat accumulates fewer weekly PAs — see the opportunity adjustment in
 # hitter_score). Populated at runtime by compute_ab_benchmarks() as a fraction of each
 # window's leader, so it tracks the season instead of a stale hard-coded minimum. The
 # dict below is only a cold-start fallback (early season / a window with too few players).
-_AB_BENCH    = {}                                  # window -> full-time AB, set per snapshot
-_FULLTIME_AB = {7: 18, 15: 38, 30: 74, YEAR: 225}  # fallback only
-_AB_FLOOR    = 0.40   # extreme part-timers keep at least this fraction of their rate score
-_AB_LEADER_FRAC = 0.62  # a regular starter reaches ~62% of the window's leader → full credit
-
-
-def compute_ab_benchmarks(hitters):
-    """Full-time AB benchmark per window = _AB_LEADER_FRAC × the window's leader AB
-    (p95, outlier-robust). Derived from the live snapshot so 'full-time' scales as the
-    season progresses rather than tripping a fixed minimum. Writes the module global
-    _AB_BENCH; windows with too few players fall back to _FULLTIME_AB."""
-    _AB_BENCH.clear()
-    for ds in (7, 15, 30, YEAR):
-        abs_ = sorted(_n(r.get("AB")) for r in hitters
-                      if int(_n(r.get("Dataset")) or 0) == ds and _n(r.get("AB")) > 0)
-        if len(abs_) >= 20:
-            leader = abs_[int(len(abs_) * 0.95)]   # p95 ≈ healthy everyday leader
-            _AB_BENCH[ds] = max(1.0, leader * _AB_LEADER_FRAC)
-    return _AB_BENCH
-
-
-def _ab_opportunity_mult(r):
-    """Playing-time multiplier (≥ _AB_FLOOR, ≤ 1.0) from a hitter's at-bats vs the
-    full-time benchmark for its window. rec_h rows carry no Dataset → treated as 7-day.
-    No AB on the row → 1.0 (never penalize missing data)."""
-    ab = _n(r.get("AB"))
-    if ab <= 0:
-        return 1.0
-    ds = int(_n(r.get("Dataset")) or 0) or 7
-    full = _AB_BENCH.get(ds) or _FULLTIME_AB.get(ds) or _FULLTIME_AB[7]
-    return max(_AB_FLOOR, min(1.0, ab / full))
-
 
 # League-average reference points, derived per snapshot (compute_league_averages) so the
 # projection/probability math tracks the season instead of stale magic numbers — replaces
@@ -403,132 +117,6 @@ def _ab_opportunity_mult(r):
 # inline 0.730 in qs_probability) and qs_probability's fixed ERA/WHIP/K%/IP-per-start/barrel
 # anchors. ONLY genuine "league average X" values live here; calibration/scaling constants
 # (score-component spans, park factor, recalibration constants) deliberately do NOT.
-_LG = {}   # key -> league-average value; callers fall back to the old literal when unset
-
-
-def compute_league_averages(hitters, pitchers):
-    """Populate the _LG module global from qualified YEAR rows: hitter `ops` (full-time
-    regulars), `team_ops` (mean opponent OPS faced), and starter `era`/`whip`/`k_pct`/
-    `ip_per_start`/`barrel_allowed`. Each key is left unset when its population is empty,
-    so consumers keep their hard-coded fallback."""
-    _LG.clear()
-
-    def _mean(vals):
-        vals = [x for x in vals if x is not None and x > 0]
-        return sum(vals) / len(vals) if vals else None
-
-    # Hitter OPS over full-time regulars (AB ≥ 55% of the season full-time benchmark).
-    ab_floor = (_AB_BENCH.get(YEAR) or _FULLTIME_AB[YEAR]) * 0.55
-    ops = _mean([_n(r.get("OPS")) for r in hitters
-                 if int(_n(r.get("Dataset")) or 0) == YEAR and _n(r.get("AB")) >= ab_floor])
-    if ops:
-        _LG["ops"] = round(ops, 4)
-
-    # Opponent strength faced by pitchers (per-start opponent team OPS + team K rate).
-    team_ops = _mean([_n(r.get("Team_OPS_Value")) for r in pitchers])
-    if team_ops:
-        _LG["team_ops"] = round(team_ops, 4)
-    team_k = _mean([_n(r.get("Team_K_Value")) for r in pitchers])
-    if team_k:
-        _LG["team_k"] = round(team_k, 4)
-
-    # Starter league averages for qs_probability anchors — qualified SPs only.
-    ip_min = _pit_viable_min("SP", "IP")
-    sps = [r for r in pitchers
-           if int(_n(r.get("Dataset")) or 0) == YEAR and _is_sp(r) and _n(r.get("IP")) >= ip_min]
-    for key, field in (("era", "ERA"), ("whip", "WHIP"), ("k_pct", "Kpct_P"),
-                       ("ip_per_start", "IP_per_G"), ("barrel_allowed", "BarrelPctAllowed")):
-        m = _mean([_n(r.get(field)) for r in sps])
-        if m:
-            _LG[key] = round(m, 4)
-    return _LG
-
-
-def hitter_score(r, _parts=False):
-    """0-100 hitter score. `_parts=True` returns (components_dict, opportunity_mult)
-    instead — the raw pre-multiplier component contributions and the playing-time
-    multiplier — so the score-breakdown tooltip stays in sync with the real math."""
-    ops    = _n(r.get("OPS"))
-    hr     = _n(r.get("HR"))
-    rbi    = _n(r.get("RBI"))
-    sb     = _n(r.get("SB"))
-    avg    = _n(r.get("AVG"))
-    hrp    = _n(r.get("HR_Probability"))
-    wrc    = _n(r.get("wRCplus"))
-    xwoba  = _n(r.get("xwOBA"))
-    sprint = _n(r.get("SprintSpeed"))
-    iso    = _n(r.get("ISO"))
-
-    if not ops and not hr and not wrc:
-        return ({}, 1.0) if _parts else 0
-
-    c = {}
-    if wrc > 0:
-        c["Prod"] = max(0, min(30, (wrc - 60) / 80 * 30))
-    else:
-        c["Prod"] = max(0, min(30, (ops - 0.55) / 0.50 * 30))
-    c["HR"]  = min(16, hr / 35 * 16)
-    c["ISO"] = min(6, iso / 0.25 * 6) if iso > 0 else 0.0
-    c["RBI"] = min(10, rbi / 110 * 10)
-    if sprint > 0:
-        c["Speed"] = max(0, min(10, (sprint - 24) / 6 * 10))
-    else:
-        c["Speed"] = min(10, sb / 40 * 10)
-    if xwoba > 0:
-        c["xwOBA"] = max(0, min(10, (xwoba - 0.270) / 0.120 * 10))
-    else:
-        c["xwOBA"] = max(0, min(10, (avg - 0.180) / 0.160 * 10))
-    c["HR%"] = min(8, hrp * 40)
-
-    # Opportunity adjustment: the rate components above reward a part-time masher as
-    # much as a regular, but over a week a bench bat who gets ~1 AB every few games
-    # can't accumulate counting stats. Scale by at-bats vs a full-time benchmark that
-    # is derived from the live data (compute_ab_benchmarks), so it tracks the season.
-    mult = _ab_opportunity_mult(r)
-    if _parts:
-        return c, mult
-
-    s = sum(c.values()) * mult
-    # Calibrate to shared 0-100 scale (p50→50, p90→80) derived from observed distribution
-    s = s * 1.587 - 5.2
-    return max(0, min(100, round(s)))
-
-
-def qs_probability(r):
-    """QS probability for a start. Formula calibrated to real QS rates: league avg ~38%, ace ~75%."""
-    gs = int(_n(r.get("GS")) or 0)
-    if gs < 1:
-        return None
-    ip_per_g = _n(r.get("IP_per_G"))   # IP / total G (honest for starters mixed with relief)
-    if ip_per_g <= 0:                   # fallback for snapshots predating this field
-        _g = max(_n(r.get("G")) or 1, 1)
-        ip_per_g = min(_n(r.get("IP", 0)) / _g, 7.5)
-    era      = _n(r.get("ERA"))
-    whip     = _n(r.get("WHIP"))
-    brl      = _n(r.get("BarrelPctAllowed"))
-    kpct     = _n(r.get("Kpct_P"))     # 0.0–0.50 scale
-    opp      = _n(r.get("Team_OPS_Value"))
-
-    # League-average anchors are derived from the live snapshot (_LG) with the old fixed
-    # values as fallback. The intercept (38 = league QS rate) and the multipliers stay
-    # fixed, so a league-average starter still scores ~38 regardless of the anchors — only
-    # the reference point tracks the season. Keeps the function calibrated (avg ~38, ace ~75).
-    score = 38  # league-average QS-rate baseline
-    if ip_per_g > 0:
-        score += (ip_per_g - (_LG.get("ip_per_start") or 5.4)) * 16  # biggest driver: IP/appearance
-    if era > 0:
-        score += ((_LG.get("era") or 4.2) - era) * 8
-    if whip > 0:
-        score += ((_LG.get("whip") or 1.35) - whip) * 12
-    if brl > 0:
-        score += ((_LG.get("barrel_allowed") or 7.5) - brl) * 0.5
-    if kpct > 0:
-        score += (kpct - (_LG.get("k_pct") or 0.22)) * 20
-    if opp > 0:
-        score += ((_LG.get("team_ops") or 0.730) - opp) * 60     # matchup adjustment
-
-    return max(1, min(99, round(score)))
-
 
 # ── DATA HELPERS ───────────────────────────────────────────────────────────────
 
@@ -557,7 +145,6 @@ def fetch_injury_notes():
     except Exception:
         return {}
 
-
 _FA_SP_MIN_SCORE = 30   # hide streamer-tier FA starters below this SP score (not worth the risk)
 
 def fa_starters(pitchers, claimed=None, week_end=None, idx_recent=None):
@@ -579,138 +166,10 @@ def fa_starters(pitchers, claimed=None, week_end=None, idx_recent=None):
     fa = [r for r in fa if r["_score"] >= _FA_SP_MIN_SCORE]
     return sorted(fa, key=lambda r: -r["_score"])[:12]
 
-
-def rp_score(r, _raw=False, _parts=False):
-    svhd = _n(r.get("ESPN_SVHD")) or _n(r.get("SVHD"))   # prefer season total from ESPN
-    k    = _n(r.get("ESPN_K"))    or _n(r.get("K"))       # prefer season count from ESPN
-    w    = _n(r.get("ESPN_W"))    or _n(r.get("W"))
-    ip_g = _n(r.get("IP_per_G"))
-    era  = _n(r.get("ERA")) or 5.0
-    whip = _n(r.get("WHIP")) or 1.5
-    xera     = _n(r.get("xERA"))
-    brl_ag   = _n(r.get("BarrelPctAllowed"))
-    whiff_pt = _n(r.get("WhiffPctile"))     # league whiff PERCENTILE 0-100
-    # SVHD is deliberately DE-EMPHASIZED (punt-saves weighting): saves are the most
-    # volatile RP category and one we're willing to sacrifice, so it's ~15% of the raw
-    # score, below an equal 5-cat share. Skill/ratio cats carry the weight instead:
-    # SVHD 15 · K 26 · W 15 · IP/G 8, then ERA 16 · WHIP 12 · contact 8.
-    c = {}
-    c["SVHD"] = min(15, svhd / 20 * 15)
-    c["K"]    = min(26, k    / 80 * 26)
-    c["W"]    = min(15, w    / 10 * 15)
-    c["IP/G"] = min(8,  ip_g / 1.2 * 8)    # opportunity: IP per appearance, max at 1.2 IP/G
-    # Run prevention (16): ERA blended 50/50 with xERA (deserved).
-    era_base = 0.5 * era + 0.5 * xera if xera > 0 else era
-    c["RunPrev"] = max(0, min(16, (5.0 - era_base) / 3.0 * 16))
-    c["WHIP"] = max(0, min(12, (2.0 - whip) / 1.0 * 12))
-    # Contact quality allowed (0-8): barrel%-allowed (lower better) + whiff% percentile.
-    contact = 0.0
-    if brl_ag > 0:
-        contact += max(0, min(4, (10.0 - brl_ag) / 6.0 * 4))
-    if whiff_pt > 0:
-        contact += min(4, whiff_pt / 100 * 4)
-    c["Contact"] = contact
-    if _parts:
-        return c, 1.0
-
-    s = sum(c.values())
-    if _raw:
-        return s
-    # Calibrate to shared 0-100 scale (p50→50, p90→80) — re-anchored live per snapshot by
-    # compute_score_calibration(); falls back to the hand-tuned constants for a thin pool.
-    A, C = _SCORE_CALIB["rp"]
-    s = s * A + C
-    return max(0, min(100, round(s)))
-
-
-def compute_score_calibration(pitchers):
-    """Re-anchor the SP/RP score calibration live from this snapshot's raw-score distribution
-    (approach A) so displayed scores track the season without a hand-paste. For each role,
-    solve A/C such that raw p50 -> 50 and p90 -> 80, using the SAME qualified pool as
-    recalibrate_scores.py (SP: _is_sp + IP past the reliability floor; RP: _pit_viable_min on
-    GP or IP; both from YEAR rows). Writes the module global _SCORE_CALIB. SMALL-POOL GUARD:
-    a role whose qualified pool is below _MIN_CALIB_POOL or degenerate (p90 <= p50) KEEPS its
-    hand-tuned fallback constants, so a noisy early-season distribution can't warp the scale.
-    Must run AFTER compute_pitcher_benchmarks — qualification + _raw scores read _PIT_BENCH."""
-    ps = [r for r in pitchers if int(_n(r.get("Dataset")) or 0) == YEAR]
-    sp_ip_min = (_PIT_BENCH.get((YEAR, "SP"), {}).get("IP") or 0) * _IP_RELY_FRAC \
-                or _PIT_FALLBACK["IP_RELY"]
-    sp_raw = sorted(pitcher_score(r, _raw=True) for r in ps
-                    if _is_sp(r) and _n(r.get("IP")) >= sp_ip_min)
-    rp_raw = sorted(rp_score(r, _raw=True) for r in ps
-                    if not _is_sp(r) and (_n(r.get("ESPN_GP")) >= _pit_viable_min("RP", "GP")
-                                          or _n(r.get("IP")) >= _pit_viable_min("RP", "IP")))
-
-    def _pctl(vals, q):
-        i = q * (len(vals) - 1)
-        lo = int(i); hi = min(lo + 1, len(vals) - 1)
-        return vals[lo] + (vals[hi] - vals[lo]) * (i - lo)
-
-    for role, raws in (("sp", sp_raw), ("rp", rp_raw)):
-        if len(raws) < _MIN_CALIB_POOL:
-            continue                        # too thin — keep the hand-tuned fallback
-        p50, p90 = _pctl(raws, 0.50), _pctl(raws, 0.90)
-        if p90 - p50 <= 0:
-            continue                        # degenerate spread — keep the fallback
-        A = 30.0 / (p90 - p50)
-        C = 50.0 - A * p50
-        _SCORE_CALIB[role] = (A, C)
-    return _SCORE_CALIB
-
-
-def _score_p(r, idx_recent=None):
-    """Canonical pitcher score — role-aware, so a player shows the SAME number in
-    every section. SP → pitcher_score blended with recent form (start-to-start
-    volatility matters). RP → rp_score, unblended: it is built on ESPN season
-    counting stats (role/opportunity driven), and skipping the blend guarantees
-    the number matches the RP tables exactly."""
-    if _is_sp(r):
-        return _blend(r, pitcher_score, idx_recent) if idx_recent is not None else pitcher_score(r)
-    return rp_score(r)
-
-
-def _starts_this_week(r, today_str, week_end_str):
-    """Count a pitcher's upcoming starts within the current matchup week [today, week_end].
-    Uses the PSP_Dates list (all scheduled starts); falls back to the single PSP_Date
-    scalar for snapshots predating the list field."""
-    dates = r.get("PSP_Dates")
-    if isinstance(dates, list) and dates:
-        return sum(1 for d in dates if today_str <= d <= week_end_str)
-    d = r.get("PSP_Date", "")
-    return 1 if d and d != "1999-01-01" and today_str <= d <= week_end_str else 0
-
-
-def two_start_badge(title=""):
-    """Bold chip flagging a pitcher with two starts inside the matchup week."""
-    tt = f' title="{title}"' if title else ""
-    return (
-        f'<span{tt} style="font-size:9px;font-weight:800;color:#fff;'
-        f'background:{ACCENT};border-radius:3px;padding:1px 5px;margin-left:5px;'
-        f'vertical-align:middle;letter-spacing:.3px;">2</span>'
-    )
-
-
 # ── Hitter tactical badges (PWR / SB / BUY-LOW / SELL-HIGH) ───────────────────────
 # Glance flags next to a hitter's name, mirroring the pitcher QS/5K+/2-START badges:
 # display-only (never folded into any score), and each carries a hover `title` naming
 # the stat that justifies it so it stays "anchored" even in a table with no such column.
-_PWR_HRP_MIN   = 0.23    # modeled per-game HR probability (a notch above _hrp_cell's 0.20 green tier)
-_SB_PCTILE_MIN = 0.80    # top ~20% of SB producers within the qualified YEAR pool
-_SB_SPEED_MIN  = 27.0    # ft/s sprint-speed corroboration (skipped when SprintSpeed missing)
-_XREG_BA       = 0.020   # xBA − AVG gap for a regression flag
-_XREG_SLG      = 0.030   # xSLG − SLG gap for a regression flag
-
-
-def _hit_badge(text, color, title=""):
-    """A translucent hitter badge chip in the QS/5K+ visual style (color-tinted bg + border)."""
-    r, g, b = int(color[1:3], 16), int(color[3:5], 16), int(color[5:7], 16)
-    tt = f' title="{title}"' if title else ""
-    return (
-        f'<span{tt} style="font-size:9px;font-weight:700;color:{color};'
-        f'background:rgba({r},{g},{b},0.12);border:1px solid rgba({r},{g},{b},0.35);'
-        f'border-radius:3px;padding:1px 5px;margin-left:5px;vertical-align:middle;">{text}</span>'
-    )
-
 
 def _qs_stat_clause(row):
     """The run-prevention analytic behind a QS projection — xERA (the luck-stripped skill
@@ -726,14 +185,12 @@ def _qs_stat_clause(row):
         return f"{era:.2f} ERA"
     return ""
 
-
 def qs_badge(ip_g, er, row=None):
     """Cyan QS chip with a hover `title` naming the projected line that earned it, plus the
     length + run-prevention analytics (IP/start, xERA) backing the projection when available."""
     stat = _qs_stat_clause(row)
     tail = f" &mdash; {stat}" if stat else ""
     return _hit_badge("QS", CYAN, f"Projected {_fmt_ip(ip_g)} IP &middot; {er} ER{tail}")
-
 
 def _k5_stat_clause(row):
     """The K-skill 'advanced stat' behind a 5K+ projection: raw whiff (swing-and-miss)
@@ -751,14 +208,12 @@ def _k5_stat_clause(row):
         return f"{kpct * 100:.0f}% K rate"
     return ""
 
-
 def k5_badge(k, row=None):
     """Yellow 5K+ chip with a hover `title` naming the projected strikeouts, plus the
     swing-and-miss skill (whiff rate) that backs the projection when available."""
     stat = _k5_stat_clause(row)
     tail = f" &mdash; {stat}" if stat else ""
     return _hit_badge("5K+", YELLOW, f"Projected {k} strikeouts (&ge; 5){tail}")
-
 
 # ── Blowup-risk (low-floor) flag for starters ────────────────────────────────────
 # A DISPLAY-ONLY, skill-based read of how prone a starter is to a disaster outing
@@ -773,170 +228,15 @@ def k5_badge(k, row=None):
 # true-skill run prevention (xERA), and loud contact allowed (HardHit%) — carry the
 # real, stable signal. Validated in backtest_projections.py (skill risk decile lift
 # ~1.38x top decile / AUC ~0.54 on 1600+ walk-forward starts).
-_RISK_MIN        = 55.0   # 0-100 risk score at/above which the ⚠ RISK chip fires (~top ~12% of startable arms)
-_RISK_W          = {"whip": 0.32, "k": 0.22, "era": 0.28, "contact": 0.18}
-_RISK_WHIP_SPAN  = 0.35   # WHIP this far ABOVE league starter WHIP = max traffic risk
-_RISK_K_SPAN     = 0.09   # K% this far BELOW league starter K% = max no-escape risk
-_RISK_WPCT_SPAN  = 40.0   # WhiffPctile fallback: this far below the 50th pctile = max
-_RISK_ERA_SPAN   = 1.60   # effective ERA this far ABOVE league starter ERA = max run-prevention risk
-_RISK_HH_BASE    = 40.0   # HardHit% allowed baseline; +10 pts above = max contact risk
-_RISK_HH_SPAN    = 10.0
-_RISK_RECENT_W   = 0.25   # weight of the recent-form escalator when a recent ERA is supplied
-_RISK_RECENT_SPAN = 2.50  # recent ERA this far ABOVE the pitcher's own baseline = max cold-form risk
-
-
-def _effective_era(r):
-    """Actual ERA regressed toward xERA (IP-weighted, same shrinkage as the proj line's
-    _ERA_REG_PRIOR_IP). Better than pure xERA for a FLOOR read: a pitcher genuinely running
-    a high ERA has been giving up runs regardless of 'deserved', which is what wrecks a
-    start — but small samples are still pulled toward the luck-stripped skill."""
-    era = _n(r.get("ERA"))
-    if era <= 0:
-        return 0.0
-    target = _n(r.get("xERA")) or (_LG.get("era") or 4.00)
-    ip = _n(r.get("IP"))
-    return (era * ip + target * _ERA_REG_PRIOR_IP) / (ip + _ERA_REG_PRIOR_IP)
-
-
-def blowup_risk(r, recent_era=None):
-    """0-100 skill-based blowup (disaster-start) risk for a starter — higher = lower floor.
-    Combines baserunner traffic (WHIP), strikeout escape hatch (K%/whiff), effective run
-    prevention (`_effective_era` — ERA regressed toward xERA), and loud contact allowed
-    (HardHit%). League-anchored via `_LG`. When `recent_era` (e.g. L15 ERA) is supplied, a
-    cold recent stretch escalates the score (a currently-scuffling arm has a lower floor).
-    Display-only; never fed into any quality score. See _is_blowup_risk."""
-    whip = _n(r.get("WHIP"))
-    if whip <= 0:
-        return 0.0
-    _clamp = lambda x: 0.0 if x < 0 else (1.0 if x > 1 else x)
-
-    lg_whip = _LG.get("whip") or 1.28
-    whip_bad = _clamp((whip - lg_whip) / _RISK_WHIP_SPAN)
-
-    lg_k = _LG.get("k_pct") or 0.22
-    kpct = _n(r.get("Kpct_P"))
-    if kpct > 0:
-        k_bad = _clamp((lg_k - kpct) / _RISK_K_SPAN)
-    else:
-        wpct = _n(r.get("WhiffPctile"))
-        k_bad = _clamp((50.0 - wpct) / _RISK_WPCT_SPAN) if wpct > 0 else 0.5
-
-    lg_era = _LG.get("era") or 4.10
-    eff = _effective_era(r)
-    era_bad = _clamp((eff - lg_era) / _RISK_ERA_SPAN) if eff > 0 else 0.5
-
-    hh = _n(r.get("HardHitPctAllowed"))
-    contact_bad = _clamp((hh - _RISK_HH_BASE) / _RISK_HH_SPAN) if hh > 0 else 0.4
-
-    w = _RISK_W
-    base = w["whip"] * whip_bad + w["k"] * k_bad + w["era"] * era_bad + w["contact"] * contact_bad
-
-    # Recent-form escalator: ADDITIVE-ONLY. A cold recent stretch (recent ERA above the
-    # pitcher's own effective baseline) RAISES the floor risk; a hot stretch does NOT lower it
-    # (a good week doesn't cure a structurally shaky arm's blowup floor). Off when ERA missing.
-    rec = _n(recent_era) if recent_era is not None else 0.0
-    risk01 = base
-    if rec > 0 and eff > 0:
-        risk01 = _clamp(base + _RISK_RECENT_W * _clamp((rec - eff) / _RISK_RECENT_SPAN))
-    return round(100.0 * risk01, 1)
-
-
-def _is_blowup_risk(r, recent_era=None):
-    """True when a startable arm's skill (+ recent form) profile flags a low floor."""
-    return _is_sp(r) and blowup_risk(r, recent_era) >= _RISK_MIN
-
-
-def _risk_drivers(r, recent_era=None, cap=3):
-    """The 2-3 worst blowup drivers, worst-first, for the ⚠ RISK chip tooltip."""
-    whip = _n(r.get("WHIP"))
-    kpct = _n(r.get("Kpct_P"))
-    wpct = _n(r.get("WhiffPctile"))
-    eff  = _effective_era(r)
-    hh   = _n(r.get("HardHitPctAllowed"))
-    lg_whip = _LG.get("whip") or 1.28
-    lg_k    = _LG.get("k_pct") or 0.22
-    lg_era  = _LG.get("era") or 4.10
-    drivers = []
-    if whip > 0:
-        drivers.append(((whip - lg_whip) / _RISK_WHIP_SPAN, f"{whip:.2f} WHIP"))
-    if kpct > 0:
-        drivers.append(((lg_k - kpct) / _RISK_K_SPAN, f"{kpct*100:.0f}% K rate"))
-    elif wpct > 0:
-        drivers.append(((50.0 - wpct) / _RISK_WPCT_SPAN, f"{wpct:.0f}th-pctile whiff"))
-    if eff > 0:
-        drivers.append(((eff - lg_era) / _RISK_ERA_SPAN, f"{eff:.2f} eff. ERA"))
-    if hh > 0:
-        drivers.append(((hh - _RISK_HH_BASE) / _RISK_HH_SPAN, f"{hh:.0f}% hard-hit"))
-    rec = _n(recent_era) if recent_era is not None else 0.0
-    if rec > 0 and eff > 0:
-        drivers.append(((rec - eff) / _RISK_RECENT_SPAN, f"{rec:.2f} L15 ERA (cold)"))
-    drivers.sort(key=lambda d: -d[0])
-    return [txt for score, txt in drivers[:cap] if score > 0]
-
-
-def blowup_badge(r, recent_era=None):
-    """Red ⚠ RISK chip for a low-floor (blowup-prone) starter, or '' when not flagged.
-    Hover title names the worst 2-3 drivers. `recent_era` (L15) escalates on cold form.
-    Display-only, steer-aware."""
-    if not _is_blowup_risk(r, recent_era):
-        return ""
-    drivers = _risk_drivers(r, recent_era)
-    tip = "Low floor &mdash; blowup-prone: " + " &middot; ".join(drivers) if drivers else "Low floor &mdash; blowup-prone"
-    return _hit_badge("&#9888;", ORANGE, tip)
-
 
 # ── Pitcher buy-low / sell-high (ERA vs xERA) — the pitcher analog of the hitter $ / ▼ ──
 # MEAN-regression / luck read, DISTINCT from the ⚠ low-floor flag (single-start TAIL risk):
 # a pitcher can be sell-high without being blowup-prone (a soft-contact arm riding a low
 # BABIP) or blowup-prone without being sell-high (ugly ERA that already matches an ugly
 # xERA). They share the ERA/xERA signal so they sometimes co-fire — a strong "move him" cue.
-_XREG_ERA    = 1.00   # de-biased |xERA − ERA| gap for a pitcher regression flag (~12% each side)
-_XREG_ERA_IP = 20     # min IP so the gap is a real signal, not small-sample noise
 # xERA runs systematically ABOVE ERA in this data (~+0.33 median), so a raw threshold would
 # over-fire "sell". De-bias against the league median gap → the flag means luckier/unluckier
 # than TYPICAL. Set live from the snapshot (like _LG / _SCORE_CALIB); 0.0 cold-start default.
-_XERA_OFFSET = 0.0
-
-
-def compute_xera_offset(pitchers):
-    """Set the module `_XERA_OFFSET` = league median (xERA − ERA) over the qualified YEAR
-    pool, so `pitcher_regression_flag` measures luck RELATIVE to the systematic offset."""
-    global _XERA_OFFSET
-    gaps = sorted(_n(r.get("xERA")) - _n(r.get("ERA")) for r in pitchers
-                  if int(_n(r.get("Dataset")) or 0) == YEAR
-                  and _n(r.get("ERA")) > 0 and _n(r.get("xERA")) > 0 and _n(r.get("IP")) >= _XREG_ERA_IP)
-    if len(gaps) >= 20:
-        _XERA_OFFSET = gaps[len(gaps) // 2]
-
-
-def pitcher_regression_flag(row):
-    """'buy' (ERA unluckier than typical — positive regression likely), 'sell' (ERA luckier
-    than typical — regression risk), or None. Pitcher analog of `_regression_flag`, de-biased
-    by `_XERA_OFFSET` so it flags relative luck, not the league-wide xERA/ERA offset."""
-    era, xera, ip = _n(row.get("ERA")), _n(row.get("xERA")), _n(row.get("IP"))
-    if era <= 0 or xera <= 0 or ip < _XREG_ERA_IP:
-        return None
-    adj = (xera - era) - _XERA_OFFSET   # + = luckier than typical, − = unluckier
-    if adj >= _XREG_ERA:
-        return "sell"
-    if adj <= -_XREG_ERA:
-        return "buy"
-    return None
-
-
-def pitcher_regression_badge(row):
-    """Green $ (buy-low) / red ▼ (sell-high) chip for a pitcher whose ERA has diverged from
-    xERA, or '' when neither. Display-only (never folded into any score); hover names the
-    ERA vs xERA gap. SEPARATE from ⚠ (tail risk) — see the note above."""
-    flag = pitcher_regression_flag(row)
-    if not flag:
-        return ""
-    era, xera = _n(row.get("ERA")), _n(row.get("xERA"))
-    gap = f"ERA {era:.2f} vs xERA {xera:.2f}"
-    if flag == "buy":
-        return _hit_badge("$", GREEN, gap + " &mdash; ERA above expected, positive regression likely (buy-low)")
-    return _hit_badge("&#9660;", RED, gap + " &mdash; ERA below expected, regression risk (sell-high)")
-
 
 def hitter_badges(row, hit_pctile=None, cap=None):
     """Concatenated tactical badge HTML for a hitter row (priority PWR→SB→BUY/SELL; `cap=None`
@@ -970,7 +270,6 @@ def hitter_badges(row, hit_pctile=None, cap=None):
 
     return "".join(badges[:cap])
 
-
 def fa_relievers(pitchers, claimed=None):
     claimed = claimed or set()
     fa = [
@@ -986,7 +285,6 @@ def fa_relievers(pitchers, claimed=None):
     for r in fa:
         r["_rp_score"] = rp_score(r)
     return sorted(fa, key=lambda r: -r["_rp_score"])[:3]
-
 
 def save_role_watch(pitchers, my_team, claimed=None):
     """Detect save-role momentum for the volatile SVHD category. Returns
@@ -1028,7 +326,6 @@ def save_role_watch(pitchers, my_team, claimed=None):
     fading.sort(key=lambda x: -x["season"])
     return emerging[:3], fading[:3]
 
-
 def fa_hitters(hitters, claimed=None, idx_recent=None):
     claimed = claimed or set()
     fa = [
@@ -1042,7 +339,6 @@ def fa_hitters(hitters, claimed=None, idx_recent=None):
     for r in fa:
         r["_score"] = _blend(r, hitter_score, idx_recent) if idx_recent is not None else hitter_score(r)
     return sorted(fa, key=lambda r: -r["_score"])[:12]
-
 
 def luck_standings(roto_rows, standings):
     totals = {}
@@ -1070,7 +366,6 @@ def luck_standings(roto_rows, standings):
         })
     return sorted(result, key=lambda r: r["standing"])
 
-
 def category_ranks(roto_rows, my_team):
     CATS = ["R", "HR", "RBI", "SB", "OPS", "B_SO", "K", "QS", "W", "ERA", "WHIP", "SVHD"]
     my_key = " ".join(my_team.split())
@@ -1091,144 +386,11 @@ def category_ranks(roto_rows, my_team):
                 my_ranks[c] = rank
     return my_ranks, len(teams)
 
-
-def team_category_ranks(roto_rows):
-    """{team_key: {cat: rank}}, n_teams — rank 1 = best in that category. Generalizes
-    category_ranks (which returns my team only) to EVERY team, for Trade Radar. Same
-    {cat}_Points aggregation, so _LOWER_BETTER is already baked into the points."""
-    CATS = ["R", "HR", "RBI", "SB", "OPS", "B_SO", "K", "QS", "W", "ERA", "WHIP", "SVHD"]
-    totals = {}
-    for row in roto_rows:
-        t = " ".join((row.get("Team") or "").split())
-        if not t:
-            continue
-        if t not in totals:
-            totals[t] = {c: 0.0 for c in CATS}
-        for c in CATS:
-            totals[t][c] += float(row.get(f"{c}_Points") or 0)
-    teams = list(totals.keys())
-    ranks = {t: {} for t in teams}
-    for c in CATS:
-        ranked = sorted(teams, key=lambda t: -totals[t][c])
-        for rank, t in enumerate(ranked, 1):
-            ranks[t][c] = rank
-    return ranks, len(teams)
-
-
-POS_GROUPS = [
-    ("C",  {"C"},                   "hit"),
-    ("1B", {"1B"},                  "hit"),
-    ("2B", {"2B"},                  "hit"),
-    ("3B", {"3B"},                  "hit"),
-    ("SS", {"SS"},                  "hit"),
-    ("OF", {"OF", "LF", "CF", "RF"},"hit"),
-    ("SP", {"SP"},                  "pit"),
-    ("RP", {"RP"},                  "pit"),
-]
-
 # Typical starting slots per position. positional_breakdown ranks each team on the
 # average of its top-K players here (not the mean of ALL eligible players), so a
 # team's bench/utility depth — e.g. a backup catcher who carries 1B eligibility, or
 # a cold bat sitting behind a starter — can't dilute a position into a phantom
 # "need". K ~ the league's active-lineup count at each spot.
-POS_STARTERS = {"C": 1, "1B": 1, "2B": 1, "3B": 1, "SS": 1, "OF": 3, "SP": 4, "RP": 3}
-
-
-def positional_breakdown(pitchers, hitters, my_team, best_recent_p=None, best_recent_h=None):
-    my_key = " ".join(my_team.split())
-    if best_recent_p is None:
-        best_recent_p = {r["PlayerName"]: r for r in pitchers if int(r.get("Dataset", 0) or 0) == 30 and r.get("PlayerName")}
-    if best_recent_h is None:
-        best_recent_h = {r["PlayerName"]: r for r in hitters  if int(r.get("Dataset", 0) or 0) == 30 and r.get("PlayerName")}
-    results = []
-    for pos_label, slots, ptype in POS_GROUPS:
-        source   = pitchers if ptype == "pit" else hitters
-        score_fn = pitcher_score if ptype == "pit" else hitter_score
-        idx30    = best_recent_p if ptype == "pit" else best_recent_h
-        season   = [r for r in source if int(r.get("Dataset", 0) or 0) == YEAR]
-
-        def pos_match(r, slots=slots, pos_label=pos_label):
-            if pos_label == "SP":
-                return _is_sp(r)
-            if pos_label == "RP":
-                parts = str(r.get("Position", "")).split(", ")
-                return any(s in parts for s in slots) and not _is_sp(r)
-            parts = str(r.get("Position", "")).split(", ")
-            return any(s in parts for s in slots)
-
-        def score(r, ptype=ptype, score_fn=score_fn, idx30=idx30):
-            if ptype == "pit":
-                return _score_p(r, idx30)   # role-aware: SP blend / RP rp_score
-            return _blend(r, score_fn, idx30)
-
-        my_p = sorted(
-            [r for r in season if " ".join((r.get("FantasyTeam") or "").split()) == my_key and pos_match(r)],
-            key=lambda r: -score(r),
-        )
-        for r in my_p:
-            r["_pscore"] = score(r)
-
-        # Per-team STARTER score at this position → league rank. Rank on each team's
-        # top-K players (K = typical starting slots, POS_STARTERS) rather than the mean
-        # of ALL eligible players, so bench/utility depth (e.g. a backup catcher carrying
-        # 1B eligibility, or a cold bat behind a starter) can't dilute a position into a
-        # phantom "need".
-        k = POS_STARTERS.get(pos_label, 1)
-        def _starter_avg(scores, k=k):
-            top = sorted(scores, reverse=True)[:k]
-            return sum(top) / len(top) if top else 0
-        team_scores = {}
-        for r in season:
-            t = r.get("FantasyTeam", "")
-            if t and pos_match(r):
-                team_scores.setdefault(t, []).append(score(r))
-        team_avgs = sorted(_starter_avg(v) for v in team_scores.values())
-        my_avg = _starter_avg([r["_pscore"] for r in my_p])
-        n = len(team_avgs)
-        rank = n - sum(1 for s in team_avgs if s <= my_avg) + 1 if n else None
-
-        # Viable check: only count players actually getting opportunities
-        if ptype == "pit":
-            if pos_label == "SP":
-                gs_min = _pit_viable_min("SP", "GS")
-                viable = lambda r: _n(r.get("GS")) >= gs_min
-            else:
-                gp_min = _pit_viable_min("RP", "GP")
-                ip_min = _pit_viable_min("RP", "IP")
-                viable = lambda r: _n(r.get("ESPN_GP")) >= gp_min or _n(r.get("IP")) >= ip_min
-        else:
-            viable = lambda r: _n(r.get("OPS")) > 0.200 or _n(r.get("R")) + _n(r.get("RBI")) > 5
-
-        # Best FA at this position (exclude DL players and benchies)
-        fa = sorted(
-            [r for r in season if r.get("FantasyTeam", "") == "" and pos_match(r)
-             and str(r.get("FreeAgentInjuryStatus", "")) not in _DL_STATUSES
-             and viable(r)],
-            key=lambda r: -score(r),
-        )
-        for r in fa:
-            r["_pscore"] = score(r)
-
-        top3 = [r["_pscore"] for r in fa[:3]]
-        fa_quality = sum(top3) / len(top3) if top3 else 0
-        # Weakest player is an implicit drop/replace target, so skip anyone parked in an
-        # IL slot — cutting them frees no active/bench room. Fall back to the full list
-        # only if every player at the position is on IL.
-        drop_pool = [r for r in my_p if not _on_il(r)] or my_p
-        results.append({
-            "pos":          pos_label,
-            "ptype":        ptype,
-            "starter":      my_p[0] if my_p else None,   # rank-defining anchor (top score)
-            "worst_player": drop_pool[-1] if drop_pool else None,
-            "my_avg":       round(my_avg, 1),
-            "rank":         rank,
-            "n_teams":      n,
-            "top_fa":       fa[:1],
-            "fa_depth":     len(fa),
-            "fa_quality":   fa_quality,
-        })
-    return results
-
 
 def roster_alerts(pitchers, hitters, my_team):
     my_key = " ".join(my_team.split())
@@ -1244,7 +406,6 @@ def roster_alerts(pitchers, hitters, my_team):
             seen.add(name)
     return alerts
 
-
 def my_upcoming_starts(pitchers, my_team, week_end=None):
     my_key = " ".join(my_team.split())
     today_str = datetime.now().strftime("%Y-%m-%d")
@@ -1257,7 +418,6 @@ def my_upcoming_starts(pitchers, my_team, week_end=None):
         and (week_end is None or r.get("PSP_Date", "") <= week_end)
     ]
     return sorted(sp, key=lambda r: r.get("PSP_Date", ""))
-
 
 def opponent_week_intel(pitchers, hitters, opp_team, best_recent_h, today_str, week_end_str):
     """Scouting data on what the opponent brings this week: their upcoming starts,
@@ -1288,137 +448,13 @@ def opponent_week_intel(pitchers, hitters, opp_team, best_recent_h, today_str, w
     return {"n_starters": len(opp_sp), "n_starts": n_starts,
             "two_start": two_start, "hot_hitters": [(r, _recent_ops(r)) for r in hot]}
 
-
 # ── TEAM LOGOS ────────────────────────────────────────────────────────────────
-
-_TEAM_ESPN = {
-    "ARI": "ari", "ATL": "atl", "BAL": "bal", "BOS": "bos",
-    "CHC": "chc", "CWS": "chw", "CIN": "cin", "CLE": "cle",
-    "COL": "col", "DET": "det", "HOU": "hou", "KC":  "kc",
-    "LAA": "laa", "LAD": "lad", "MIA": "mia", "MIL": "mil",
-    "MIN": "min", "NYM": "nym", "NYY": "nyy", "ATH": "oak",
-    "PHI": "phi", "PIT": "pit", "SD":  "sd",  "SEA": "sea",
-    "SF":  "sf",  "STL": "stl", "TB":  "tb",  "TEX": "tex",
-    "TOR": "tor", "WSH": "wsh",
-}
-
-_FULLNAME_TO_ABBREV = {
-    "Arizona Diamondbacks": "ARI", "Atlanta Braves": "ATL",
-    "Baltimore Orioles": "BAL",    "Boston Red Sox": "BOS",
-    "Chicago Cubs": "CHC",         "Chicago White Sox": "CWS",
-    "Cincinnati Reds": "CIN",      "Cleveland Guardians": "CLE",
-    "Colorado Rockies": "COL",     "Detroit Tigers": "DET",
-    "Houston Astros": "HOU",       "Kansas City Royals": "KC",
-    "Los Angeles Angels": "LAA",   "Los Angeles Dodgers": "LAD",
-    "Miami Marlins": "MIA",        "Milwaukee Brewers": "MIL",
-    "Minnesota Twins": "MIN",      "New York Mets": "NYM",
-    "New York Yankees": "NYY",     "Athletics": "ATH",
-    "Oakland Athletics": "ATH",    "Sacramento Athletics": "ATH",
-    "Philadelphia Phillies": "PHI","Pittsburgh Pirates": "PIT",
-    "San Diego Padres": "SD",      "Seattle Mariners": "SEA",
-    "San Francisco Giants": "SF",  "St. Louis Cardinals": "STL",
-    "Tampa Bay Rays": "TB",        "Texas Rangers": "TEX",
-    "Toronto Blue Jays": "TOR",    "Washington Nationals": "WSH",
-}
 
 # Favorite MLB team(s) — their games are pinned to the top of "Today's MLB Games"
 # regardless of matchup-overlap score (the manager is an Atlanta fan and wants to see
 # them first). Set of team abbrevs (as _FULLNAME_TO_ABBREV maps them). Empty = no pin.
-_FAVORITE_MLB_TEAMS = {"ATL"}
-
-
-def team_logo(abbrev, size=20):
-    espn = _TEAM_ESPN.get(str(abbrev or "").upper(), "")
-    if not espn:
-        return ""
-    return (
-        f'<img src="https://a.espncdn.com/i/teamlogos/mlb/500/{espn}.png" '
-        f'width="{size}" height="{size}" '
-        f'style="vertical-align:middle;border-radius:2px;margin-right:5px;" '
-        f'alt="{abbrev}">'
-    )
-
-
-def opp_logo(psp_home_away, size=18):
-    """Return logo for the opponent team in a PSP_HomeVAway string."""
-    if not psp_home_away or " " not in psp_home_away:
-        return ""
-    full_name = psp_home_away.split(" ", 1)[1]
-    abbrev = _FULLNAME_TO_ABBREV.get(full_name, "")
-    return team_logo(abbrev, size) if abbrev else ""
-
-
-_FANTASY_EMOJI = {
-    "Giga Vlad":        ("🧛", "#6d28d9"),  # Vlad the vampire
-    "Dumpsta Fire":     ("🔥", "#ea580c"),  # dumpster fire
-    "Kai-Wei Jelly":    ("🍇", "#7e22ce"),  # grape jelly
-    "The BIG Dumpers":  ("💩", "#78350f"),  # self-explanatory
-    "Walking Wounded":  ("🩹", "#0369a1"),  # always on the IL
-}
-
-_BAD_LOGO_DOMAINS = ("mystique-api.fantasy.espn.com", "cdn.citybeat.com")
-
-
-def _emoji_avatar(team_name, size):
-    """Colored circle with emoji or initials — used when logo URL won't render in email."""
-    norm = " ".join(team_name.split())
-    emoji, color = _FANTASY_EMOJI.get(norm, ("", ""))
-    if not emoji:
-        words = norm.split()
-        emoji = "".join(w[0].upper() for w in words[:2])
-        color = f"#{abs(hash(norm)) % 0xBBBBBB + 0x222222:06x}"
-    font_size = max(10, int(size * 0.58))
-    return (
-        f'<span style="display:inline-block;width:{size}px;height:{size}px;'
-        f'border-radius:50%;background:{color};text-align:center;'
-        f'line-height:{size}px;font-size:{font_size}px;'
-        f'vertical-align:middle;margin-right:6px;">{emoji}</span>'
-    )
-
-
-def fantasy_logo(url, size=26, team_name=""):
-    """Render a fantasy team logo. Falls back to an emoji avatar for auth-gated or dead URLs."""
-    if not url or any(d in url for d in _BAD_LOGO_DOMAINS):
-        return _emoji_avatar(team_name, size) if team_name else ""
-    return (
-        f'<img src="{url}" width="{size}" height="{size}" '
-        f'style="vertical-align:middle;border-radius:50%;margin-right:6px;object-fit:contain;" '
-        f'alt="">'
-    )
-
 
 # ── HTML HELPERS ───────────────────────────────────────────────────────────────
-
-BG       = "#080e1c"
-SURFACE  = "#101827"
-SURFACE2 = "#0d1424"
-BORDER   = "#1e2d45"
-TEXT     = "#e2e8f0"
-MUTED    = "#64748b"
-ACCENT   = "#3b82f6"   # also the pitcher two-start "2" badge (solid, white text) + dashboard ×2 markers
-GREEN    = "#22c55e"
-RED      = "#ef4444"
-YELLOW   = "#f59e0b"
-ORANGE   = "#ea580c"   # starter low-floor ⚠ badge (burnt orange) — deliberately distinct from the amber YELLOW 5K+ chip
-PURPLE   = "#a855f7"   # hitter PWR badge (translucent) — distinct from green/yellow/red
-CYAN     = "#22d3ee"   # pitcher QS badge (translucent) + Trade Radar position chip — QS + two-start can co-occur, so 2 moved to blue
-SILVER   = "#c8d0da"   # hitter SB "Quicksilver" speed badge (metallic, distinct from TEXT/MUTED)
-
-TH_S = f"padding:8px 10px;background:{SURFACE};color:{MUTED};font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.7px;border-bottom:2px solid {BORDER};white-space:nowrap;"
-TD_S = f"padding:7px 10px;border-bottom:1px solid {BORDER};color:{TEXT};font-size:13px;vertical-align:middle;"
-TDC  = f"padding:7px 10px;border-bottom:1px solid {BORDER};color:{TEXT};font-size:13px;text-align:center;vertical-align:middle;"
-
-
-def badge(score, small=False):
-    s = int(score or 0)
-    if s >= 72:   bg, fg = "#16a34a", "#fff"
-    elif s >= 52: bg, fg = "#2563eb", "#fff"
-    elif s >= 32: bg, fg = "#d97706", "#fff"
-    else:          bg, fg = "#dc2626", "#fff"
-    pad, radius, fs = ("1px 6px", "10px", "9px") if small else ("2px 9px", "12px", "11px")
-    return (f'<span style="background:{bg};color:{fg};padding:{pad};border-radius:{radius};'
-            f'font-size:{fs};font-weight:800;">{s}</span>')
-
 
 # ── Tap-to-expand Score breakdown (v2) ─────────────────────────────────────────
 # The Score badge links to a hidden, FULL-WIDTH <tr> rendered directly below the
@@ -1431,162 +467,6 @@ def badge(score, small=False):
 # in the head <style> overrides it when tapped. Gmail's inline body strips <style>, so
 # the rows stay hidden there and the badge link is a harmless no-op — the score badge
 # itself always shows. The user reads the attachment, where the reveal works.
-
-_BD_SEQ = [0]
-
-
-def _bd_uid(prefix, name):
-    """Globally-unique anchor id for one breakdown row (a player can appear in several
-    tables, so the running counter guarantees uniqueness across the document)."""
-    _BD_SEQ[0] += 1
-    slug = re.sub(r"[^a-z0-9]", "", str(name or "").lower())[:16]
-    return f"bd-{prefix}-{slug}-{_BD_SEQ[0]}"
-
-
-def _st(x, dec=3):
-    """Format a stat, dropping the leading zero for sub-1 values (0.272 → '.272')."""
-    s = f"{x:.{dec}f}"
-    return s[1:] if 0 <= x < 1 else s
-
-
-def _hit_clauses(r, comps):
-    """(fill, strength_phrase, weakness_phrase) per hitter component, for narration."""
-    ops = _n(r.get("OPS")); wrc = _n(r.get("wRCplus")); hr = _n(r.get("HR"))
-    iso = _n(r.get("ISO")); rbi = _n(r.get("RBI")); sb = _n(r.get("SB"))
-    sprint = _n(r.get("SprintSpeed")); xwoba = _n(r.get("xwOBA")); hrp = _n(r.get("HR_Probability"))
-    maxes = {"Prod": 30, "HR": 16, "ISO": 6, "RBI": 10, "Speed": 10, "xwOBA": 10, "HR%": 8}
-    out = []
-
-    def add(key, strong, weak):
-        if key in comps:
-            out.append((comps[key] / maxes[key], strong, weak))
-
-    prod_stat = f"wRC+ {int(wrc)}" if wrc > 0 else f"OPS {_st(ops)}"
-    add("Prod", f"strong production ({prod_stat})", f"weak production ({prod_stat})")
-    # HR (volume) and ISO (rate) are the same "power" concept — never let one surface as a
-    # strength while the other reads as a weakness ("big raw power (ISO .190) … little power
-    # (6 HR)"). Keep the strength; drop the opposite power stat's weakness clause.
-    hr_fill  = comps.get("HR",  0.0) / maxes["HR"]  if "HR"  in comps else None
-    iso_fill = comps.get("ISO", 0.0) / maxes["ISO"] if ("ISO" in comps and iso > 0) else None
-    hr_weak, iso_weak = f"little power ({int(hr)} HR)", f"flat ISO ({_st(iso)})"
-    if hr_fill is not None and iso_fill is not None:
-        if iso_fill >= 0.60 and hr_fill <= 0.35:   # strong rate, weak volume → drop HR weakness
-            hr_weak = None
-        elif hr_fill >= 0.60 and iso_fill <= 0.35:  # strong volume, weak rate → drop ISO weakness
-            iso_weak = None
-    add("HR", f"real power ({int(hr)} HR)", hr_weak)
-    if iso > 0:
-        add("ISO", f"big raw power (ISO {_st(iso)})", iso_weak)
-    add("RBI", f"drives in runs ({int(rbi)} RBI)", f"few RBI ({int(rbi)})")
-    if sprint > 0:
-        add("Speed", f"plus speed ({sprint:.1f} ft/s)", f"slow ({sprint:.1f} ft/s)")
-    else:
-        add("Speed", f"steals bags ({int(sb)} SB)", f"no steals ({int(sb)} SB)")
-    if xwoba > 0:
-        add("xwOBA", f"quality contact (xwOBA {_st(xwoba)})", f"empty contact (xwOBA {_st(xwoba)})")
-    if hrp > 0:
-        add("HR%", f"high HR odds ({hrp * 100:.0f}%/gm)", None)   # low HR odds isn't a real weakness
-    return out
-
-
-def _sp_clauses(r, comps):
-    """(fill, strength, weakness) per SP component."""
-    kpct = _n(r.get("Kpct_P")); kip = _n(r.get("K/IP")); era = _n(r.get("ERA"))
-    whip = _n(r.get("WHIP")); brl = _n(r.get("BarrelPctAllowed")); xwoba_ag = _n(r.get("xwOBA_against"))
-    maxes = {"K": 28, "RunPrev": 28, "WHIP": 20, "Contact": 12, "Role": 12}
-    out = []
-
-    def add(key, strong, weak):
-        if key in comps:
-            out.append((comps[key] / maxes[key], strong, weak))
-
-    kstat = f"{kpct * 100:.0f}% K" if kpct > 0 else (f"{kip:.2f} K/IP" if kip > 0 else "K rate")
-    add("K", f"swing-and-miss ({kstat})", f"low strikeouts ({kstat})")
-    add("RunPrev", f"prevents runs ({era:.2f} ERA)", f"gets hit hard ({era:.2f} ERA)")
-    add("WHIP", f"limits baserunners ({whip:.2f} WHIP)", f"high WHIP ({whip:.2f})")
-    if brl > 0:
-        add("Contact", f"soft contact ({brl:.1f}% barrels)", f"hard contact ({brl:.1f}% barrels)")
-    elif xwoba_ag > 0:
-        add("Contact", f"soft contact (xwOBA-ag {_st(xwoba_ag)})", f"hard contact (xwOBA-ag {_st(xwoba_ag)})")
-    return out   # Role (start volume) is a marker, not a skill — left out of the narrative
-
-
-def _rp_clauses(r, comps):
-    """(fill, strength, weakness) per RP component."""
-    svhd = _n(r.get("ESPN_SVHD")) or _n(r.get("SVHD"))
-    k = _n(r.get("ESPN_K")) or _n(r.get("K"))
-    w = _n(r.get("ESPN_W")) or _n(r.get("W"))
-    ipg = _n(r.get("IP_per_G")); era = _n(r.get("ERA")); whip = _n(r.get("WHIP"))
-    brl = _n(r.get("BarrelPctAllowed"))
-    maxes = {"SVHD": 15, "K": 26, "W": 15, "IP/G": 8, "RunPrev": 16, "WHIP": 12, "Contact": 8}
-    out = []
-
-    def add(key, strong, weak):
-        if key in comps:
-            out.append((comps[key] / maxes[key], strong, weak))
-
-    add("SVHD", f"save/hold volume ({int(svhd)} SV+H)", None)   # punt-saves: low SVHD isn't a knock
-    add("K", f"racks up Ks ({int(k)} K)", f"low K total ({int(k)})")
-    add("W", f"vulturing wins ({int(w)} W)", None)
-    add("IP/G", f"multi-inning role ({ipg:.1f} IP/app)", None)
-    add("RunPrev", f"prevents runs ({era:.2f} ERA)", f"gets hit ({era:.2f} ERA)")
-    add("WHIP", f"limits baserunners ({whip:.2f} WHIP)", f"high WHIP ({whip:.2f})")
-    if brl > 0:
-        add("Contact", f"soft contact ({brl:.1f}% barrels)", f"hard contact ({brl:.1f}% barrels)")
-    return out
-
-
-def _score_narrative(clauses):
-    """Turn per-component (fill, strength, weakness) tuples into a prose sentence naming
-    the 2 strongest drivers (fill ≥ .60) and the 2 weakest (fill ≤ .35)."""
-    strengths = sorted([(f, s) for (f, s, w) in clauses if s and f >= 0.60], key=lambda x: -x[0])
-    weaks     = sorted([(f, w) for (f, s, w) in clauses if w and f <= 0.35], key=lambda x: x[0])
-    s_txt = [t for _, t in strengths[:2]]
-    w_txt = [t for _, t in weaks[:2]]
-    if s_txt and w_txt:
-        return f"Carried by {' and '.join(s_txt)}; held back by {', '.join(w_txt)}."
-    if s_txt:
-        return f"Carried by {' and '.join(s_txt)}; no glaring holes."
-    if w_txt:
-        return f"Held back by {', '.join(w_txt)}."
-    return "Balanced across the board — no standout strength or weakness."
-
-
-def _badge_ctx_wrap(lines):
-    """Wrap per-badge explanation lines in a muted block for the tap-to-expand score panel."""
-    if not lines:
-        return ""
-    inner = "".join(f'<div style="margin-top:3px;">{ln}</div>' for ln in lines)
-    return f'<div style="margin-top:6px;color:{MUTED};">{inner}</div>'
-
-
-def _hit_badge_context(row, hit_pctile=None, cap=None):
-    """Explain whichever hitter badges `row` earns — SAME predicates, order and cap as
-    hitter_badges (cap=None: every applicable badge) — so the tap-to-expand panel explains
-    exactly the chips shown, no more."""
-    lines = []
-    hrp = _n(row.get("HR_Probability"))
-    if hrp >= _PWR_HRP_MIN:
-        lines.append(f'{_hit_badge("PWR", PURPLE)} power threat &mdash; modeled HR probability {hrp*100:.0f}% '
-                     f'(&ge; {_PWR_HRP_MIN*100:.0f}%, top power tier).')
-    if hit_pctile is not None:
-        sb = _n(row.get("SB")); spd = _n(row.get("SprintSpeed"))
-        if sb > 0 and _cat_pctile(hit_pctile, "SB", sb) >= _SB_PCTILE_MIN and (spd <= 0 or spd >= _SB_SPEED_MIN):
-            top = (1.0 - _cat_pctile(hit_pctile, "SB", sb)) * 100
-            spd_s = f' &middot; {spd:.1f} ft/s sprint' if spd > 0 else ''
-            lines.append(f'{_hit_badge("SB", SILVER)} base-stealer &mdash; {sb:.0f} SB, top {top:.0f}% of the league{spd_s}.')
-    avg, iso, xba, xslg = _n(row.get("AVG")), _n(row.get("ISO")), _n(row.get("xBA")), _n(row.get("xSLG"))
-    if avg > 0 and iso > 0 and xba > 0 and xslg > 0:
-        slg = iso + avg; d_ba = xba - avg; d_slg = xslg - slg
-        gap = f'xBA {xba:.3f} vs AVG {avg:.3f}, xSLG {xslg:.3f} vs SLG {slg:.3f}'
-        if d_ba >= _XREG_BA and d_slg >= _XREG_SLG:
-            lines.append(f'{_hit_badge("$", GREEN)} under his Statcast expected stats ({gap}) '
-                         f'&mdash; positive regression likely (buy-low).')
-        elif -d_ba >= _XREG_BA and -d_slg >= _XREG_SLG:
-            lines.append(f'{_hit_badge("&#9660;", RED)} over his Statcast expected stats ({gap}) '
-                         f'&mdash; regression risk (sell-high).')
-    return _badge_ctx_wrap(lines[:cap])
-
 
 def _sp_badge_context(row, qs_fires, k_fires, two_start_n, recent_era=None):
     """Explain the SP badges (2-START / QS / 5K+ / ⚠ RISK) actually shown on a row. Fed the
@@ -1623,90 +503,6 @@ def _sp_badge_context(row, qs_fires, k_fires, two_start_n, recent_era=None):
                          f'{xera:.2f} xERA &mdash; unlucky, positive regression likely (buy-low).')
     return _badge_ctx_wrap(lines)
 
-
-def _hitter_score_breakdown(r, idx_recent=None, hit_pctile=None):
-    """Prose breakdown of a hitter's Score for the tap-to-expand panel."""
-    comps, mult = hitter_score(r, _parts=True)
-    if not comps:
-        return ""
-    season = hitter_score(r)
-    html = f'<b style="color:{TEXT};">Hitter score {season}.</b> {_score_narrative(_hit_clauses(r, comps))}'
-    if mult < 0.995:
-        html += f' Trimmed to {round(mult * 100)}% for thin playing time (few at-bats vs a regular).'
-    if idx_recent:
-        rec = idx_recent.get(r.get("PlayerName", ""))
-        if rec:
-            rs = hitter_score(rec)
-            if rs > 0:
-                ds  = int(_n(rec.get("Dataset")) or 0)
-                win = f"{ds}-day" if ds in (7, 15, 30) else "7-day"
-                tag = "hot" if rs > season else ("cold" if rs < season else "steady")
-                html += (f' {win} form {rs} ({tag}) → shown blends '
-                         f'{round((1 - _BLEND_W) * 100)}% season / {round(_BLEND_W * 100)}% recent.')
-    hrp = _n(r.get("HR_Probability"))
-    if hrp > 0:
-        drivers = _hrp_driver_str(r)
-        line = f'HR% {hrp * 100:.0f}% modeled per-game HR probability'
-        line += f' ({drivers})' if drivers else ''
-        html += f'<div style="margin-top:6px;color:{MUTED};">{line}</div>'
-    html += _hit_badge_context(r, hit_pctile)
-    return html
-
-
-def _pitcher_score_breakdown(r, idx_recent=None):
-    """Prose breakdown of a pitcher's Score. Role-aware: SP → pitcher_score components
-    (blended with recent form); RP → rp_score (unblended)."""
-    if _is_sp(r):
-        comps, mult = pitcher_score(r, _parts=True)
-        season, role, clauses = pitcher_score(r), "SP", _sp_clauses(r, comps)
-    else:
-        comps, mult = rp_score(r, _parts=True)
-        season, role, clauses = rp_score(r), "RP", _rp_clauses(r, comps)
-    if not comps:
-        return ""
-    html = f'<b style="color:{TEXT};">{role} score {season}.</b> {_score_narrative(clauses)}'
-    if mult < 0.995:
-        html += f' Trimmed to {round(mult * 100)}% for small innings sample.'
-    if role == "SP" and idx_recent:
-        rec = idx_recent.get(r.get("PlayerName", ""))
-        if rec:
-            rs = pitcher_score(rec)
-            if rs > 0:
-                ds  = int(_n(rec.get("Dataset")) or 0)
-                win = f"{ds}-day" if ds in (7, 15, 30) else "15-day"
-                tag = "hot" if rs > season else ("cold" if rs < season else "steady")
-                html += (f' {win} form {rs} ({tag}) → shown blends '
-                         f'{round((1 - _BLEND_W) * 100)}% season / {round(_BLEND_W * 100)}% recent.')
-    return html
-
-
-def score_reveal(score, breakdown_html, uid=None, colspan=1, small=False):
-    """Return (cell_html, row_html): the Score-cell badge and the full-width breakdown
-    <tr> to append immediately after the player's row. The badge is an anchor to the
-    hidden row, revealed via CSS :target in the browser attachment. Falls back to a
-    plain badge with an empty row when there is no breakdown or no uid. `small` shrinks the
-    pill to sit inline with 10px sub-text (e.g. the Positional Breakdown drop candidate)."""
-    if not breakdown_html or not uid:
-        return badge(score, small), ""
-    caret_fs = "8px" if small else "9px"
-    cell = (
-        f'<a href="#{uid}" class="bdlink" title="Tap for score breakdown" '
-        f'style="text-decoration:none;white-space:nowrap;">{badge(score, small)}'
-        f'<span style="color:{MUTED};font-size:{caret_fs};font-weight:700;">&nbsp;&#9662;</span></a>'
-    )
-    row = (
-        f'<tr id="{uid}" class="scorebd-row" style="display:none;">'
-        f'<td colspan="{colspan}" style="padding:0;border-bottom:1px solid {BORDER};">'
-        f'<div style="background:{SURFACE2};padding:8px 14px;font-size:11px;line-height:1.55;'
-        f'color:{MUTED};font-weight:400;border-left:3px solid {ACCENT};">'
-        f'{breakdown_html}'
-        f'<a href="#{uid}x" style="color:{MUTED};text-decoration:none;font-weight:700;'
-        f'float:right;margin-left:10px;">&#10005;</a>'
-        f'</div></td></tr>'
-    )
-    return cell, row
-
-
 # Progressive enhancement for the tap-to-expand Score breakdown: with JS (the
 # browser-opened attachment), clicking a score pill TOGGLES its breakdown open/closed —
 # no more hunting for the ✕. It preventDefaults so the URL fragment never changes, which
@@ -1714,50 +510,8 @@ def score_reveal(score, breakdown_html, uid=None, colspan=1, small=False):
 # get open-on-click + ✕-to-close). Handles both the <tr> (table) and <div> (trade-card)
 # breakdown variants; the ✕ still closes too. Attachment-only (Gmail strips <script> just
 # like it strips <style>), so the email body is unaffected.
-_BD_TOGGLE_SCRIPT = """<script>
-document.addEventListener('click', function(e){
-  var a = e.target.closest ? e.target.closest('a') : null;
-  if(!a) return;
-  var h = a.getAttribute('href') || '';
-  if(h.charAt(0) !== '#') return;
-  var id = h.slice(1);
-  if(a.className && a.className.indexOf('bdlink') !== -1){
-    var el = document.getElementById(id);
-    if(!el) return;
-    e.preventDefault();
-    var open = el.style.display !== 'none' && el.style.display !== '';
-    el.style.display = open ? 'none' : (el.tagName === 'TR' ? 'table-row' : 'block');
-  } else if(id.slice(-1) === 'x'){
-    var el2 = document.getElementById(id.slice(0, -1));
-    if(el2){ e.preventDefault(); el2.style.display = 'none'; }
-  }
-});
-</script>"""
-
-
-def v(val, dec=2):
-    """Format a numeric value; show em-dash for missing/negative."""
-    try:
-        f = float(val or 0)
-        if f < 0:
-            return f'<span style="color:{MUTED}">—</span>'
-        return f"{f:.{dec}f}"
-    except (TypeError, ValueError):
-        return f'<span style="color:{MUTED}">—</span>'
-
-
-def _fmt_ip(ip_decimal):
-    """Convert decimal IP to baseball notation: 5.333 → '5.1', 5.667 → '5.2', 6.0 → '6.0'."""
-    whole = int(ip_decimal)
-    outs = round((ip_decimal - whole) * 3)
-    if outs >= 3:
-        whole += 1
-        outs = 0
-    return f"{whole}.{outs}"
-
 
 _LEAGUE_AVG_OPS = 0.717  # fallback only — league team-OPS is derived per snapshot into _LG
-_ERA_REG_PRIOR_IP = 40.0  # ER-projection ERA-regression strength (see _proj_line_vals)
 
 def _proj_line_vals(r):
     """Numeric projected single-game line → (ip_per_start, ER, K), or None when
@@ -1797,7 +551,6 @@ def _proj_line_vals(r):
     k  = round(kip * ip_g * k_factor) if kip > 0 else 0
     return ip_g, er, k
 
-
 def _proj_is_qs(ip_g, er):
     """True when the projected line reads as a quality start (6+ displayed IP, ≤3 ER).
     Uses the same third-of-an-inning rounding as _fmt_ip so it matches what the reader
@@ -1807,14 +560,12 @@ def _proj_is_qs(ip_g, er):
         whole += 1
     return whole >= 6 and er <= 3
 
-
 def _proj_line_html(r):
     vals = _proj_line_vals(r)
     if vals is None:
         return f'<span style="color:{MUTED}">—</span>'
     ip_g, er, k = vals
     return f'<span style="color:{MUTED};font-size:10px;white-space:nowrap;">{_fmt_ip(ip_g)}&nbsp;IP&thinsp;·&thinsp;{er}&nbsp;ER&thinsp;·&thinsp;{k}K</span>'
-
 
 def _opp_ops_sub(r):
     """Small muted second line for the Matchup cell showing the opponent team's
@@ -1827,7 +578,6 @@ def _opp_ops_sub(r):
         f'<div style="color:{MUTED};font-size:10px;margin-top:1px;white-space:nowrap;">'
         f'Opp OPS {val:.3f}</div>'
     )
-
 
 def _whiff_sub(r):
     """Small muted second line under the K% cell showing the pitcher's raw overall
@@ -1842,7 +592,6 @@ def _whiff_sub(r):
         f'whiff {val:.0f}%</div>'
     )
 
-
 def _qs_sub(r):
     """Small muted second line under the QS% cell naming the run-prevention SKILL
     behind the projection: xERA (Baseball Savant, luck-stripped ERA — what the ER
@@ -1856,76 +605,6 @@ def _qs_sub(r):
         f'{val:.2f} xERA</div>'
     )
 
-
-def band_divider(label, color=None, anchor=None):
-    c = color or MUTED
-    # Anchor target for the "jump to" nav. name+id maximizes email-client support;
-    # where in-message anchors don't work the link is harmless and it jumps in the
-    # browser-rendered attachment.
-    anchor_html = f'<a name="{anchor}" id="{anchor}" style="text-decoration:none;"></a>' if anchor else ''
-    # "↑ Top" back-link on the right of each anchored band, so a reader who jumped
-    # down via the nav pills can return without scrolling. A matching-width left
-    # spacer keeps the label visually centered. Jumps in the attachment; harmless
-    # inline where fragment links are ignored.
-    top_link = (
-        f'<a href="#top" style="color:{MUTED};font-size:10px;font-weight:700;'
-        f'letter-spacing:1px;text-decoration:none;white-space:nowrap;">↑&nbsp;TOP</a>'
-    ) if anchor else ''
-    right_cell = f'<span style="padding-left:14px;">{top_link}</span>' if anchor else ''
-    left_spacer = '<span style="padding-right:14px;">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span>' if anchor else ''
-    return (
-        f'{anchor_html}'
-        f'<div style="display:flex;align-items:center;margin:32px 0 22px;">'
-        f'<div style="flex:1;height:1px;background:{BORDER};"></div>'
-        f'{left_spacer}'
-        f'<span style="padding:0 14px;color:{c};font-size:10px;font-weight:700;'
-        f'letter-spacing:2px;text-transform:uppercase;">{label}</span>'
-        f'{right_cell}'
-        f'<div style="flex:1;height:1px;background:{BORDER};"></div>'
-        f'</div>'
-    )
-
-
-def nav_bar():
-    """'Jump to' pill nav, rendered in the top-right of the header (not the body, so it
-    doesn't push Week at a Glance down). Anchor links behave like tabs without JS/CSS
-    tricks that Gmail strips; they jump in the attachment and degrade to harmless styled
-    links inline. Also drops the `top` anchor so the band `↑ TOP` links have a target."""
-    items = [
-        ("#band-myroster", "My Roster"),
-        ("#band-fa",       "Transactions"),
-        ("#band-season",   "Season"),
-        ("#band-glossary", "Glossary"),
-    ]
-    pills = "".join(
-        f'<a href="{href}" style="display:inline-block;padding:5px 11px;margin:0 0 5px 5px;'
-        f'background:rgba(255,255,255,0.04);border:1px solid {BORDER};border-radius:13px;color:#8fb4e8;'
-        f'font-size:11px;font-weight:700;text-decoration:none;letter-spacing:.3px;white-space:nowrap;">{label}</a>'
-        for href, label in items
-    )
-    return (
-        f'<a name="top" id="top" style="text-decoration:none;"></a>'
-        f'<div style="text-align:right;line-height:1.6;">'
-        f'<span style="color:{MUTED};font-size:9px;font-weight:700;text-transform:uppercase;'
-        f'letter-spacing:1px;display:block;margin-bottom:3px;">Jump to</span>{pills}</div>'
-    )
-
-
-def _hrp_driver_str(row):
-    """The HR-probability drivers (Barrel% · HardHit% · EV · xwOBA · ISO) as a joined
-    string, or "" when none are present. Single source for the HR% hover tooltip and
-    the expanded score-breakdown panel (so touch users see the same drivers)."""
-    b, hh, xw, ev, iso = (_n(row.get("Barrel_Pct")), _n(row.get("HardHit_Pct")),
-                          _n(row.get("xwOBA")), _n(row.get("MaxEV")), _n(row.get("ISO")))
-    parts = []
-    if b > 0:   parts.append(f"Barrel {b:.1f}%")
-    if hh > 0:  parts.append(f"HardHit {hh:.0f}%")
-    if ev > 0:  parts.append(f"EV {ev:.0f}")
-    if xw > 0:  parts.append(f"xwOBA {xw:.3f}")
-    if iso > 0: parts.append(f"ISO {iso:.3f}")
-    return " · ".join(parts)
-
-
 def _hrp_cell(row):
     """Colored HR% cell from the modeled per-game HR probability (HR_Probability,
     a Statcast contact-quality model). Hover shows the underlying drivers.
@@ -1938,7 +617,6 @@ def _hrp_cell(row):
     title = _hrp_driver_str(row) or "modeled HR probability"
     return (f'<span title="{title}" style="color:{c};font-weight:700;'
             f'border-bottom:1px dotted {MUTED};cursor:help;">{hrp*100:.0f}%</span>')
-
 
 def pos_stat_line(r, pos):
     """Build a muted stat line for a player in the positional breakdown."""
@@ -1973,65 +651,12 @@ def pos_stat_line(r, pos):
     line = " · ".join(parts)
     return f'<div style="color:{MUTED};font-size:10px;margin-top:2px;">{line}</div>'
 
-
-def hot_cold_cell(season_val, recent_val, lower_better=False, dec=2, hot_thresh=None, warm_thresh=None, no_data_title=None, td_style=None):
-    """Table cell showing recent stat + hot/cold icon vs season baseline.
-    td_style overrides the cell style (defaults to TDC) so a caller can render a
-    tighter cell that matches a compacted table."""
-    tdc = td_style or TDC
-    _dash_cell = (
-        f'<td style="{tdc}"><span style="color:{MUTED};cursor:help;border-bottom:1px dotted {MUTED};" title="{no_data_title}">—</span></td>'
-        if no_data_title else f'<td style="{tdc}color:{MUTED};">—</td>'
-    )
-    try:
-        sv = float(season_val or 0)
-        rv = float(recent_val or 0)
-        if sv <= 0 or rv <= 0:
-            return _dash_cell
-    except (TypeError, ValueError):
-        return _dash_cell
-
-    ht = hot_thresh  if hot_thresh  is not None else (0.75 if lower_better else 0.050)
-    wt = warm_thresh if warm_thresh is not None else (0.25 if lower_better else 0.020)
-
-    delta = (sv - rv) if lower_better else (rv - sv)   # positive = improvement
-
-    if delta >= ht:
-        icon, color = "🔥", GREEN
-    elif delta >= wt:
-        icon, color = "↑", GREEN
-    elif delta <= -ht:
-        icon, color = "❄", RED
-    elif delta <= -wt:
-        icon, color = "↓", RED
-    else:
-        icon, color = "", MUTED
-
-    val_str = f"{rv:.{dec}f}"
-    return (
-        f'<td style="{tdc}">'
-        f'<span style="color:{color};">{val_str}</span>'
-        f'{"&nbsp;" + icon if icon else ""}'
-        f'</td>'
-    )
-
-
 def inj_tag(r):
     inj = _get_injury_status(r)
     if not inj:
         return ""
     color = RED if (inj in _DL_STATUSES or inj.startswith("IL")) else YELLOW
     return f' <span style="color:{color};font-size:10px;font-weight:600;">{_fmt_status(inj)}</span>'
-
-
-def section_head(title, sub=""):
-    subtitle = f'<div style="color:{MUTED};font-size:11px;margin-top:2px;">{sub}</div>' if sub else ""
-    return (
-        f'<div style="border-left:3px solid {ACCENT};padding-left:11px;margin:0 0 10px 0;">'
-        f'<div style="color:{TEXT};font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;">{title}</div>'
-        f'{subtitle}</div>'
-    )
-
 
 def make_sparkline(roto, my_team, current_week, n=99, weekly_results=None):
     """
@@ -2117,26 +742,6 @@ def make_sparkline(roto, my_team, current_week, n=99, weekly_results=None):
     peak_label = f'<div style="color:{GREEN};font-size:9px;margin-top:2px;">Peak Wk: {peak_wk}</div>'
     return svg, peak_label
 
-
-def kpi_cell(label, value):
-    return (
-        f'<td class="kpi-cell" style="text-align:center;padding:14px 8px;border-right:1px solid {BORDER};">'
-        f'<div style="color:{MUTED};font-size:10px;text-transform:uppercase;letter-spacing:.7px;">{label}</div>'
-        f'<div style="color:{TEXT};font-size:20px;font-weight:800;margin-top:3px;">{value}</div>'
-        f'</td>'
-    )
-
-
-def kpi_cell_sm(label, value, color=None, font_size="20px", font_weight="800"):
-    val_color = color or TEXT
-    return (
-        f'<td class="kpi-cell" style="text-align:center;padding:8px 8px 10px;border-right:1px solid {BORDER};">'
-        f'<div style="color:{MUTED};font-size:9px;text-transform:uppercase;letter-spacing:.7px;">{label}</div>'
-        f'<div style="color:{val_color};font-size:{font_size};font-weight:{font_weight};margin-top:3px;">{value}</div>'
-        f'</td>'
-    )
-
-
 # ── MATCHUP SECTION ───────────────────────────────────────────────────────────
 
 _CAT_LABELS_MAP = {
@@ -2147,7 +752,6 @@ _CAT_LABELS_MAP = {
 _CAT_DEC = {
     "OPS": 3, "ERA": 2, "WHIP": 2,
 }
-
 
 def build_matchup_section(matchup, logos=None, my_team=MY_TEAM,
                           weekly_avgs=None, days_elapsed=None, remaining_proj=None,
@@ -2329,7 +933,6 @@ def build_matchup_section(matchup, logos=None, my_team=MY_TEAM,
         table
     )
 
-
 # ── ROSTER HOT/COLD ──────────────────────────────────────────────────────────
 
 def build_hot_cold_section(hitters, recent_hitting, my_team, best_recent_h=None, hit_pctile=None):
@@ -2439,7 +1042,6 @@ def build_hot_cold_section(hitters, recent_hitting, my_team, best_recent_h=None,
         f'<th style="{TH_S}text-align:center;">Score</th>'
         f'</tr></thead><tbody>{rows_html}</tbody></table>'
     )
-
 
 def build_pitcher_hot_cold_section(pitchers, my_team, rec_p=None, best_recent_p=None):
     my_key = " ".join(my_team.split())
@@ -2559,11 +1161,9 @@ def build_pitcher_hot_cold_section(pitchers, my_team, rec_p=None, best_recent_p=
         f'</tr></thead><tbody>{rows_html}</tbody></table>'
     )
 
-
 # ── CATEGORY PULSE ───────────────────────────────────────────────────────────
 
 _RATE_CATS    = {"OPS", "ERA", "WHIP"}   # true rate stats — weighted-avg projection
-_LOWER_BETTER = {"ERA", "WHIP", "B_SO"}  # B_SO is lower-better but a COUNTING stat (accumulates), so NOT a rate cat
 
 _CLOSE_THRESH = {
     "R": 8, "HR": 3, "RBI": 8, "SB": 3, "OPS": 0.025, "B_SO": 8,
@@ -2580,20 +1180,6 @@ _PIT_CATS = {"K", "QS", "W",   "ERA", "WHIP", "SVHD"}
 # ── FA "Cats" column — which roto categories a free agent most helps ──────────────
 # Only cats surfaced on the FA rows (B_SO omitted — not shown on FA hitter rows; QS is
 # SP-only and FA RP has none). ERA/WHIP are lower-is-better (handled via _LOWER_BETTER).
-_FA_HIT_CATS = ["R", "HR", "RBI", "SB", "OPS"]
-_FA_RP_CATS  = ["SVHD", "K", "W", "ERA", "WHIP"]
-
-
-def _cat_value(row, cat):
-    """Raw per-player value for a roto category (RP counting stats prefer ESPN season)."""
-    if cat == "SVHD":
-        return _n(row.get("ESPN_SVHD")) or _n(row.get("SVHD"))
-    if cat == "K":
-        return _n(row.get("ESPN_K")) or _n(row.get("K"))
-    if cat == "W":
-        return _n(row.get("ESPN_W")) or _n(row.get("W"))
-    return _n(row.get(cat))
-
 
 def build_cat_percentiles(rows, cats):
     """{cat: sorted pool values} for percentile lookup, from a qualified YEAR player pool
@@ -2604,28 +1190,6 @@ def build_cat_percentiles(rows, cats):
         if len(vals) >= 8:
             out[c] = vals
     return out
-
-
-def _cat_pctile(pctile, cat, val):
-    """Percentile (0–1) of val within the pool for cat; lower-is-better cats inverted."""
-    import bisect
-    pool = pctile.get(cat)
-    if not pool or val <= 0:
-        return 0.0
-    p = bisect.bisect_left(pool, val) / len(pool)
-    return (1.0 - p) if cat in _LOWER_BETTER else p
-
-
-def player_cat_strengths(row, pctile, cats, need_cats, thresh=0.70):
-    """Up to 3 cats the player is strong in (percentile ≥ thresh), need-cats first."""
-    scored = []
-    for c in cats:
-        pv = _cat_pctile(pctile, c, _cat_value(row, c))
-        if pv >= thresh:
-            scored.append((c in need_cats, pv, c))
-    scored.sort(key=lambda t: (not t[0], -t[1]))
-    return [c for _, _, c in scored][:3]
-
 
 def _cats_cell(row, pctile, cats, need_cats):
     """<td> of category chips a FA helps; need-cats highlighted (ACCENT), others MUTED."""
@@ -2640,22 +1204,6 @@ def _cats_cell(row, pctile, cats, need_cats):
         chips.append(f'<span style="color:{col};font-weight:{wt};font-size:11px;">{_CAT_DISPLAY.get(c, c)}</span>')
     inner = '<span style="color:#334155;"> · </span>'.join(chips)
     return f'<td style="{TDC}white-space:nowrap;">{inner}</td>'
-
-
-def _regression_flag(row):
-    """'buy' (positive regression, buy-low), 'sell' (regression risk, sell-high), or None
-    — Statcast expected-vs-actual, SAME thresholds as the $ / ▼ hitter badges."""
-    avg, iso, xba, xslg = _n(row.get("AVG")), _n(row.get("ISO")), _n(row.get("xBA")), _n(row.get("xSLG"))
-    if avg <= 0 or iso <= 0 or xba <= 0 or xslg <= 0:
-        return None
-    slg = iso + avg
-    d_ba, d_slg = xba - avg, xslg - slg
-    if d_ba >= _XREG_BA and d_slg >= _XREG_SLG:
-        return "buy"
-    if -d_ba >= _XREG_BA and -d_slg >= _XREG_SLG:
-        return "sell"
-    return None
-
 
 # ── TRADE RADAR ───────────────────────────────────────────────────────────────
 # Cross-team trade finder tilted to MY advantage. The rival accepts because the deal
@@ -2675,1043 +1223,24 @@ def _regression_flag(row):
 # gate) and may extract up to a capped edge. Sell-high out + buy-low in is a double
 # arbitrage: my sell-high guy's actual stats OVERstate his value, their buy-low guy's
 # UNDERstate his — even on paper, I win; they still accept on category need.
-_TRADE_SVHD_W       = 0.35  # punt-saves: discount SV+H contribution in trade value
-_POS_SCARCITY_CLAMP = (0.75, 1.50)  # bound the positional-scarcity multiplier so a thin pool can't over-swing _tval
-_TRADE_MAX_VAL      = 1.35  # give-side value ceiling — protects my elite bats (sell-high exempt)
-_TRADE_GIVE_SLACK   = 0.15  # most extra value I'll include to sweeten (favor-me: don't overpay)
-_TRADE_MAX_EDGE     = 0.45  # steal ceiling — how much MORE value I may extract (keeps it plausible)
-_TRADE_FAIR_BAND    = 0.20  # fair lane: most value edge I keep and still call it realistic (near-even)
-_TRADE_FAIR_PAYUP   = 0.35  # fair lane: most value I'll PAY UP to land a scarce need-fill (a rival accepts)
-_TRADE_FAIR_MAX_VAL = 1.90  # fair lane give-ceiling — higher than favor's (deal a real chip) but still protects a franchise anchor
-_TRADE_MAX_CARDS    = 6     # trades surfaced
-_TRADE_PER_TEAM_CAP = 2     # max cards per partner team (variety)
-_TRADE_POOL_WIDTH   = 4     # top-N of each side fed into the 2-for-2 combinations
-_POS_DEPTH_SLACK    = 1     # bodies beyond POS_STARTERS I can still use (bench/flex) before a position reads "stacked"
 # Graduated endowment/star reluctance (supply-side, ACCEPTANCE-layer only -- never folds
 # into _tval): the better a player's role SCORE, the bigger the overpay a manager needs to
 # part with him. Replaces the old binary score>=80 / 0.25-payup cliff. Premium in _tval:
 # 74->0.00, 78->0.20, 82->0.40, 88->0.70, 94->1.00 (capped).
-_STAR_RELUCT_FLOOR  = 74    # role score below which a player moves freely (no endowment premium)
-_STAR_RELUCT_SLOPE  = 0.05  # tval premium added per point above the floor
-_STAR_RELUCT_CAP    = 1.10  # ceiling so a 95+ score can't demand an impossible overpay
-_TRADE_REALISTIC_MAX = 0.05 # rival "realistic" read: most value I may win and still call it realistic (aggressive)
 # Demand-side team-need value: a piece is worth more to a team that needs his position/cats.
 # effective_value = _tval * need_mult(player, team); acceptance-read layer only.
-_NEED_MULT_CAT      = 0.14  # per need-cat boost to a player's value for a team short there
-_NEED_MULT_POS      = 0.20  # boost for a hitter at a team's thin position
-_NEED_MULT_SURPLUS  = 0.10  # discount when a player only helps a cat/position the team is already deep in
-_NEED_MULT_CLAMP    = (0.70, 1.60)  # bound the need multiplier so thin data can't over-swing
 # Roster-depth floor (both parties): a trade may not drop a team below POS_STARTERS bodies at a
 # hitter position without a same-position body coming back (hard veto in find_trades). A deal that
 # survives but leaves the rival at exactly the floor at a single-slot position (C/1B/2B/3B/SS) is
 # read honestly — each such thin slot subtracts this from net_them so the read flips to "aggressive
 # ask". Acceptance-read layer only; never folds into _tval. (See _leaves_position_short.)
-_TRADE_THIN_POS_PENALTY = 0.15
 # Player category coverage reuses the FA cat lists (QS/B_SO aren't per-player stats, so a
 # team need in those simply finds no matching player — intentional, same as the FA "Cats").
-
-
-def _trade_pos_groups(r):
-    """POS_GROUPS labels this player fills (OF covers LF/CF/RF)."""
-    tags = {p.strip() for p in str(r.get("Position") or "").upper().replace("/", ",").split(",") if p.strip()}
-    return {label for label, slots, _ in POS_GROUPS if tags & slots}
-
-
-def _team_position_counts(hitters, team_key):
-    """Count of a team's rostered YEAR hitters eligible at each POS_GROUPS label (multi-eligible
-    bats count at every position they qualify for). Feeds both the my-side redundancy guard and
-    the both-parties depth floor (_leaves_position_short), so it takes any team key. INCLUDES
-    IL-slot players, who still occupy the position on the roster and return to it."""
-    counts = {}
-    for r in hitters:
-        if int(_n(r.get("Dataset")) or 0) != YEAR:
-            continue
-        if " ".join((r.get("FantasyTeam") or "").split()) != team_key:
-            continue
-        for g in _trade_pos_groups(r):
-            counts[g] = counts.get(g, 0) + 1
-    return counts
-
-
-def _leaves_position_short(team_counts, give_players, get_players):
-    """Hitter positions where GIVING `give_players` and RECEIVING `get_players` drops a team
-    below POS_STARTERS bodies (no same-position replacement). A body-count depth floor that is
-    INDEPENDENT of the _tval currency — so it catches 'only catcher for 2 OF' that the value math
-    misses (catcher category value collapses to ~0, so two productive OF out-value the lone C).
-    The rival-side mirror of the my-side surplus_pos give gate, applied to whichever team gives.
-    Hitter slots only — pitching need is category-shaped, so SP/RP floors would falsely veto
-    reasonable arm swaps. `team_counts` from _team_position_counts (multi-elig + IL aware)."""
-    short = set()
-    give_groups = {g for p in give_players for g in p.get("_tgroups", set())}
-    for P in give_groups:
-        if P not in POS_STARTERS or P in ("SP", "RP"):   # hitter slots only
-            continue
-        leaving  = sum(1 for p in give_players if P in p.get("_tgroups", set()))
-        arriving = sum(1 for p in get_players  if P in p.get("_tgroups", set()))
-        post = team_counts.get(P, 0) - leaving + arriving
-        if post < POS_STARTERS[P]:
-            short.add(P)
-    return short
-
-
-def _non_redundant_get_pos(get_pos, outs, ins, my_pos_count):
-    """Filter get-positions to those that AREN'T roster-redundant. A position P is redundant
-    when the deal would leave me with more eligible bodies there than my startable slots plus
-    one bench (POS_STARTERS[P] + _POS_DEPTH_SLACK) AND I shed nobody eligible at P — e.g.
-    acquiring a 4th catcher while rostering three and dealing none back. Acquiring an upgrade
-    while shedding a body at P (a swap) still counts as filling the need. Guards against
-    trades that read as 'fills your C slot' when catching is already stacked."""
-    keep = set()
-    for P in get_pos:
-        added = sum(1 for i in ins if P in i.get("_tgroups", set()))
-        shed  = sum(1 for o in outs if P in o.get("_tgroups", set()))
-        post  = my_pos_count.get(P, 0) - shed + added
-        cap   = POS_STARTERS.get(P, 1) + _POS_DEPTH_SLACK
-        if not (post > cap and shed == 0):
-            keep.add(P)
-    return keep
-
 
 # Positional-scarcity multipliers for the hitter trade currency, keyed by POS_GROUPS
 # label. Set by compute_position_scarcity() in the scoring prelude; empty (→ no
 # adjustment, raw behavior) until then. Pitchers are intentionally NOT scaled — pitcher
 # value is already punt-saves-shaped (SV+H discounted), a separate axis from scarcity.
-_POS_SCARCITY = {}
-
-
-def _trade_value(r, ptype, hit_pctile, pit_pctile):
-    """Cross-role trade currency (`_tval`): summed above-median category contribution,
-    then (hitters) scaled by positional scarcity. Hitters span 5 everyday cats; a
-    reliever's counting stats (K/W) rank low vs the whole pitcher pool (volume-aware) and
-    SV+H is punt-discounted — so an everyday bat outweighs a one-category closer even when
-    both post a top role-score badge. The scarcity scale (_POS_SCARCITY) then corrects the
-    remaining position blindness: without it an everyday OF and an everyday SS graded
-    equal, so the radar handed you 'give abundant OF, get scarce SS' deals no rival would
-    accept. Promoted from a find_trades closure so the pending-trade evaluator grades on
-    the SAME currency."""
-    cats, pctile = (_FA_HIT_CATS, hit_pctile) if ptype == "hit" else (_FA_RP_CATS, pit_pctile)
-    v = 0.0
-    for c in cats:
-        p = _cat_pctile(pctile, c, _cat_value(r, c))
-        v += max(0.0, p - 0.5) * (_TRADE_SVHD_W if c == "SVHD" else 1.0)
-    if ptype == "hit" and _POS_SCARCITY:
-        # Best-slot value: a multi-eligible bat is worth his scarcest position (a
-        # catcher-eligible hitter carries the C premium). Empty global → mult 1.0 (raw),
-        # which is also what compute_position_scarcity sees while deriving the scale.
-        mult = max((_POS_SCARCITY.get(g, 1.0) for g in _trade_pos_groups(r)), default=1.0)
-        v *= mult
-    return v
-
-
-def compute_position_scarcity(hitters, hit_pctile):
-    """Derive the hitter positional-scarcity scale from this snapshot → module global
-    _POS_SCARCITY (read by _trade_value). A position whose league-wide STARTER talent is
-    weak (low mean raw _tval among the players who'd actually start there) is SCARCE — a
-    competent bat there clears replacement level by more, so his trade value is boosted;
-    a deep position (OF) is discounted. mult[P] = baseline / starter_avg_tval[P], baseline
-    = mean starter-tval across positions, clamped to _POS_SCARCITY_CLAMP so a thin sample
-    can't over-swing. Reset to {} first so the _trade_value calls below return RAW value
-    (the scale must be built from unscaled tvals). Hitters only — pitcher value stays
-    punt-saves-shaped, a separate axis. Call AFTER hit_pctile is built."""
-    global _POS_SCARCITY
-    _POS_SCARCITY = {}
-    season = [r for r in hitters if int(_n(r.get("Dataset")) or 0) == YEAR]
-    if not season:
-        return _POS_SCARCITY
-    n_teams = len({" ".join((r.get("FantasyTeam") or "").split())
-                   for r in season if (r.get("FantasyTeam") or "").strip()}) or 12
-    starter_avg = {}
-    for pos_label, slots, ptype in POS_GROUPS:
-        if ptype != "hit":
-            continue
-        elig = [r for r in season
-                if any(s in str(r.get("Position", "")).split(", ") for s in slots)]
-        vals = sorted((_trade_value(r, "hit", hit_pctile, None) for r in elig), reverse=True)
-        top = vals[:POS_STARTERS.get(pos_label, 1) * n_teams]
-        if top:
-            starter_avg[pos_label] = sum(top) / len(top)
-    if not starter_avg:
-        return _POS_SCARCITY
-    baseline = sum(starter_avg.values()) / len(starter_avg)
-    lo, hi = _POS_SCARCITY_CLAMP
-    _POS_SCARCITY = {pos: max(lo, min(hi, baseline / sa)) if sa > 0 else 1.0
-                     for pos, sa in starter_avg.items()}
-    return _POS_SCARCITY
-
-
-def _enrich_trade_player(r, ptype, best_recent_p, best_recent_h, hit_pctile, pit_pctile):
-    """Attach the trade-scoring fields to a player row (role score, cat strengths, value
-    currency, buy/sell timing, position groups). Promoted from a find_trades closure so
-    both find_trades and build_pending_trades_section share one source of truth."""
-    if ptype == "hit":
-        r["_tscore"] = _blend(r, hitter_score, best_recent_h)
-        r["_tcats"]  = set(player_cat_strengths(r, hit_pctile, _FA_HIT_CATS, set()))
-    else:
-        r["_tscore"] = _score_p(r, best_recent_p)
-        r["_tcats"]  = set(player_cat_strengths(r, pit_pctile, _FA_RP_CATS, set()))
-    r["_tval"]    = _trade_value(r, ptype, hit_pctile, pit_pctile)
-    _flag = _regression_flag(r) if ptype == "hit" else pitcher_regression_flag(r)
-    r["_tsell"]   = (_flag == "sell")
-    r["_tbuy"]    = (_flag == "buy")
-    r["_tgroups"] = _trade_pos_groups(r)
-    r["_tptype"]  = ptype
-    return r
-
-
-def _pos_need_surplus(pos_data, n_teams_fallback):
-    """(need_pos, surplus_pos) from a team's positional_breakdown rows — the shared convention
-    find_trades uses for 'my' side and (via pos_data_by_team) any rival side. need_pos:
-    {pos: (rank, my_avg)} for bottom-third HITTER positions only (positional need is
-    hitter-only — pitching need stays category-shaped). surplus_pos: set of top-third
-    positions across ALL roles (safe to trade FROM without opening a hole)."""
-    _nt    = lambda p: (p.get("n_teams") or n_teams_fallback)
-    _third = lambda p: max(1, round(_nt(p) / 3.0))
-    surplus_pos = {p["pos"] for p in pos_data if (p.get("rank") or _nt(p)) <= _third(p)}
-    need_pos = {p["pos"]: ((p.get("rank") or _nt(p)), (p.get("my_avg") or 0))
-                for p in pos_data if p.get("ptype") == "hit"
-                and (p.get("rank") or _nt(p)) >= _nt(p) - _third(p) + 1}
-    return need_pos, surplus_pos
-
-
-def find_trades(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
-                pos_data, hit_pctile, pit_pctile, mode="favor",
-                pos_data_by_team=None, realistic_only=False):
-    """Ranked list of mutually-beneficial trades between my_team and each rival.
-    Perspective-driven via my_team (works under --team for free). See CLAUDE.md.
-
-    `mode` selects the value lane (both grade on the SAME scarcity-weighted `_tval`):
-    - "favor" (default): tilt value to me — I never overpay past _TRADE_GIVE_SLACK and may
-      extract up to a _TRADE_MAX_EDGE steal; my elite bats are protected from the give side.
-    - "fair": realistic, near-even deals a rival would actually accept — the ones that land
-      a scarce C/SS upgrade. The give-side value ceiling is dropped (I'll deal a real chip
-      for fair return), the gate is centered on even (I may even PAY UP to _TRADE_FAIR_PAYUP
-      for a need-fill), and ranking rewards need-fit + their benefit + timing over any edge.
-    Each trade is tagged `"lane"` = the mode that produced it.
-
-    `pos_data_by_team` (optional): {team_key: positional_breakdown(...)} cache so a caller
-    that already built it (e.g. trade_lab.py's Partner Fit Board, run from every team's POV)
-    doesn't trigger a positional_breakdown call storm; falls back to computing a rival's
-    positional_breakdown on demand when not supplied.
-    `realistic_only`: drop any candidate `_trade_tilt` wouldn't call "realistic" (rival demand
-    -side net or the graduated star-reach check) before it can win a slot — used by the
-    prescriptive Trade Radar surfaces (digest, dashboard) so they never suggest a deal the
-    rival would balk at. Left False for Partner Fit Board, which intentionally shows a
-    REACH/"worth a shot" tier too."""
-    ranks, n = team_category_ranks(roto)
-    my_key = " ".join(my_team.split())
-    if n < 2 or my_key not in ranks:
-        return []
-    third = max(1, round(n / 3.0))
-    needs_of   = lambda team: {c for c, rk in ranks[team].items() if rk >= n - third + 1}
-    surplus_of = lambda team: {c for c, rk in ranks[team].items() if rk <= third}
-
-    my_needs, my_surplus = needs_of(my_key), surplus_of(my_key)
-    if not my_needs:
-        return []
-
-    # Position groups I'm deep in (top-third rank) — safe to trade FROM without a hole.
-    # HITTER positions I'm thin at (bottom-third rank) → {pos: (rank, my_avg_score)}. The
-    # hitting game is filling roster holes across C/1B/2B/3B/SS/OF, so a hitter who
-    # UPGRADES a thin position is worth acquiring even when my category totals there
-    # aren't bottom-third — positional scarcity is its own need. (Pitching need is
-    # category-shaped — QS/SP vs SV+H/K balance — so it stays category-driven.)
-    need_pos, surplus_pos = _pos_need_surplus(pos_data, n)
-
-    def roster(source, team):
-        return [r for r in source
-                if " ".join((r.get("FantasyTeam") or "").split()) == team
-                and int(r.get("Dataset", 0) or 0) == YEAR]
-
-    def enrich(r, ptype):
-        return _enrich_trade_player(r, ptype, best_recent_p, best_recent_h, hit_pctile, pit_pctile)
-
-    my_players = ([enrich(r, "hit") for r in roster(hitters, my_key)] +
-                  [enrich(r, "pit") for r in roster(pitchers, my_key)])
-    my_pos_count = _team_position_counts(hitters, my_key)   # redundancy + depth guard: my bodies per position
-
-    all_teams = {" ".join((r.get("FantasyTeam") or "").split())
-                 for r in itertools.chain(hitters, pitchers)
-                 if (r.get("FantasyTeam") or "").strip()}
-
-    def _fills_need_pos(r):
-        """Need positions this player upgrades — a hitter at a thin position of mine whose
-        value clears my current average there (a genuine upgrade, not a lateral move)."""
-        if r["_tptype"] != "hit":
-            return set()
-        return {pos for pos in (r["_tgroups"] & set(need_pos))
-                if r["_tscore"] > need_pos[pos][1]}
-
-    trades = []
-    for team in all_teams:
-        if team == my_key or team not in ranks:
-            continue
-        t_needs, t_surplus = needs_of(team), surplus_of(team)   # rival's demand-side context
-        send_cats = my_surplus & t_needs           # cats I can help THEM in (they must benefit)
-        get_cats  = t_surplus & my_needs           # cats they can help ME in
-        if not send_cats:                          # no mutual benefit possible → skip
-            continue
-        t_players = ([enrich(r, "hit") for r in roster(hitters, team)] +
-                     [enrich(r, "pit") for r in roster(pitchers, team)])
-        t_pos_count = _team_position_counts(hitters, team)   # depth guard: rival bodies per position
-        t_pos_data = (pos_data_by_team.get(team) if pos_data_by_team else None) \
-            or positional_breakdown(pitchers, hitters, team, best_recent_p, best_recent_h)
-        t_need_pos, t_surplus_pos = _pos_need_surplus(t_pos_data, n)   # rival's positional need/surplus
-
-        # Give side: strong in a send cat, at a surplus position, and NOT above the value
-        # ceiling (unless a sell-high regression candidate I want to move anyway). FAIR mode
-        # raises the ceiling (_TRADE_FAIR_MAX_VAL > favor's _TRADE_MAX_VAL) so I'll deal a
-        # genuinely good chip for fair return — but still protects a franchise anchor from
-        # being auto-offered (the value gate keeps the return fair either way).
-        _give_ceil = _TRADE_FAIR_MAX_VAL if mode == "fair" else _TRADE_MAX_VAL
-        out_pool = sorted([r for r in my_players
-                           if (r["_tcats"] & send_cats) and (r["_tgroups"] & surplus_pos)
-                           and (r["_tval"] <= _give_ceil or r["_tsell"])],
-                          key=lambda r: -r["_tscore"])[:_TRADE_POOL_WIDTH]
-        # Incoming: helps a category I need OR upgrades a thin position of mine.
-        in_pool  = sorted([r for r in t_players if (r["_tcats"] & get_cats) or _fills_need_pos(r)],
-                          key=lambda r: -r["_tscore"])[:_TRADE_POOL_WIDTH]
-        if not out_pool or not in_pool:
-            continue
-        for r in in_pool:
-            r["_tfillpos"] = sorted(_fills_need_pos(r))
-
-        def _favor_me(vo, vi, mult=1.0):
-            """I don't overpay (give minus get within a small slack) and I may extract up
-            to a capped edge (get minus give) — so trades tilt to my advantage but stay
-            plausible enough that a rival fixing a category need would accept."""
-            return (vo - vi) <= _TRADE_GIVE_SLACK * mult and (vi - vo) <= _TRADE_MAX_EDGE * mult
-
-        def _fair(vo, vi, mult=1.0):
-            """Near-even: I keep at most a modest edge (_TRADE_FAIR_BAND) and may PAY UP at
-            most _TRADE_FAIR_PAYUP — the acceptable-to-a-rival zone that lands scarce pieces."""
-            net = vi - vo
-            return -_TRADE_FAIR_PAYUP * mult <= net <= _TRADE_FAIR_BAND * mult
-
-        gate = _fair if mode == "fair" else _favor_me
-        packages = []
-        for o in out_pool:                                   # 1-for-1
-            for i in in_pool:
-                if gate(o["_tval"], i["_tval"]):
-                    packages.append(([o], [i]))
-        for oa, ob in itertools.combinations(out_pool, 2):   # 2-for-2
-            for ia, ib in itertools.combinations(in_pool, 2):
-                pos_ben  = _non_redundant_get_pos(set(ia["_tfillpos"]) | set(ib["_tfillpos"]),
-                                                  [oa, ob], [ia, ib], my_pos_count)
-                benefits = (((ia["_tcats"] | ib["_tcats"]) & get_cats) | pos_ben)
-                if len(benefits) < 2:
-                    continue   # a package must address >= 2 distinct needs (cat or position)
-                if gate(oa["_tval"] + ob["_tval"], ia["_tval"] + ib["_tval"], mult=1.5):
-                    packages.append(([oa, ob], [ia, ib]))
-
-        for outs, ins in packages:
-            gcov = set().union(*[i["_tcats"] for i in ins]) & get_cats   # category needs met
-            gpos = _non_redundant_get_pos(set().union(*[set(i["_tfillpos"]) for i in ins]),
-                                          outs, ins, my_pos_count)         # positional holes filled (redundancy-guarded)
-            scov = set().union(*[o["_tcats"] for o in outs]) & send_cats
-            if (not gcov and not gpos) or not scov:
-                continue
-            # DEPTH FLOOR (both parties, hard veto): a deal may not drop either team below
-            # startable bodies at a hitter position without a same-position body coming back.
-            # Catches the 'their only catcher for 2 of my OF' asymmetry the _tval math misses
-            # (catcher category value ~0, so 2 OF out-value the lone C and it reads "realistic").
-            if _leaves_position_short(t_pos_count, ins, outs):    # rival gives ins, receives outs
-                continue
-            if _leaves_position_short(my_pos_count, outs, ins):   # I give outs, receive ins
-                continue
-            net_val  = sum(i["_tval"] for i in ins) - sum(o["_tval"] for o in outs)  # my base value edge (+ = I win)
-            # A radar idea is something *I* would send — never suggest one that requires me to
-            # surrender my best-role star at par (same graduated reluctance _deal_star_reach
-            # checks on the rival's side). There's no "counter" on an outgoing offer, so instead
-            # of flagging it, just don't propose it.
-            if _deal_star_surrender(ins, outs, net_val):
-                continue
-            # Demand-side net from the RIVAL's POV (+ = they win by THEIR needs): what they
-            # receive (my outs) valued by their needs (category AND positional — same
-            # convention as the my-side calc below), minus what they surrender (the ins).
-            # Drives the "realistic vs aggressive ask" read so it's roster-aware, not just
-            # base-value. Matches the Trade Lab JS mirror (`netThem`/`partnerMeta`) exactly.
-            their_get_val = sum(o["_tval"] * _need_mult(o, t_needs, t_surplus, t_need_pos, t_surplus_pos) for o in outs)
-            their_give_val = sum(i["_tval"] * _need_mult(i, t_needs, t_surplus, t_need_pos, t_surplus_pos) for i in ins)
-            net_them = their_get_val - their_give_val
-            # Demand-side net from MY POV (+ = I win by MY needs) — feeds the quiet value-matrix
-            # (Base / You / Them give-get-net) on the card, not a verdict; there's nothing to
-            # "accept" on a deal I'm the one proposing.
-            my_get_val = sum(i["_tval"] * _need_mult(i, my_needs, my_surplus, need_pos, surplus_pos) for i in ins)
-            my_give_val = sum(o["_tval"] * _need_mult(o, my_needs, my_surplus, need_pos, surplus_pos) for o in outs)
-            net_me = my_get_val - my_give_val
-            # HONEST READ: a surviving deal that leaves the rival at exactly the floor at a
-            # single-slot position (they give their starting C/1B/2B/3B/SS with no backup) is
-            # thin, not clean. Each such slot penalizes net_them so _trade_tilt flips the read
-            # to "aggressive ask", and names the hole for the card footer. Read layer only.
-            thin_them = set()
-            for P in {g for i in ins for g in i.get("_tgroups", set())}:
-                if POS_STARTERS.get(P) != 1:                      # single-slot hitter positions only
-                    continue
-                leaving  = sum(1 for i in ins  if P in i.get("_tgroups", set()))
-                arriving = sum(1 for o in outs if P in o.get("_tgroups", set()))
-                if t_pos_count.get(P, 0) - leaving + arriving == POS_STARTERS[P]:
-                    thin_them.add(P)
-            thin_note = ""
-            if thin_them:
-                net_them -= _TRADE_THIN_POS_PENALTY * len(thin_them)
-                _lbl = ", ".join(sorted(thin_them))
-                thin_note = f"leaves them without a backup at {_lbl}"
-            # Prescriptive surfaces (Trade Radar) only want deals the rival would actually
-            # accept — reuse _trade_tilt's own realistic/aggressive-ask read (net_them band +
-            # graduated star-reach check) as a hard generation-time gate, so an "aggressive
-            # ask" idea can never win a card slot. Left off for Partner Fit Board, which wants
-            # to see reach deals too (tiered separately as REACH/"worth a shot").
-            if realistic_only and _trade_tilt(net_val, ins, outs, net_them=net_them)[1] != "realistic":
-                continue
-            # DIRECTIONAL timing: selling-high on the GIVE side and buying-low on the GET
-            # side are the arbitrage (do more of it); giving away a riser or acquiring a
-            # regression candidate is the reverse (penalize — these are traps).
-            sell_out = sum(1 for o in outs if o.get("_tsell"))   # good: move my regressors
-            buy_in   = sum(1 for i in ins  if i.get("_tbuy"))    # good: acquire their risers
-            buy_out  = sum(1 for o in outs if o.get("_tbuy"))    # bad: don't sell my risers low
-            sell_in  = sum(1 for i in ins  if i.get("_tsell"))   # bad: don't buy their regressors
-            timing = sell_out + buy_in - buy_out - sell_in
-            # Season fit: deeper need cats/positions addressed (higher rank number) score more.
-            # FAVOR mode tilts to me — their benefit down-weighted (0.3), reward my value edge
-            # (+5·net_val). FAIR mode optimizes for a realistic, accepted deal — weight THEIR
-            # benefit higher (0.5, acceptance likelihood) and, instead of rewarding an edge,
-            # PENALIZE paying up (−4·overpay) so the closest-to-even need-fills rank first.
-            my_gain    = sum(ranks[my_key][c] for c in gcov) + sum(need_pos[p][0] for p in gpos)
-            their_gain = sum(ranks[team][c]   for c in scov)
-            if mode == "fair":
-                score = (my_gain + 0.5 * their_gain + 4.0 * timing
-                         - 4.0 * max(0.0, -net_val) - 0.5 * (len(ins) - 1))
-            else:
-                score = (my_gain + 0.3 * their_gain + 5.0 * net_val
-                         + 4.0 * timing - 0.5 * (len(ins) - 1))
-            trades.append({
-                "team": team, "outs": outs, "ins": ins, "net_val": net_val, "score": score,
-                "net_them": net_them, "net_me": net_me, "thin_note": thin_note,
-                "my_give_val": my_give_val, "my_get_val": my_get_val,
-                "their_give_val": their_give_val, "their_get_val": their_get_val,
-                "lane": mode, "sell_out": sell_out, "buy_in": buy_in,
-                "get_cats":  sorted(gcov, key=lambda c: -ranks[my_key][c]),
-                "get_pos":   sorted(gpos, key=lambda p: -need_pos[p][0]),
-                "send_cats": sorted(scov, key=lambda c: -ranks[team][c]),
-            })
-
-    trades.sort(key=lambda t: -t["score"])
-    picked, per_team, seen = [], {}, set()
-    for t in trades:
-        sig = (t["team"],
-               tuple(sorted(o.get("PlayerName", "") for o in t["outs"])),
-               tuple(sorted(i.get("PlayerName", "") for i in t["ins"])))
-        if sig in seen or per_team.get(t["team"], 0) >= _TRADE_PER_TEAM_CAP:
-            continue
-        seen.add(sig)
-        per_team[t["team"]] = per_team.get(t["team"], 0) + 1
-        picked.append(t)
-        if len(picked) >= _TRADE_MAX_CARDS:
-            break
-    return picked
-
-
-def find_trades_combined(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
-                         pos_data, hit_pctile, pit_pctile, cards=None,
-                         pos_data_by_team=None, realistic_only=False):
-    """Blend the FAIR lane (realistic, near-even/pay-up deals a rival would accept — the
-    ones that actually land a scarce C/SS upgrade) with the FAVOR-ME lane (value plays that
-    fix a rival's need while tilting to me). Leads with a fair deal (the realistic ask),
-    then alternates a value play, deduping identical packages and keeping the per-team +
-    total caps joint across lanes. Both lanes grade on the same scarcity-weighted `_tval`.
-    `pos_data_by_team`/`realistic_only` are forwarded to find_trades verbatim — see its
-    docstring."""
-    cards = cards or _TRADE_MAX_CARDS
-    args = (pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
-            pos_data, hit_pctile, pit_pctile)
-    kwargs = dict(pos_data_by_team=pos_data_by_team, realistic_only=realistic_only)
-    fair  = find_trades(*args, mode="fair", **kwargs)
-    value = find_trades(*args, mode="favor", **kwargs)
-    order = []
-    for f, v in itertools.zip_longest(fair, value):   # fair leads each round (user priority)
-        if f is not None:
-            order.append(f)
-        if v is not None:
-            order.append(v)
-    picked, per_team, seen = [], {}, set()
-    for t in order:
-        sig = (t["team"],
-               tuple(sorted(o.get("PlayerName", "") for o in t["outs"])),
-               tuple(sorted(i.get("PlayerName", "") for i in t["ins"])))
-        if sig in seen or per_team.get(t["team"], 0) >= _TRADE_PER_TEAM_CAP:
-            continue
-        seen.add(sig)
-        per_team[t["team"]] = per_team.get(t["team"], 0) + 1
-        picked.append(t)
-        if len(picked) >= cards:
-            break
-    return picked
-
-
-def _star_role(p):
-    """Star-comparison eligibility: hitters and starters only. Relievers are excluded from
-    BOTH sides of every star comparison — a closer's within-role score isn't cross-role
-    comparable to a hitter's, so counting him would falsely mask a genuine star on the other
-    side (the Witt-for-McCarthy+reliever bug). Punt-saves arms move at par."""
-    return p.get("_tptype") == "hit" or (p.get("_tptype") == "pit" and _is_sp(p))
-
-
-def _star_reluctance(score):
-    """Graduated endowment/star premium (in _tval) a manager attaches to a player of this role
-    SCORE: 0 below _STAR_RELUCT_FLOOR, rising _STAR_RELUCT_SLOPE per point, capped at
-    _STAR_RELUCT_CAP. Acceptance-layer only (NEVER folds into _tval). The better the player,
-    the bigger the overpay needed to pry him loose. 74->0.00, 78->0.20, 82->0.40, 88->0.70,
-    94->1.00. Replaces the old binary score>=80 cliff so good-not-elite players (76-79) carry
-    real reluctance too."""
-    return max(0.0, min(_STAR_RELUCT_CAP, (_n(score) - _STAR_RELUCT_FLOOR) * _STAR_RELUCT_SLOPE))
-
-
-def _need_mult(row, need_cats, surplus_cats, need_pos=None, surplus_pos=None):
-    """Demand-side team-need multiplier: how much MORE (or less) this player is worth to a
-    given team, given that team's category needs/surpluses and (hitters) thin/deep positions.
-    effective_value(player, team) = _tval * _need_mult. ACCEPTANCE-READ layer only -- never
-    folds into _tval or the find_trades ranking (which already rewards need coverage), so the
-    universal currency stays intact. Reuses the enriched `_tcats`/`_tgroups` fields. This is
-    what lets the same catcher be worth more to a team that needs the position than to one
-    already set there. Clamped to _NEED_MULT_CLAMP."""
-    cats = row.get("_tcats") or set()
-    need_cats, surplus_cats = (need_cats or set()), (surplus_cats or set())
-    m = 1.0
-    m += _NEED_MULT_CAT * len(cats & need_cats)           # each need cat he covers is worth more here
-    if cats and not (cats & need_cats) and (cats & surplus_cats):
-        m -= _NEED_MULT_SURPLUS                            # only helps where they're already deep
-    if row.get("_tptype") == "hit":
-        groups = row.get("_tgroups") or set()
-        if need_pos and (groups & set(need_pos)):
-            m += _NEED_MULT_POS                            # fills a thin position for this team
-        elif surplus_pos and groups and groups <= set(surplus_pos):
-            m -= _NEED_MULT_SURPLUS                        # only stacks positions they're deep in
-    lo, hi = _NEED_MULT_CLAMP
-    return max(lo, min(hi, m))
-
-
-def _deal_star_reach(ins, outs, net_val):
-    """Market-perception (NOT value) check: would a rival balk because the deal asks them to
-    part with a prized player without a real overpay? Uses the GRADUATED reluctance curve
-    (`_star_reluctance`): the overpay required to pry their best star-role acquire is his
-    premium minus my best star-role give's premium (so a star-for-star swap needs little/none).
-    Reach (they balk) when that required overpay is positive AND I'm NOT paying up by at least
-    that much (`net_val > -req`). Because `_star_reluctance` is monotonic in score, `req > 0`
-    also encodes the old "acquired star outranks anything I send back" condition — just
-    graduated by how good he is. Relievers excluded both sides (see `_star_role`). Keeps
-    `_tval` a pure value currency; the premium lives in the acceptance layer only. Called by
-    `_trade_tilt`."""
-    if not ins:
-        return False
-    get_prem  = max((_star_reluctance(p.get("_tscore")) for p in ins if _star_role(p)), default=0.0)
-    give_prem = max((_star_reluctance(o.get("_tscore")) for o in (outs or []) if _star_role(o)), default=0.0)
-    req = max(0.0, get_prem - give_prem)
-    return req > 0.0 and net_val > -req
-
-
-def _deal_star_surrender(ins, outs, net_val):
-    """The MY-side mirror of `_deal_star_reach`: would *I* balk at parting with a prized player
-    without a real value win? Required premium = my best star-role give's `_star_reluctance`
-    minus my best star-role acquire's (a star-for-star swap needs little). I hold out when
-    that's positive AND I'm NOT winning by at least that much (`net_val < req`). Same graduated
-    curve, relievers excluded both sides, acceptance-layer only. Used by `_pending_verdict`."""
-    if not outs:
-        return False
-    give_prem = max((_star_reluctance(o.get("_tscore")) for o in outs if _star_role(o)), default=0.0)
-    get_prem  = max((_star_reluctance(p.get("_tscore")) for p in (ins or []) if _star_role(p)), default=0.0)
-    req = max(0.0, give_prem - get_prem)
-    return req > 0.0 and net_val < req
-
-
-def _trade_tilt(net_val, ins=None, outs=None, net_them=None):
-    """(value_phrase, accept_phrase, accept_color) for a trade. `net_val` is MY base value edge
-    (+ = I win) and sets the my-POV value phrase. The accept phrase is the RIVAL's-POV read on
-    whether they'd say yes. It's now AGGRESSIVE: the rival must not clearly lose. When
-    `net_them` (their demand-side net, + = they win by THEIR needs) is supplied it drives that
-    read (`net_them >= -_TRADE_REALISTIC_MAX`); otherwise it falls back to the base symmetric
-    proxy (`net_val <= _TRADE_REALISTIC_MAX`, i.e. their base loss is small). A STAR REACH
-    (prying their best player without an overpay) also forces "aggressive ask". Pass `ins`/`outs`
-    so the graduated star check runs. Shared by the digest Trade Radar + the dashboard tile."""
-    value = ("you win the value" if net_val > 0.1 else
-             "even value" if net_val >= -0.1 else "you pay up")
-    rival_ok = (net_them >= -_TRADE_REALISTIC_MAX) if net_them is not None \
-        else (net_val <= _TRADE_REALISTIC_MAX)
-    realistic = rival_ok and not _deal_star_reach(ins, outs, net_val)
-    if realistic:
-        return value, "realistic", GREEN
-    return value, "aggressive ask", YELLOW
-
-
-def _trade_score_reveal(score, breakdown_html, uid):
-    """Div-based analog of `score_reveal` for the Trade Radar cards, whose players are
-    stacked <div>s inside table cells (not per-player <tr> rows) — so the <tr> reveal
-    can't be appended. Returns (badge_link, hidden_div): the clickable ▾ badge + a hidden
-    breakdown <div> to drop right after the player line; a `div.scorebd-div:target` rule
-    in the head <style> reveals it in the browser attachment (Gmail strips <style> → the
-    div stays hidden, the badge is a harmless no-op)."""
-    if not breakdown_html or not uid:
-        return badge(score), ""
-    cell = (f'<a href="#{uid}" class="bdlink" title="Tap for score breakdown" '
-            f'style="text-decoration:none;white-space:nowrap;">{badge(score)}'
-            f'<span style="color:{MUTED};font-size:9px;font-weight:700;">&nbsp;&#9662;</span></a>')
-    div = (f'<div id="{uid}" class="scorebd-div" style="display:none;background:{SURFACE2};'
-           f'padding:8px 12px;margin:2px 0 6px;font-size:11px;line-height:1.55;color:{MUTED};'
-           f'border-left:3px solid {ACCENT};border-radius:4px;white-space:normal;">'
-           f'{breakdown_html}'
-           f'<a href="#{uid}x" style="color:{MUTED};text-decoration:none;font-weight:700;'
-           f'float:right;margin-left:10px;">&#10005;</a></div>')
-    return cell, div
-
-
-def _trade_player_line(r, hi_cats, hi_color, side, show_pos=False,
-                       best_recent_p=None, best_recent_h=None, hit_pctile=None):
-    """One player row inside a trade card: MLB logo + name + score badge + cat chips
-    (+ a CYAN position chip for a thin slot the incoming player upgrades, + the CANONICAL
-    buy-low/sell-high chip — same glyph-only `$`/`▼` (green/red) as everywhere else in the
-    digest, so the visual language stays consistent). `side` ('give'/'get') only tunes the
-    hover tooltip; the whole-trade framing lives in the footer's sell-high/buy-low tag.
-    The score badge is tap-to-expand (role-aware prose breakdown for every player in the
-    trade), same as the section tables."""
-    logo  = team_logo(r.get("Team"), 14)
-    nm    = str(r.get("PlayerName") or "")
-    chips = "".join(_hit_badge(_CAT_DISPLAY.get(c, c), hi_color, f"strong in {c}")
-                    for c in sorted(r["_tcats"] & hi_cats))
-    if show_pos:
-        chips += "".join(_hit_badge(p, CYAN, f"upgrades your thin {p}")
-                         for p in r.get("_tfillpos", []))
-    if r.get("_tsell"):
-        tip = ("results ahead of his Statcast expected — sell him high"
-               if side == "give" else
-               "results ahead of his Statcast expected — regression risk (you'd be buying high)")
-        chips += _hit_badge("&#9660;", RED, tip)
-    elif r.get("_tbuy"):
-        tip = ("results behind his Statcast expected — a rebound candidate (think twice before dealing him)"
-               if side == "give" else
-               "results behind his Statcast expected — positive regression likely, acquire cheap")
-        chips += _hit_badge("$", GREEN, tip)
-    if r.get("_tptype") == "hit":
-        bd = _hitter_score_breakdown(r, best_recent_h, hit_pctile)
-    else:
-        bd = _pitcher_score_breakdown(r, best_recent_p)
-    uid = _bd_uid("trade", nm) if bd else None
-    score_html, reveal = _trade_score_reveal(int(round(r["_tscore"])), bd, uid)
-    return (f'<div style="margin:3px 0;font-size:12px;color:{TEXT};white-space:nowrap;">'
-            f'{logo}<span style="font-weight:600;">{nm}</span> '
-            f'{score_html}{chips}</div>{reveal}')
-
-
-def _verdict_pill(label, color):
-    """The Accept/Counter/Decline pill for a pending trade (shared by the section render
-    and the glossary so the two can't drift)."""
-    return (f'<span style="background:{color};color:#0b1220;font-weight:800;'
-            f'font-size:11px;padding:2px 9px;border-radius:10px;">{label}</span>')
-
-
-def _tradelab_button(partner, give_names, get_names):
-    """Deep-link a Pending Trades / Trade Radar card into the hosted Trade Lab with this
-    exact deal preloaded, via the same #partner=&give=&get= hash trade_lab.py's
-    preloadFromHash() already parses. A plain cross-site link (not the Windows file://
-    launch that DATA.preload works around), so no JS is needed on the digest side.
-    Returns a bare <a> (no wrapper) meant for the card's flex header row, alongside the
-    partner name, so a card doesn't need its own extra row. "" when nothing to preload."""
-    give_names = [nm for nm in give_names if nm]
-    get_names = [nm for nm in get_names if nm]
-    if not (give_names or get_names):
-        return ""
-    frag = (f"partner={quote(partner)}&give={quote(','.join(give_names))}"
-            f"&get={quote(','.join(get_names))}")
-    return (f'<a href="{TRADE_LAB_URL}#{frag}" target="_blank" rel="noopener" '
-            f'style="color:{ACCENT};font-size:10px;font-weight:700;text-decoration:none;'
-            f'letter-spacing:.2px;white-space:nowrap;flex-shrink:0;margin-left:8px;">'
-            f'Build in Trade Lab &#8250;</a>')
-
-
-def _trade_net_summary(base_net, me_net, them_net):
-    """One-line net-value hint in a Trade Radar card header, right before the Trade Lab
-    link — base (universal tval net), you / them (re-valued by each side's own needs).
-    Plain numbers only, no verdict language, nothing to accept/counter/decline."""
-    def _seg(label, net):
-        color = GREEN if net > 0.1 else (RED if net < -0.1 else MUTED)
-        sign = "+" if net >= 0 else ""
-        return (f'<span style="color:{MUTED};">{label} </span>'
-                f'<span style="color:{color};font-weight:700;">{sign}{net:.2f}</span>')
-    return (f'<span style="font-size:9.5px;white-space:nowrap;margin-right:8px;">'
-            f'{_seg("base", base_net)} &middot; {_seg("you", me_net)} &middot; '
-            f'{_seg("them", them_net)}</span>')
-
-
-def _pending_verdict(net_val, addresses_need, timing, incoming, star_surrender=False,
-                     leaves_me_short=None):
-    """Accept / Counter / Decline lean for a pending trade, from the SAME signals
-    find_trades ranks on: my value edge (net_val = get − give), whether it addresses a
-    real category/positional need, and timing (positive = I sell-high / buy-low, negative
-    = a trap I'd be selling a riser / buying a regressor). Returns (label, color, why).
-    Only meaningful for INCOMING offers (mine to decide); outgoing gets a status read
-    instead. Thresholds mirror the Trade Radar value tilt (±0.1).
-    `star_surrender` (from `_deal_star_surrender`) is the MY-side mirror of the Trade Radar
-    star-reach: when the offer pries my crown-jewel star at par, an otherwise-ACCEPT is
-    downgraded to COUNTER (endowment/star bias — I'd hold out even at category-even value).
-    `leaves_me_short` (from `_leaves_position_short`) is the roster-depth mirror: hitter
-    positions the deal would strip me below startable depth at (my only C/SS with no body
-    back) — also downgrades an ACCEPT to COUNTER (get a replacement before dealing the slot)."""
-    trap = timing < 0
-    leaves_me_short = leaves_me_short or []
-    def _hold():   # the COUNTER override shared by every ACCEPT branch, star-first
-        if star_surrender:
-            return ("COUNTER", YELLOW, "they're prying your star at par — hold out for more")
-        if leaves_me_short:
-            _lbl = ", ".join(leaves_me_short)
-            return ("COUNTER", YELLOW, f"leaves you thin at {_lbl} — get a replacement first")
-        return None
-    if net_val >= 0.1 and not trap:
-        return _hold() or ("ACCEPT", GREEN, "you win the value" +
-                (" and it fills a need" if addresses_need else ""))
-    if addresses_need and net_val >= -0.1 and not trap:
-        return _hold() or ("ACCEPT", GREEN, "roughly even value and it fills a real need")
-    if addresses_need:
-        why = ("you'd be paying up" if net_val < -0.1 else "the timing is a trap")
-        return ("COUNTER", YELLOW, f"right direction but {why} — ask for more")
-    if net_val >= 0.1:
-        return _hold() or ("ACCEPT", GREEN, "you win the value")
-    return ("DECLINE", RED, "no need addressed and you don't gain value")
-
-
-def _hitter_fills_need_pos(r, need_pos):
-    """Thin hitter positions of mine this player upgrades (value clears my avg there)."""
-    if r.get("_tptype") != "hit":
-        return set()
-    return {pos for pos in (r["_tgroups"] & set(need_pos))
-            if r["_tscore"] > need_pos[pos][1]}
-
-
-def _fmt_trade_expiry(iso, today_str):
-    """A short human 'expires in Nd' from the offer's ISO expiration (empty on failure)."""
-    if not iso:
-        return ""
-    try:
-        d = datetime.fromisoformat(str(iso).replace("Z", "+00:00")).date()
-        t = datetime.strptime(today_str, "%Y-%m-%d").date()
-        days = (d - t).days
-    except Exception:
-        return ""
-    if days <= 0:
-        return "expires today"
-    if days == 1:
-        return "expires tomorrow"
-    return f"expires in {days}d"
-
-
-def _counter_suggestion(gap, partner_key, pitchers, hitters, my_needs, need_pos,
-                        best_recent_p, best_recent_h, hit_pctile, pit_pctile, exclude_keys):
-    """When an incoming offer has me overpaying by `gap` (my give value − their get value),
-    suggest the single best ADD-ON to request from the partner: a spareable piece that
-    closes the value gap and, ideally, helps a category/positional need of mine. Reuses the
-    Trade Radar enrich/value machinery so the ask stays realistic (won't request a stud far
-    above what evens the deal). Returns a phrase like 'ask them to add X (adds SB, C)'."""
-    if gap <= 0.1:
-        return ""
-    def _roster(source):
-        return [r for r in source
-                if " ".join((r.get("FantasyTeam") or "").split()) == partner_key
-                and int(r.get("Dataset", 0) or 0) == YEAR]
-    cands = ([_enrich_trade_player(dict(r), "hit", best_recent_p, best_recent_h, hit_pctile, pit_pctile)
-              for r in _roster(hitters)]
-             + [_enrich_trade_player(dict(r), "pit", best_recent_p, best_recent_h, hit_pctile, pit_pctile)
-                for r in _roster(pitchers)])
-    best, best_key = None, None
-    for r in cands:
-        if _badge_name_key(r.get("PlayerName", "")) in exclude_keys:
-            continue
-        v = r["_tval"]
-        if v <= 0 or v > gap + _TRADE_MAX_EDGE:     # nothing to add / an unrealistic overreach
-            continue
-        need_hit = bool(r["_tcats"] & my_needs) or bool(_hitter_fills_need_pos(r, need_pos))
-        closes   = v >= gap * 0.7
-        key = (closes, need_hit, bool(r.get("_tbuy")), -abs(v - gap))
-        if best_key is None or key > best_key:
-            best_key, best = key, r
-    if best is None:
-        return ""
-    nm   = best.get("PlayerName", "")
-    bits = ([_CAT_DISPLAY.get(c, c) for c in sorted(best["_tcats"] & my_needs)]
-            + sorted(_hitter_fills_need_pos(best, need_pos)))
-    reason = f" (adds {', '.join(bits)})" if bits else " to even the value"
-    return f"ask them to add {nm}{reason}"
-
-
-def _grade_pending_trades(pending, pitchers, hitters, roto, my_team,
-                          best_recent_p, best_recent_h, pos_data,
-                          hit_pctile, pit_pctile, today_str=""):
-    """Grade every real pending offer ONCE (resolution + value/verdict + counter) so the
-    section render, the Briefing, and the Week-at-a-Glance headline all read the same
-    numbers. Returns a list of graded dicts. Reuses the Trade Radar machinery
-    (`_enrich_trade_player`, `_pending_verdict`, `_counter_suggestion`)."""
-    if not pending:
-        return []
-
-    # YEAR-preferred row lookups (fall back 30→15→7), keyed like the Today's Games block.
-    hit_rows, pit_rows = {}, {}
-    for _ds in (7, 15, 30, YEAR):
-        for _r in hitters:
-            if int(_n(_r.get("Dataset")) or 0) == _ds and _r.get("PlayerName"):
-                hit_rows[_badge_name_key(_r["PlayerName"])] = _r
-        for _r in pitchers:
-            if int(_n(_r.get("Dataset")) or 0) == _ds and _r.get("PlayerName"):
-                pit_rows[_badge_name_key(_r["PlayerName"])] = _r
-
-    ranks, n = team_category_ranks(roto)
-    third = max(1, round(n / 3.0)) if n else 1
-    needs_of   = lambda tk: {c for c, rk in ranks.get(tk, {}).items() if rk >= n - third + 1}
-    surplus_of = lambda tk: {c for c, rk in ranks.get(tk, {}).items() if rk <= third}
-    my_key   = " ".join(my_team.split())
-    my_needs, my_surplus = needs_of(my_key), surplus_of(my_key)   # my demand-side context
-    _nt    = lambda p: (p.get("n_teams") or n or 1)
-    _third = lambda p: max(1, round(_nt(p) / 3.0))
-    need_pos = {p["pos"]: ((p.get("rank") or _nt(p)), (p.get("my_avg") or 0))
-                for p in pos_data if p.get("ptype") == "hit"
-                and (p.get("rank") or _nt(p)) >= _nt(p) - _third(p) + 1}
-    my_need_pos    = set(need_pos.keys())
-    my_surplus_pos = {p["pos"] for p in pos_data if p.get("ptype") == "hit"
-                      and (p.get("rank") or _nt(p)) <= _third(p)}
-    my_pos_count = _team_position_counts(hitters, my_key)   # redundancy + depth guard: bodies per position
-
-    def _resolve(entry):
-        k = _badge_name_key(entry.get("name", ""))
-        if k in hit_rows:
-            return _enrich_trade_player(dict(hit_rows[k]), "hit", best_recent_p,
-                                        best_recent_h, hit_pctile, pit_pctile)
-        if k in pit_rows:
-            return _enrich_trade_player(dict(pit_rows[k]), "pit", best_recent_p,
-                                        best_recent_h, hit_pctile, pit_pctile)
-        return None
-
-    graded = []
-    for tr in pending:
-        partner  = " ".join((tr.get("partner") or "").split())
-        incoming = bool(tr.get("incoming"))
-        get_rows  = [(_resolve(e), e.get("name")) for e in (tr.get("get") or [])]
-        give_rows = [(_resolve(e), e.get("name")) for e in (tr.get("give") or [])]
-        ins  = [r for (r, nm) in get_rows if r is not None]
-        outs = [r for (r, nm) in give_rows if r is not None]
-        for r in ins:
-            r["_tfillpos"] = sorted(_hitter_fills_need_pos(r, need_pos))
-
-        net_val = sum(r["_tval"] for r in ins) - sum(r["_tval"] for r in outs)   # base value edge
-        # Demand-side net from MY POV (+ = I win by MY needs): incoming valued by my needs
-        # minus outgoing. Drives the ACCEPT/COUNTER/DECLINE verdict so it's roster-aware — a
-        # need-filling piece is worth accepting even at slight base-value cost. The displayed
-        # `value` phrase + the counter-gap stay on BASE value (the universal read).
-        _mm = lambda r: _need_mult(r, my_needs, my_surplus, my_need_pos, my_surplus_pos)
-        net_me = sum(r["_tval"] * _mm(r) for r in ins) - sum(r["_tval"] * _mm(r) for r in outs)
-        gcov = set().union(*[r["_tcats"] for r in ins]) & my_needs if ins else set()
-        gpos = (_non_redundant_get_pos(set().union(*[set(r.get("_tfillpos", [])) for r in ins]),
-                                       outs, ins, my_pos_count) if ins else set())
-        scov = set().union(*[r["_tcats"] for r in outs]) & needs_of(partner) if outs else set()
-        addresses_need = bool(gcov or gpos)
-        timing = (sum(1 for r in outs if r.get("_tsell")) + sum(1 for r in ins if r.get("_tbuy"))
-                  - sum(1 for r in outs if r.get("_tbuy")) - sum(1 for r in ins if r.get("_tsell")))
-        value = ("you win the value" if net_val > 0.1 else
-                 "even value" if net_val >= -0.1 else "you pay up")
-
-        star_surrender = _deal_star_surrender(ins, outs, net_val)   # star reluctance stays on base value
-        # DEPTH FLOOR (soft — a real offer isn't vetoed, it's flagged): would accepting leave ME
-        # short at a hitter position (I give my only C/SS with no same-position body back)? If so,
-        # an otherwise-ACCEPT downgrades to COUNTER — get a replacement before dealing the slot.
-        leaves_me_short = sorted(_leaves_position_short(my_pos_count, outs, ins)) if incoming else []
-        verdict = _pending_verdict(net_me, addresses_need, timing, incoming, star_surrender,
-                                   leaves_me_short) if incoming else None
-        counter = ""
-        if verdict and verdict[0] == "COUNTER":
-            exclude = {_badge_name_key(nm) for (_r, nm) in get_rows + give_rows}
-            counter = _counter_suggestion(-net_val, partner, pitchers, hitters, my_needs,
-                                          need_pos, best_recent_p, best_recent_h,
-                                          hit_pctile, pit_pctile, exclude)
-
-        gains = ([_CAT_DISPLAY.get(c, c) for c in sorted(gcov, key=lambda c: -ranks[my_key][c])]
-                 + [f"{p} slot" for p in sorted(gpos, key=lambda p: -need_pos[p][0])])
-        graded.append({
-            "partner": partner, "incoming": incoming,
-            "expires": tr.get("expires", ""), "expiry_str": _fmt_trade_expiry(tr.get("expires", ""), today_str),
-            "get_rows": get_rows, "give_rows": give_rows,
-            "get_names": [nm for (_r, nm) in get_rows], "give_names": [nm for (_r, nm) in give_rows],
-            "net_val": net_val, "value": value, "verdict": verdict, "counter": counter,
-            "scov": scov, "gcov": gcov, "get_lbl": ", ".join(gains) or "depth",
-        })
-    return graded
-
-
-def _pending_headline(g, brief=False):
-    """One-line incoming-offer headline for the Briefing / Week-at-a-Glance (plain text +
-    light inline spans). `brief=True` trims to the essentials for the email body."""
-    label, color, why = g["verdict"] if g["verdict"] else ("REVIEW", ACCENT, "")
-    get_s  = ", ".join(g["get_names"]) or "—"
-    give_s = ", ".join(g["give_names"]) or "—"
-    pill = f'<b style="color:{color};">{label}</b>'
-    exp  = (f' <span style="color:{RED};">&middot; {g["expiry_str"]}</span>'
-            if g.get("expiry_str") else "")
-    head = (f'&#129309; Trade from <b>{g["partner"]}</b>: get <b>{get_s}</b> for '
-            f'<b>{give_s}</b> — {pill}{exp}')
-    if g.get("counter"):
-        head += f' <span style="color:{MUTED};">&rarr; counter: {g["counter"]}</span>'
-    elif not brief and why:
-        head += f' <span style="color:{MUTED};">({why})</span>'
-    return head
-
-
-def build_pending_trades_section(graded, best_recent_p, best_recent_h, hit_pctile, team_logos=None):
-    """Render the Pending Trades cards from pre-graded offers (`_grade_pending_trades`).
-    Distinguishes an INCOMING offer (Accept/Counter/Decline verdict + a counter suggestion
-    when it's a COUNTER) from an OUTGOING one (awaiting the partner). Returns "" when
-    nothing is pending."""
-    if not graded:
-        return ""
-    team_logos = team_logos or {}
-
-    def _plain_line(name):
-        return (f'<div style="margin:3px 0;font-size:12px;color:{MUTED};white-space:nowrap;">'
-                f'<span style="font-weight:600;">{name}</span> '
-                f'<span style="font-size:10px;">(no data)</span></div>')
-
-    cards = []
-    for g in graded:
-        partner, incoming = g["partner"], g["incoming"]
-        give_html = "".join(
-            (_trade_player_line(r, g["scov"], MUTED, "give", best_recent_p=best_recent_p,
-                                best_recent_h=best_recent_h, hit_pctile=hit_pctile)
-             if r is not None else _plain_line(nm))
-            for (r, nm) in g["give_rows"])
-        get_html = "".join(
-            (_trade_player_line(r, g["gcov"], ACCENT, "get", show_pos=True, best_recent_p=best_recent_p,
-                                best_recent_h=best_recent_h, hit_pctile=hit_pctile)
-             if r is not None else _plain_line(nm))
-            for (r, nm) in g["get_rows"])
-
-        exp = (f' <span style="color:{RED};font-weight:700;">&middot; {g["expiry_str"]}</span>'
-               if g.get("expiry_str") else "")
-        if incoming:
-            label, vcolor, why = g["verdict"]
-            tag = f'<span style="color:{ACCENT};font-weight:700;">OFFER TO YOU</span>'
-            verdict_html = f'{_verdict_pill(label, vcolor)} <span style="color:{MUTED};">{why}</span>'
-            counter_html = (f'<div style="color:{YELLOW};margin-top:3px;">&#128161; Counter: '
-                            f'{g["counter"]}</div>' if g.get("counter") else "")
-        else:
-            tag = f'<span style="color:{MUTED};font-weight:700;">YOUR OFFER</span>'
-            verdict_html = (f'<span style="color:{MUTED};">Awaiting '
-                            f'<span style="color:{TEXT};font-weight:700;">{partner or "partner"}</span>'
-                            f' &middot; {g["value"]} from your side</span>')
-            counter_html = ""
-        logo = fantasy_logo(team_logos.get(partner, ""), size=20, team_name=partner)
-        tradelab_btn = _tradelab_button(partner, g["give_names"], g["get_names"])
-        cards.append(
-            f'<div style="background:{SURFACE};border:1px solid {BORDER};border-radius:8px;'
-            f'padding:12px 14px;margin-bottom:12px;">'
-            f'<div style="display:flex;justify-content:space-between;align-items:center;'
-            f'font-size:11px;color:{MUTED};margin-bottom:8px;">'
-            f'<span>{tag} &middot; with {logo}'
-            f'<span style="color:{TEXT};font-weight:700;">{partner}</span>{exp}</span>'
-            f'{tradelab_btn}</div>'
-            f'<table style="width:100%;border-collapse:collapse;"><tr>'
-            f'<td style="width:47%;vertical-align:top;">'
-            f'<div style="font-size:9px;font-weight:700;color:{RED};text-transform:uppercase;'
-            f'letter-spacing:.5px;margin-bottom:3px;">You give</div>{give_html}</td>'
-            f'<td style="width:6%;text-align:center;color:{MUTED};font-size:17px;vertical-align:middle;">&#8644;</td>'
-            f'<td style="width:47%;vertical-align:top;">'
-            f'<div style="font-size:9px;font-weight:700;color:{GREEN};text-transform:uppercase;'
-            f'letter-spacing:.5px;margin-bottom:3px;">You get</div>{get_html}</td>'
-            f'</tr></table>'
-            f'<div style="font-size:11px;margin-top:8px;border-top:1px solid {BORDER};'
-            f'padding-top:7px;">{verdict_html}{counter_html}'
-            f'<div style="color:{MUTED};margin-top:3px;">Upgrades your '
-            f'<span style="color:{ACCENT};font-weight:700;">{g["get_lbl"]}</span></div></div>'
-            f'</div>'
-        )
-
-    n_in = sum(1 for g in graded if g["incoming"])
-    sub = (f'{len(graded)} live offer{"s" if len(graded) != 1 else ""}'
-           + (f' &middot; {n_in} awaiting your decision' if n_in else ' &middot; awaiting partners'))
-    return section_head("Pending Trades", sub) + "".join(cards)
-
-
-def build_trade_radar(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
-                      pos_data, hit_pctile, pit_pctile, team_logos=None):
-    # Trade Radar is prescriptive ("go send this") — only ever surface deals a rival would
-    # realistically accept (see find_trades' realistic_only docstring).
-    trades = find_trades_combined(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
-                                  pos_data, hit_pctile, pit_pctile, realistic_only=True)
-    if not trades:
-        return ""
-    team_logos = team_logos or {}
-    cards = []
-    for t in trades:
-        give = "".join(_trade_player_line(o, set(t["send_cats"]), MUTED, "give",
-                                          best_recent_p=best_recent_p, best_recent_h=best_recent_h,
-                                          hit_pctile=hit_pctile) for o in t["outs"])
-        get_ = "".join(_trade_player_line(i, set(t["get_cats"]), ACCENT, "get", show_pos=True,
-                                          best_recent_p=best_recent_p, best_recent_h=best_recent_h,
-                                          hit_pctile=hit_pctile) for i in t["ins"])
-        gains = ([_CAT_DISPLAY.get(c, c) for c in t["get_cats"]]
-                 + [f"{p} slot" for p in t.get("get_pos", [])])
-        get_lbl  = ", ".join(gains) or "depth"
-        send_lbl = ", ".join(_CAT_DISPLAY.get(c, c) for c in t["send_cats"])
-        net = t.get("net_val", 0.0)
-        value, accept, acc_color = _trade_tilt(net, t["ins"], t["outs"], net_them=t.get("net_them"))
-        thesis = ("sell-high" if t.get("sell_out") else "") + \
-                 (" · " if t.get("sell_out") and t.get("buy_in") else "") + \
-                 ("buy-low" if t.get("buy_in") else "")
-        if thesis:
-            value += f" &middot; {thesis}"
-        thin_html = (f'<span style="color:{ORANGE};"> &middot; {t["thin_note"]}</span>'
-                     if t.get("thin_note") else "")
-        # Realism chip in the card header — the RIVAL's-POV read on whether they'd accept
-        # (a fair/pay-up deal is realistic; a value-tilted one is a tougher sell). This is
-        # what turns "which of these would actually land?" into a glance.
-        acc_chip = (f'<span style="font-size:8.5px;font-weight:700;letter-spacing:.4px;'
-                    f'text-transform:uppercase;color:{acc_color};border:1px solid {acc_color};'
-                    f'border-radius:3px;padding:1px 5px;margin-left:6px;">{accept}</span>')
-        # Quiet one-line net hint (Base / You / Them) — see _trade_net_summary.
-        base_give = sum(o["_tval"] for o in t["outs"])
-        base_get  = sum(i["_tval"] for i in t["ins"])
-        net_summary = _trade_net_summary(
-            base_get - base_give,
-            t.get("my_get_val", base_get) - t.get("my_give_val", base_give),
-            t.get("their_get_val", base_get) - t.get("their_give_val", base_give))
-        logo = fantasy_logo(team_logos.get(t["team"], ""), size=20, team_name=t["team"])
-        tradelab_btn = _tradelab_button(t["team"],
-                                        [o.get("PlayerName") for o in t["outs"]],
-                                        [i.get("PlayerName") for i in t["ins"]])
-        cards.append(
-            f'<div style="background:{SURFACE};border:1px solid {BORDER};border-radius:8px;'
-            f'padding:12px 14px;margin-bottom:12px;">'
-            f'<div style="display:flex;justify-content:space-between;align-items:center;'
-            f'font-size:11px;color:{MUTED};margin-bottom:8px;">'
-            f'<span>with {logo}'
-            f'<span style="color:{TEXT};font-weight:700;">{t["team"]}</span>{acc_chip}</span>'
-            f'<span>{net_summary}{tradelab_btn}</span></div>'
-            f'<table style="width:100%;border-collapse:collapse;"><tr>'
-            f'<td style="width:47%;vertical-align:top;">'
-            f'<div style="font-size:9px;font-weight:700;color:{RED};text-transform:uppercase;'
-            f'letter-spacing:.5px;margin-bottom:3px;">You give</div>{give}</td>'
-            f'<td style="width:6%;text-align:center;color:{MUTED};font-size:17px;vertical-align:middle;">&#8644;</td>'
-            f'<td style="width:47%;vertical-align:top;">'
-            f'<div style="font-size:9px;font-weight:700;color:{GREEN};text-transform:uppercase;'
-            f'letter-spacing:.5px;margin-bottom:3px;">You get</div>{get_}</td>'
-            f'</tr></table>'
-            f'<div style="font-size:11px;color:{MUTED};margin-top:8px;border-top:1px solid {BORDER};'
-            f'padding-top:7px;">Upgrades your '
-            f'<span style="color:{ACCENT};font-weight:700;">{get_lbl}</span>; they shore up '
-            f'<span style="color:{TEXT};">{send_lbl}</span>'
-            f'<span style="color:{MUTED};"> &middot; {value}</span>{thin_html}</div>'
-            f'</div>'
-        )
-    n_fair = sum(1 for t in trades if t.get("lane") == "fair")
-    sub = (f'{len(trades)} swap{"s" if len(trades) != 1 else ""} that fix a rival&rsquo;s '
-           f'category need &mdash; <span style="color:{GREEN};">realistic</span>, near-even '
-           f'asks that actually land the upgrade, plus value plays where a rival is motivated'
-           if n_fair else
-           f'{len(trades)} swap{"s" if len(trades) != 1 else ""} that fix a rival&rsquo;s '
-           f'category need while tilting value your way (buy-low / sell-high where possible)')
-    return section_head("Trade Radar", sub) + "".join(cards)
-
 
 def compute_weekly_avgs(roto, current_week):
     """Return {team: {cat: weekly_avg}} from all completed weeks before current_week."""
@@ -3732,7 +1261,6 @@ def compute_weekly_avgs(roto, current_week):
                 pass
     return {t: {c: sum(v) / len(v) for c, v in cats.items() if v}
             for t, cats in buckets.items()}
-
 
 def compute_weekly_std(roto, current_week):
     """Return {team: {cat: population stddev}} of the same weekly buckets used by
@@ -3764,7 +1292,6 @@ def compute_weekly_std(roto, current_week):
     return {t: {c: _std(v) for c, v in cats.items() if len(v) >= 2}
             for t, cats in buckets.items()}
 
-
 def _cat_win_prob(pm, po, cat, sigma, remaining_frac):
     """Probability (p_win, p_tie) that I win / tie a category, from a normal model of
     the final margin. `pm`/`po` are my/opp projected end-of-week values; `sigma` is the
@@ -3784,7 +1311,6 @@ def _cat_win_prob(pm, po, cat, sigma, remaining_frac):
     p_tie  = max(0.0, 1.0 - p_win - p_loss)
     return p_win, p_tie
 
-
 def _project(current, avg, elapsed_frac, cat):
     """Project end-of-week value from current accumulated stat and historical weekly avg."""
     remaining = 1.0 - elapsed_frac
@@ -3794,7 +1320,6 @@ def _project(current, avg, elapsed_frac, cat):
         return current * elapsed_frac + avg * remaining   # weighted blend
     else:
         return current + remaining * avg                  # counting: add expected remainder
-
 
 def classify_categories(matchup, weekly_avgs=None, days_elapsed=None, remaining_proj=None, matchup_days=7,
                         game_days_elapsed=None, matchup_game_days=None):
@@ -3850,7 +1375,6 @@ def classify_categories(matchup, weekly_avgs=None, days_elapsed=None, remaining_
             proj_res = "W" if pm_r > po_r else ("T" if pm_r == po_r else "L")
         out[cat] = (proj_res, _tier(abs(pm_r - po_r), thresh))
     return out
-
 
 def build_category_pulse(matchup, weekly_avgs=None, days_elapsed=None, remaining_proj=None, is_sunday=False, weekly_std=None, matchup_days=7,
                          game_days_elapsed=None, matchup_game_days=None):
@@ -4061,14 +1585,6 @@ def build_category_pulse(matchup, weekly_avgs=None, days_elapsed=None, remaining
         table
     )
 
-
-_CAT_DISPLAY = {
-    "R": "R", "HR": "HR", "RBI": "RBI", "SB": "SB", "OPS": "OPS",
-    "B_SO": "B/SO", "K": "K", "QS": "QS", "W": "W",
-    "ERA": "ERA", "WHIP": "WHIP", "SVHD": "SV+H",
-}
-
-
 def build_prev_matchup_recap(prev_matchup, team_logos=None):
     if not prev_matchup or not prev_matchup.get("categories"):
         return ""
@@ -4165,7 +1681,6 @@ def build_prev_matchup_recap(prev_matchup, team_logos=None):
         f'</div>'
     )
 
-
 def _cat_score(r, cat):
     """Score a player on a single category for trade/add targeting."""
     if cat == "K":    return _n(r.get("ESPN_K"))   or _n(r.get("K"))
@@ -4182,11 +1697,9 @@ def _cat_score(r, cat):
     if cat == "B_SO": bso = _n(r.get("B_SO")); return max(0, 200 - bso) if bso > 0 else 0
     return 0
 
-
 _UPGRADE_MARGIN = 3.0   # min score-pt upgrade over my worst starter to bother flagging a bat pickup
                         # (deliberately modest: at my WEAKEST position even a small bump is worth it —
                         #  the point is to fill the hole, not chase the single biggest raw gap)
-
 
 def _roster_suggestion(matchup, pitchers, hitters, fa_sp, fa_rp, fa_hit,
                         my_team, best_recent_p, best_recent_h,
@@ -4479,7 +1992,6 @@ def _roster_suggestion(matchup, pitchers, hitters, fa_sp, fa_rp, fa_hit,
 
     return []
 
-
 def build_week_overview(matchup, week_cats, week_n, fa_sp, starts, days_elapsed, my_starts_by_day, week_end=None, is_sunday=False, roster_suggestion="", trade_bullets=None):
     bullets = []
 
@@ -4698,7 +2210,6 @@ def build_week_overview(matchup, week_cats, week_n, fa_sp, starts, days_elapsed,
         f'{items}'
         f'</div>'
     )
-
 
 def build_glossary_section():
     """In-digest reference explaining every score, metric, and data source.
@@ -4931,7 +2442,6 @@ def build_glossary_section():
         + f'<div style="margin-bottom:24px;">{scores}{badges}{pitching}{hitting}{proj}{sources}</div>'
     )
 
-
 def build_season_trajectory(weekly_results, standings, my_team=MY_TEAM):
     """Season W/L/T grid — teams as rows (standings order), weeks as columns, current
     streak in the final column. Ported from weekly_recap.build_trajectory (the two
@@ -5036,7 +2546,6 @@ def build_season_trajectory(weekly_results, standings, my_team=MY_TEAM):
                      "W/L/T by matchup \xb7 current streak in final column") +
         table
     )
-
 
 # Cats whose season value is an average, not a sum (rate stats).
 _SEASON_RATE_CATS = {"OPS", "ERA", "WHIP"}
@@ -5192,7 +2701,6 @@ def build_season_roto_rankings(roto, my_team=MY_TEAM, team_logos=None, season_to
         table
     )
 
-
 def build_bench_watch(eff):
     """Compact matchup-to-date 'Lineup Watch' callout for the daily digest: batter
     production you've stranded on the bench so far this matchup (net of the bat you'd have
@@ -5255,7 +2763,6 @@ def build_bench_watch(eff):
         f'{"".join(rows)}</div>'
     )
 
-
 # ── EMAIL BODY: "THE BRIEFING" ────────────────────────────────────────────────
 # The inline email body is NOT the full digest anymore (that ships as the attachment).
 # It's a short, plain-English skim — time-sensitive actions up top, then a one-line
@@ -5269,10 +2776,8 @@ _BRIEF_CAT_LABEL = {"B_SO": "few strikeouts", "SVHD": "SV+H", "QS": "QS", "OPS":
                     "ERA": "ERA", "WHIP": "WHIP", "HR": "HR", "RBI": "RBI",
                     "SB": "SB", "R": "runs", "K": "K", "W": "wins"}
 
-
 def _brief_lab(c):
     return _BRIEF_CAT_LABEL.get(c, c)
-
 
 def _brief_cat_list(cats, limit=3):
     """Join up to `limit` category labels as friendly prose ('runs, HR and RBI')."""
@@ -5282,7 +2787,6 @@ def _brief_cat_list(cats, limit=3):
     if len(labs) == 1:
         return labs[0]
     return ", ".join(labs[:-1]) + " and " + labs[-1]
-
 
 def render_briefing(my_team, today, matchup, classification, starts, today_str,
                     week_end_str, sr_emerging, alerts, my_row, n_teams, tune_in="",
@@ -5455,7 +2959,6 @@ def render_briefing(my_team, today, matchup, classification, starts, today_str,
         '</div>'
     )
 
-
 # ── TODAY'S MLB GAMES ─────────────────────────────────────────────────────────
 
 def _is_favorite_game(g):
@@ -5464,7 +2967,6 @@ def _is_favorite_game(g):
         if _FULLNAME_TO_ABBREV.get(g.get(side, "")) in _FAVORITE_MLB_TEAMS:
             return True
     return False
-
 
 def _rank_todays_games(todays_games, my_key, opp_key, pin_favorite=True):
     """Rank today's games by how much they overlap the current matchup, biased toward MY
@@ -5505,7 +3007,6 @@ def _rank_todays_games(todays_games, my_key, opp_key, pin_favorite=True):
     ranked.sort(key=lambda x: ((not x["fav"]) if pin_favorite else False,
                                -x["score"], x["g"].get("game_time_utc", "")))
     return ranked
-
 
 def build_todays_games_section(todays_games, my_team, opp_team, max_games=4,
                                hit_rows=None, pit_rows=None, recent_era=None, hit_pctile=None):
@@ -5617,7 +3118,6 @@ def build_todays_games_section(todays_games, my_team, opp_team, max_games=4,
         + '<div style="margin-bottom:24px;"></div>'
     )
 
-
 # ── EMAIL BUILDER ─────────────────────────────────────────────────────────────
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -5650,7 +3150,6 @@ def prepare_scoring(pitchers, hitters):
     compute_position_scarcity(hitters, hit_pctile)   # positional-scarcity scale → _POS_SCARCITY (hitter _tval)
     return hit_pctile, pit_pctile
 
-
 def build_recent_indexes(pitchers, hitters, recent_pitching, recent_hitting):
     """Per-window name→row indexes plus the best-available-recent cascade.
     Returns a dict with p7/p15/p30, h7/h15/h30 (FantasyPros short windows),
@@ -5676,7 +3175,6 @@ def build_recent_indexes(pitchers, hitters, recent_pitching, recent_hitting):
         best_recent_h={**rec_h,    **h7, **h15, **h30},
     )
 
-
 def claimed_today(transactions, today_str):
     """Names claimed off waivers today. Players claimed today may not yet have
     FantasyTeam set in the ESPN roster API, so today's transactions are a second
@@ -5688,7 +3186,6 @@ def claimed_today(transactions, today_str):
     for t in sorted(todays, key=lambda t: t.get("TransactionDate", "")):
         latest[t["PlayerName"]] = t["TransactionType"]
     return {name for name, txn_type in latest.items() if txn_type == "FA ADDED"}
-
 
 def parse_matchup_window(snap, today=None):
     """The matchup period window, from the snapshot's ESPN-derived dates (handles
@@ -5727,7 +3224,6 @@ def parse_matchup_window(snap, today=None):
         is_monday=today == matchup_start_date,
     )
 
-
 def compute_pit_proj(pitchers, my_team, opp_team, today_str, week_end_str):
     """Pitcher counting-stat projections (K, QS, W) for the REST of the matchup,
     from each side's actual remaining confirmed/projected starts — not weekly
@@ -5763,7 +3259,6 @@ def compute_pit_proj(pitchers, my_team, opp_team, today_str, week_end_str):
         "W":  {"my": proj_w(my_ss),  "opp": proj_w(opp_ss)},
     }
 
-
 def compute_week_finishes(roto, my_team, current_week_num):
     """Per-completed-week roto finishes. Returns (wk_ranks, wk_pts, roto_week_results):
     my weekly roto rank + points per completed week, and {week: {team: 'W'|'L'}}
@@ -5788,7 +3283,6 @@ def compute_week_finishes(roto, my_team, current_week_num):
             wk_ranks.append(my_rank)
             wk_pts.append(scores[my_key])
     return wk_ranks, wk_pts, roto_week_results
-
 
 def roster_hot_cold_counts(pitchers, hitters, my_team, rec_h, rec_p, p15):
     """Hot/cold counts across my ENTIRE roster for the Roster KPI — hitters by
@@ -5822,7 +3316,6 @@ def roster_hot_cold_counts(pitchers, hitters, my_team, rec_h, rec_p, p15):
                 if d >= 0.40:    n_hot  += 1
                 elif d <= -0.40: n_cold += 1
     return n_hot, n_cold
-
 
 def build_email(snap, override_team=None):
     my_team       = override_team if override_team else snap.get("my_team", MY_TEAM)
@@ -7168,7 +4661,6 @@ def build_email(snap, override_team=None):
 
     return full_html, briefing_html
 
-
 # ── SEND ──────────────────────────────────────────────────────────────────────
 
 def send_email(body_html, attachment_html, subject, filename=None, extra_attachments=None):
@@ -7212,7 +4704,6 @@ def send_email(body_html, attachment_html, subject, filename=None, extra_attachm
         smtp.login(FROM_EMAIL, GMAIL_APP_PASSWORD)
         smtp.sendmail(FROM_EMAIL, [TO_EMAIL, CC_EMAIL], msg.as_string())
     return 200
-
 
 # ── MAIN ─────────────────────────────────────────────────────────────────────
 
@@ -7328,7 +4819,6 @@ def main():
         print(f"  (log write skipped: {e})")
 
     print("\nDone.")
-
 
 if __name__ == "__main__":
     main()

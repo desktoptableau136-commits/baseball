@@ -323,7 +323,7 @@ def build_partner_fit(pitchers, hitters, roto, team_keys, ranks, n,
     # (the digest only wants the top ~6 league-wide; the board wants one per partner).
     _save = (sd._TRADE_MAX_CARDS, sd._TRADE_PER_TEAM_CAP)
     try:
-        sd._TRADE_MAX_CARDS, sd._TRADE_PER_TEAM_CAP = 400, 6
+        sd._set_trade_caps(400, 6)   # facade-safe: lands in fantasy.trades where find_trades reads it
         for pov in team_keys:
             my_needs, my_surplus = needs_of(pov), surplus_of(pov)
             deals = sd.find_trades_combined(pitchers, hitters, roto, pov, best_recent_p,
@@ -382,7 +382,7 @@ def build_partner_fit(pitchers, hitters, roto, team_keys, ranks, n,
             records.sort(key=lambda r: (_FIT_TIER_ORDER[r["tier"]], r["team"]))
             out[pov] = records
     finally:
-        sd._TRADE_MAX_CARDS, sd._TRADE_PER_TEAM_CAP = _save
+        sd._set_trade_caps(*_save)
     return out
 
 
