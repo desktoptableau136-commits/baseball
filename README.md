@@ -51,21 +51,17 @@ pip install -r requirements.txt
 
 ### 2. Configure ESPN credentials
 
-Your ESPN credentials are already hardcoded in `fetch_data.py` as fallbacks. They only need updating if ESPN logs you out (the `espn_s2` cookie expires periodically).
+ESPN credentials live ONLY in environment variables — `.env` locally, repository secrets on GitHub Actions. **This repo is public, so they are never hardcoded in source.** `fetch_data.py` exits with a clear error if they're missing.
 
-**How to get fresh ESPN credentials:**
+**How to get fresh ESPN credentials** (needed at first setup, and again whenever ESPN logs you out — the `espn_s2` cookie expires periodically):
 1. Log into ESPN Fantasy on Chrome
 2. Press `F12` → Application tab → Cookies → `espn.com`
 3. Copy the values for `swid` and `espn_s2`
-4. Update the fallback values near the top of `fetch_data.py`:
+4. Put them in `.env` (see `.env.example`):
 
-```python
-ESPN_CONFIG = {
-    "league_id": 277836,
-    "year":      2026,
-    "swid":      "{YOUR-SWID-HERE}",
-    "espn_s2":   "YOUR-ESPN-S2-HERE",
-}
+```
+ESPN_SWID={YOUR-SWID-HERE}
+ESPN_S2=YOUR-ESPN-S2-HERE
 ```
 
 Also update the matching GitHub Actions secrets (see [Automation](#automation)).
