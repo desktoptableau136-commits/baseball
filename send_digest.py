@@ -24,6 +24,7 @@ import subprocess
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
+from urllib.parse import quote
 
 try:
     from zoneinfo import ZoneInfo
@@ -97,6 +98,7 @@ MY_TEAM    = "Guerrero Warfare"
 YEAR       = 2026
 SNAPSHOT   = Path(__file__).parent / "data" / "snapshot.json"
 LOG_DIR    = Path(__file__).parent / "logs"
+TRADE_LAB_URL = "https://desktoptableau136-commits.github.io/baseball/"  # hosted pocket Trade Lab
 
 # ── SCORING ────────────────────────────────────────────────────────────────────
 
@@ -3254,6 +3256,25 @@ def _verdict_pill(label, color):
             f'font-size:11px;padding:2px 9px;border-radius:10px;">{label}</span>')
 
 
+def _tradelab_button(partner, give_names, get_names):
+    """Deep-link a Pending Trades / Trade Radar card into the hosted Trade Lab with this
+    exact deal preloaded, via the same #partner=&give=&get= hash trade_lab.py's
+    preloadFromHash() already parses. A plain cross-site link (not the Windows file://
+    launch that DATA.preload works around), so no JS is needed on the digest side.
+    "" when there's nothing resolvable to preload."""
+    give_names = [nm for nm in give_names if nm]
+    get_names = [nm for nm in get_names if nm]
+    if not (give_names or get_names):
+        return ""
+    frag = (f"partner={quote(partner)}&give={quote(','.join(give_names))}"
+            f"&get={quote(','.join(get_names))}")
+    return (f'<div style="margin-top:8px;text-align:right;">'
+            f'<a href="{TRADE_LAB_URL}#{frag}" target="_blank" rel="noopener" '
+            f'style="display:inline-block;font-size:11px;font-weight:700;color:#fff;'
+            f'background:{ACCENT};border-radius:5px;padding:5px 10px;text-decoration:none;">'
+            f'&#128295; Build in Trade Lab &#9656;</a></div>')
+
+
 def _pending_verdict(net_val, addresses_need, timing, incoming, star_surrender=False,
                      leaves_me_short=None):
     """Accept / Counter / Decline lean for a pending trade, from the SAME signals
@@ -3515,6 +3536,7 @@ def build_pending_trades_section(graded, best_recent_p, best_recent_h, hit_pctil
                             f' &middot; {g["value"]} from your side</span>')
             counter_html = ""
         logo = fantasy_logo(team_logos.get(partner, ""), size=20, team_name=partner)
+        tradelab_btn = _tradelab_button(partner, g["give_names"], g["get_names"])
         cards.append(
             f'<div style="background:{SURFACE};border:1px solid {BORDER};border-radius:8px;'
             f'padding:12px 14px;margin-bottom:12px;">'
@@ -3533,6 +3555,7 @@ def build_pending_trades_section(graded, best_recent_p, best_recent_h, hit_pctil
             f'padding-top:7px;">{verdict_html}{counter_html}'
             f'<div style="color:{MUTED};margin-top:3px;">Upgrades your '
             f'<span style="color:{ACCENT};font-weight:700;">{g["get_lbl"]}</span></div></div>'
+            f'{tradelab_btn}'
             f'</div>'
         )
 
@@ -3577,6 +3600,9 @@ def build_trade_radar(pitchers, hitters, roto, my_team, best_recent_p, best_rece
                     f'text-transform:uppercase;color:{acc_color};border:1px solid {acc_color};'
                     f'border-radius:3px;padding:1px 5px;margin-left:6px;">{accept}</span>')
         logo = fantasy_logo(team_logos.get(t["team"], ""), size=20, team_name=t["team"])
+        tradelab_btn = _tradelab_button(t["team"],
+                                        [o.get("PlayerName") for o in t["outs"]],
+                                        [i.get("PlayerName") for i in t["ins"]])
         cards.append(
             f'<div style="background:{SURFACE};border:1px solid {BORDER};border-radius:8px;'
             f'padding:12px 14px;margin-bottom:12px;">'
@@ -3596,6 +3622,7 @@ def build_trade_radar(pitchers, hitters, roto, my_team, best_recent_p, best_rece
             f'<span style="color:{ACCENT};font-weight:700;">{get_lbl}</span>; they shore up '
             f'<span style="color:{TEXT};">{send_lbl}</span>'
             f'<span style="color:{MUTED};"> &middot; {value}</span>{thin_html}</div>'
+            f'{tradelab_btn}'
             f'</div>'
         )
     n_fair = sum(1 for t in trades if t.get("lane") == "fair")
