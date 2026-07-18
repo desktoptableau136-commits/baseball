@@ -26,6 +26,14 @@ ROOT = Path(__file__).resolve().parent.parent
 BASELINE = ROOT / "previews_baseline"
 PREVIEWS = ROOT / "previews"
 
+# Windows consoles default to cp1252; a differing region can contain non-cp1252
+# characters (e.g. emoji avatars), which would crash the [DIFF] print mid-report.
+# Degrade unencodable characters to a placeholder instead of aborting.
+try:
+    sys.stdout.reconfigure(errors="replace")
+except Exception:
+    pass
+
 # (command, files it writes that we track)
 RENDERS = [
     (["python", "send_digest.py", "--dry-run", "--no-refresh"],

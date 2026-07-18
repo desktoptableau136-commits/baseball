@@ -26,6 +26,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from urllib.parse import quote
 
+from name_utils import _name_key  # canonical player-name join key (shared leaf module)
+
 try:
     from zoneinfo import ZoneInfo
     _ET = ZoneInfo("America/New_York")
@@ -75,13 +77,11 @@ def _ascii_lower(s):
                    if not unicodedata.combining(c)).lower().strip()
 
 
-def _badge_name_key(s):
-    """Loose join key for matching a roster/ESPN player name to a FantasyPros stat row:
-    _ascii_lower + drop punctuation + strip a trailing generational suffix (Jr./Sr./II-V),
-    which the two sources disagree on ('Jazz Chisholm Jr.' vs 'Jazz Chisholm')."""
-    import re as _re
-    k = _ascii_lower(s).replace(".", "").replace("'", "")
-    return _re.sub(r"\s+(jr|sr|ii|iii|iv|v)$", "", k).strip()
+# Back-compat alias: this name matches a roster/ESPN player name to a FantasyPros stat
+# row. It used to be its own near-duplicate of the name-key logic; it now points at the
+# single canonical `_name_key` (shared with fetch_data/weekly_recap). Kept as an alias so
+# existing internal call sites and `sd._badge_name_key` references (dashboard, docs) work.
+_badge_name_key = _name_key
 
 try:
     from dotenv import load_dotenv
