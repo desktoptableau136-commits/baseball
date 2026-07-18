@@ -3001,6 +3001,12 @@ def find_trades(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
             # "realistic vs aggressive ask" read so it's roster-aware, not just base-value.
             net_them = (sum(o["_tval"] * _need_mult(o, t_needs, t_surplus) for o in outs)
                         - sum(i["_tval"] * _need_mult(i, t_needs, t_surplus) for i in ins))
+            # Demand-side net from MY POV (+ = I win by MY needs) — the mirror `_grade_pending_
+            # trades` computes for a real offer's verdict. Lets the radar card carry its OWN
+            # "would you accept this?" read (via _pending_verdict), not just the rival's, so it
+            # can't disagree with what the Trade Lab shows for the identical deal.
+            net_me = (sum(i["_tval"] * _need_mult(i, my_needs, my_surplus, need_pos, surplus_pos) for i in ins)
+                      - sum(o["_tval"] * _need_mult(o, my_needs, my_surplus, need_pos, surplus_pos) for o in outs))
             # HONEST READ: a surviving deal that leaves the rival at exactly the floor at a
             # single-slot position (they give their starting C/1B/2B/3B/SS with no backup) is
             # thin, not clean. Each such slot penalizes net_them so _trade_tilt flips the read
@@ -3041,7 +3047,7 @@ def find_trades(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
                          + 4.0 * timing - 0.5 * (len(ins) - 1))
             trades.append({
                 "team": team, "outs": outs, "ins": ins, "net_val": net_val, "score": score,
-                "net_them": net_them, "thin_note": thin_note,
+                "net_them": net_them, "net_me": net_me, "timing": timing, "thin_note": thin_note,
                 "lane": mode, "sell_out": sell_out, "buy_in": buy_in,
                 "get_cats":  sorted(gcov, key=lambda c: -ranks[my_key][c]),
                 "get_pos":   sorted(gpos, key=lambda p: -need_pos[p][0]),
@@ -3261,18 +3267,18 @@ def _tradelab_button(partner, give_names, get_names):
     exact deal preloaded, via the same #partner=&give=&get= hash trade_lab.py's
     preloadFromHash() already parses. A plain cross-site link (not the Windows file://
     launch that DATA.preload works around), so no JS is needed on the digest side.
-    "" when there's nothing resolvable to preload."""
+    Returns a bare <a> (no wrapper) meant for the card's flex header row, alongside the
+    partner name, so a card doesn't need its own extra row. "" when nothing to preload."""
     give_names = [nm for nm in give_names if nm]
     get_names = [nm for nm in get_names if nm]
     if not (give_names or get_names):
         return ""
     frag = (f"partner={quote(partner)}&give={quote(','.join(give_names))}"
             f"&get={quote(','.join(get_names))}")
-    return (f'<div style="margin-top:8px;text-align:right;">'
-            f'<a href="{TRADE_LAB_URL}#{frag}" target="_blank" rel="noopener" '
-            f'style="display:inline-block;font-size:11px;font-weight:700;color:#fff;'
-            f'background:{ACCENT};border-radius:5px;padding:5px 10px;text-decoration:none;">'
-            f'&#128295; Build in Trade Lab &#9656;</a></div>')
+    return (f'<a href="{TRADE_LAB_URL}#{frag}" target="_blank" rel="noopener" '
+            f'style="color:{ACCENT};font-size:10px;font-weight:700;text-decoration:none;'
+            f'letter-spacing:.2px;white-space:nowrap;flex-shrink:0;margin-left:8px;">'
+            f'Build in Trade Lab &#8250;</a>')
 
 
 def _pending_verdict(net_val, addresses_need, timing, incoming, star_surrender=False,
@@ -3540,8 +3546,11 @@ def build_pending_trades_section(graded, best_recent_p, best_recent_h, hit_pctil
         cards.append(
             f'<div style="background:{SURFACE};border:1px solid {BORDER};border-radius:8px;'
             f'padding:12px 14px;margin-bottom:12px;">'
-            f'<div style="font-size:11px;color:{MUTED};margin-bottom:8px;">{tag}'
-            f' &middot; with {logo}<span style="color:{TEXT};font-weight:700;">{partner}</span>{exp}</div>'
+            f'<div style="display:flex;justify-content:space-between;align-items:center;'
+            f'font-size:11px;color:{MUTED};margin-bottom:8px;">'
+            f'<span>{tag} &middot; with {logo}'
+            f'<span style="color:{TEXT};font-weight:700;">{partner}</span>{exp}</span>'
+            f'{tradelab_btn}</div>'
             f'<table style="width:100%;border-collapse:collapse;"><tr>'
             f'<td style="width:47%;vertical-align:top;">'
             f'<div style="font-size:9px;font-weight:700;color:{RED};text-transform:uppercase;'
@@ -3555,7 +3564,6 @@ def build_pending_trades_section(graded, best_recent_p, best_recent_h, hit_pctil
             f'padding-top:7px;">{verdict_html}{counter_html}'
             f'<div style="color:{MUTED};margin-top:3px;">Upgrades your '
             f'<span style="color:{ACCENT};font-weight:700;">{g["get_lbl"]}</span></div></div>'
-            f'{tradelab_btn}'
             f'</div>'
         )
 
@@ -3599,6 +3607,18 @@ def build_trade_radar(pitchers, hitters, roto, my_team, best_recent_p, best_rece
         acc_chip = (f'<span style="font-size:8.5px;font-weight:700;letter-spacing:.4px;'
                     f'text-transform:uppercase;color:{acc_color};border:1px solid {acc_color};'
                     f'border-radius:3px;padding:1px 5px;margin-left:6px;">{accept}</span>')
+        # MY-side read, right beside it — the same ACCEPT/COUNTER/DECLINE the Trade Lab computes
+        # for this exact deal (_pending_verdict on net_me + star-surrender), so a "realistic" ask
+        # from the rival's POV can't quietly hide a "you're shipping a star at par" catch on mine.
+        mine_addresses_need = bool(t.get("get_cats") or t.get("get_pos"))
+        mine_star_surrender = _deal_star_surrender(t["ins"], t["outs"], net)
+        mine_label, mine_color, mine_why = _pending_verdict(
+            t.get("net_me", net), mine_addresses_need, t.get("timing", 0), True, mine_star_surrender)
+        mine_chip = (f'<span style="font-size:8.5px;font-weight:700;letter-spacing:.4px;'
+                    f'text-transform:uppercase;color:{mine_color};border:1px solid {mine_color};'
+                    f'border-radius:3px;padding:1px 5px;margin-left:4px;">you: {mine_label.lower()}</span>')
+        mine_why_html = (f'<div style="color:{mine_color};margin-top:4px;">You&rsquo;d '
+                         f'<b>{mine_label}</b> &mdash; {mine_why}</div>')
         logo = fantasy_logo(team_logos.get(t["team"], ""), size=20, team_name=t["team"])
         tradelab_btn = _tradelab_button(t["team"],
                                         [o.get("PlayerName") for o in t["outs"]],
@@ -3606,8 +3626,11 @@ def build_trade_radar(pitchers, hitters, roto, my_team, best_recent_p, best_rece
         cards.append(
             f'<div style="background:{SURFACE};border:1px solid {BORDER};border-radius:8px;'
             f'padding:12px 14px;margin-bottom:12px;">'
-            f'<div style="font-size:11px;color:{MUTED};margin-bottom:8px;">with {logo}'
-            f'<span style="color:{TEXT};font-weight:700;">{t["team"]}</span>{acc_chip}</div>'
+            f'<div style="display:flex;justify-content:space-between;align-items:center;'
+            f'font-size:11px;color:{MUTED};margin-bottom:8px;">'
+            f'<span>with {logo}'
+            f'<span style="color:{TEXT};font-weight:700;">{t["team"]}</span>{acc_chip}{mine_chip}</span>'
+            f'{tradelab_btn}</div>'
             f'<table style="width:100%;border-collapse:collapse;"><tr>'
             f'<td style="width:47%;vertical-align:top;">'
             f'<div style="font-size:9px;font-weight:700;color:{RED};text-transform:uppercase;'
@@ -3622,7 +3645,7 @@ def build_trade_radar(pitchers, hitters, roto, my_team, best_recent_p, best_rece
             f'<span style="color:{ACCENT};font-weight:700;">{get_lbl}</span>; they shore up '
             f'<span style="color:{TEXT};">{send_lbl}</span>'
             f'<span style="color:{MUTED};"> &middot; {value}</span>{thin_html}</div>'
-            f'{tradelab_btn}'
+            f'{mine_why_html}'
             f'</div>'
         )
     n_fair = sum(1 for t in trades if t.get("lane") == "fair")
