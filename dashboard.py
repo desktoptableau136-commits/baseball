@@ -171,8 +171,10 @@ def build_context(snap, my_team):
     _pit_pool = [r for r in pitchers if int(_n(r.get("Dataset")) or 0) == YEAR]
     pit_pctile = sd.build_cat_percentiles(_pit_pool, sd._FA_RP_CATS)
     sd.compute_position_scarcity(hitters, hit_pctile)   # positional-scarcity scale → _POS_SCARCITY (hitter _tval)
+    # Trade Radar tile is prescriptive ("go send this") — only ever surface deals a rival
+    # would realistically accept (see find_trades' realistic_only docstring).
     trades = sd.find_trades_combined(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
-                                     pos_data, hit_pctile, pit_pctile)
+                                     pos_data, hit_pctile, pit_pctile, realistic_only=True)
     # Real pending trade OFFERS (my team only) — graded once, same as the digest. A concrete
     # offer to decide on outranks the speculative radar ideas, so the tile leads with it.
     pending_incoming = [g for g in sd._grade_pending_trades(

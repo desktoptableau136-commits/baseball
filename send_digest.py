@@ -2858,8 +2858,24 @@ def _enrich_trade_player(r, ptype, best_recent_p, best_recent_h, hit_pctile, pit
     return r
 
 
+def _pos_need_surplus(pos_data, n_teams_fallback):
+    """(need_pos, surplus_pos) from a team's positional_breakdown rows — the shared convention
+    find_trades uses for 'my' side and (via pos_data_by_team) any rival side. need_pos:
+    {pos: (rank, my_avg)} for bottom-third HITTER positions only (positional need is
+    hitter-only — pitching need stays category-shaped). surplus_pos: set of top-third
+    positions across ALL roles (safe to trade FROM without opening a hole)."""
+    _nt    = lambda p: (p.get("n_teams") or n_teams_fallback)
+    _third = lambda p: max(1, round(_nt(p) / 3.0))
+    surplus_pos = {p["pos"] for p in pos_data if (p.get("rank") or _nt(p)) <= _third(p)}
+    need_pos = {p["pos"]: ((p.get("rank") or _nt(p)), (p.get("my_avg") or 0))
+                for p in pos_data if p.get("ptype") == "hit"
+                and (p.get("rank") or _nt(p)) >= _nt(p) - _third(p) + 1}
+    return need_pos, surplus_pos
+
+
 def find_trades(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
-                pos_data, hit_pctile, pit_pctile, mode="favor"):
+                pos_data, hit_pctile, pit_pctile, mode="favor",
+                pos_data_by_team=None, realistic_only=False):
     """Ranked list of mutually-beneficial trades between my_team and each rival.
     Perspective-driven via my_team (works under --team for free). See CLAUDE.md.
 
@@ -2870,7 +2886,17 @@ def find_trades(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
       a scarce C/SS upgrade. The give-side value ceiling is dropped (I'll deal a real chip
       for fair return), the gate is centered on even (I may even PAY UP to _TRADE_FAIR_PAYUP
       for a need-fill), and ranking rewards need-fit + their benefit + timing over any edge.
-    Each trade is tagged `"lane"` = the mode that produced it."""
+    Each trade is tagged `"lane"` = the mode that produced it.
+
+    `pos_data_by_team` (optional): {team_key: positional_breakdown(...)} cache so a caller
+    that already built it (e.g. trade_lab.py's Partner Fit Board, run from every team's POV)
+    doesn't trigger a positional_breakdown call storm; falls back to computing a rival's
+    positional_breakdown on demand when not supplied.
+    `realistic_only`: drop any candidate `_trade_tilt` wouldn't call "realistic" (rival demand
+    -side net or the graduated star-reach check) before it can win a slot — used by the
+    prescriptive Trade Radar surfaces (digest, dashboard) so they never suggest a deal the
+    rival would balk at. Left False for Partner Fit Board, which intentionally shows a
+    REACH/"worth a shot" tier too."""
     ranks, n = team_category_ranks(roto)
     my_key = " ".join(my_team.split())
     if n < 2 or my_key not in ranks:
@@ -2884,17 +2910,12 @@ def find_trades(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
         return []
 
     # Position groups I'm deep in (top-third rank) — safe to trade FROM without a hole.
-    _nt    = lambda p: (p.get("n_teams") or n)
-    _third = lambda p: max(1, round(_nt(p) / 3.0))
-    surplus_pos = {p["pos"] for p in pos_data if (p.get("rank") or _nt(p)) <= _third(p)}
     # HITTER positions I'm thin at (bottom-third rank) → {pos: (rank, my_avg_score)}. The
     # hitting game is filling roster holes across C/1B/2B/3B/SS/OF, so a hitter who
     # UPGRADES a thin position is worth acquiring even when my category totals there
     # aren't bottom-third — positional scarcity is its own need. (Pitching need is
     # category-shaped — QS/SP vs SV+H/K balance — so it stays category-driven.)
-    need_pos = {p["pos"]: ((p.get("rank") or _nt(p)), (p.get("my_avg") or 0))
-                for p in pos_data if p.get("ptype") == "hit"
-                and (p.get("rank") or _nt(p)) >= _nt(p) - _third(p) + 1}
+    need_pos, surplus_pos = _pos_need_surplus(pos_data, n)
 
     def roster(source, team):
         return [r for r in source
@@ -2932,6 +2953,9 @@ def find_trades(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
         t_players = ([enrich(r, "hit") for r in roster(hitters, team)] +
                      [enrich(r, "pit") for r in roster(pitchers, team)])
         t_pos_count = _team_position_counts(hitters, team)   # depth guard: rival bodies per position
+        t_pos_data = (pos_data_by_team.get(team) if pos_data_by_team else None) \
+            or positional_breakdown(pitchers, hitters, team, best_recent_p, best_recent_h)
+        t_need_pos, t_surplus_pos = _pos_need_surplus(t_pos_data, n)   # rival's positional need/surplus
 
         # Give side: strong in a send cat, at a surplus position, and NOT above the value
         # ceiling (unless a sell-high regression candidate I want to move anyway). FAIR mode
@@ -3002,11 +3026,12 @@ def find_trades(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
             if _deal_star_surrender(ins, outs, net_val):
                 continue
             # Demand-side net from the RIVAL's POV (+ = they win by THEIR needs): what they
-            # receive (my outs) valued by their needs, minus what they surrender (the ins).
-            # Category-based (rival positional need isn't plumbed into the digest) — drives the
-            # "realistic vs aggressive ask" read so it's roster-aware, not just base-value.
-            their_get_val = sum(o["_tval"] * _need_mult(o, t_needs, t_surplus) for o in outs)
-            their_give_val = sum(i["_tval"] * _need_mult(i, t_needs, t_surplus) for i in ins)
+            # receive (my outs) valued by their needs (category AND positional — same
+            # convention as the my-side calc below), minus what they surrender (the ins).
+            # Drives the "realistic vs aggressive ask" read so it's roster-aware, not just
+            # base-value. Matches the Trade Lab JS mirror (`netThem`/`partnerMeta`) exactly.
+            their_get_val = sum(o["_tval"] * _need_mult(o, t_needs, t_surplus, t_need_pos, t_surplus_pos) for o in outs)
+            their_give_val = sum(i["_tval"] * _need_mult(i, t_needs, t_surplus, t_need_pos, t_surplus_pos) for i in ins)
             net_them = their_get_val - their_give_val
             # Demand-side net from MY POV (+ = I win by MY needs) — feeds the quiet value-matrix
             # (Base / You / Them give-get-net) on the card, not a verdict; there's nothing to
@@ -3031,6 +3056,13 @@ def find_trades(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
                 net_them -= _TRADE_THIN_POS_PENALTY * len(thin_them)
                 _lbl = ", ".join(sorted(thin_them))
                 thin_note = f"leaves them without a backup at {_lbl}"
+            # Prescriptive surfaces (Trade Radar) only want deals the rival would actually
+            # accept — reuse _trade_tilt's own realistic/aggressive-ask read (net_them band +
+            # graduated star-reach check) as a hard generation-time gate, so an "aggressive
+            # ask" idea can never win a card slot. Left off for Partner Fit Board, which wants
+            # to see reach deals too (tiered separately as REACH/"worth a shot").
+            if realistic_only and _trade_tilt(net_val, ins, outs, net_them=net_them)[1] != "realistic":
+                continue
             # DIRECTIONAL timing: selling-high on the GIVE side and buying-low on the GET
             # side are the arbitrage (do more of it); giving away a riser or acquiring a
             # regression candidate is the reverse (penalize — these are traps).
@@ -3080,17 +3112,21 @@ def find_trades(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
 
 
 def find_trades_combined(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
-                         pos_data, hit_pctile, pit_pctile, cards=None):
+                         pos_data, hit_pctile, pit_pctile, cards=None,
+                         pos_data_by_team=None, realistic_only=False):
     """Blend the FAIR lane (realistic, near-even/pay-up deals a rival would accept — the
     ones that actually land a scarce C/SS upgrade) with the FAVOR-ME lane (value plays that
     fix a rival's need while tilting to me). Leads with a fair deal (the realistic ask),
     then alternates a value play, deduping identical packages and keeping the per-team +
-    total caps joint across lanes. Both lanes grade on the same scarcity-weighted `_tval`."""
+    total caps joint across lanes. Both lanes grade on the same scarcity-weighted `_tval`.
+    `pos_data_by_team`/`realistic_only` are forwarded to find_trades verbatim — see its
+    docstring."""
     cards = cards or _TRADE_MAX_CARDS
     args = (pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
             pos_data, hit_pctile, pit_pctile)
-    fair  = find_trades(*args, mode="fair")
-    value = find_trades(*args, mode="favor")
+    kwargs = dict(pos_data_by_team=pos_data_by_team, realistic_only=realistic_only)
+    fair  = find_trades(*args, mode="fair", **kwargs)
+    value = find_trades(*args, mode="favor", **kwargs)
     order = []
     for f, v in itertools.zip_longest(fair, value):   # fair leads each round (user priority)
         if f is not None:
@@ -3598,8 +3634,10 @@ def build_pending_trades_section(graded, best_recent_p, best_recent_h, hit_pctil
 
 def build_trade_radar(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
                       pos_data, hit_pctile, pit_pctile, team_logos=None):
+    # Trade Radar is prescriptive ("go send this") — only ever surface deals a rival would
+    # realistically accept (see find_trades' realistic_only docstring).
     trades = find_trades_combined(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
-                                  pos_data, hit_pctile, pit_pctile)
+                                  pos_data, hit_pctile, pit_pctile, realistic_only=True)
     if not trades:
         return ""
     team_logos = team_logos or {}

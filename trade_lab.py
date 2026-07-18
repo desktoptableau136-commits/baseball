@@ -349,7 +349,8 @@ def build_partner_fit(pitchers, hitters, roto, team_keys, ranks, n,
             my_needs, my_surplus = needs_of(pov), surplus_of(pov)
             deals = sd.find_trades_combined(pitchers, hitters, roto, pov, best_recent_p,
                                             best_recent_h, pos_data_by_team.get(pov, []),
-                                            hit_pctile, pit_pctile, cards=400)
+                                            hit_pctile, pit_pctile, cards=400,
+                                            pos_data_by_team=pos_data_by_team)
             by_team = {}
             for d in deals:
                 by_team.setdefault(d.get("team"), []).append(d)
@@ -1524,7 +1525,7 @@ function recompute() {{
         + '<div class="vgh"></div><div class="vgh">Give</div><div class="vgh">Get</div><div class="vgh">Net</div>'
         + _vrow('Base', giveVal, getVal, netVal, 'Universal value (tval) &mdash; ' + tilt)
         + _vrow('My value', myGive, myGet, netMe, 'Re-valued by your roster needs')
-        + _vrow('Their value', thGive, thGet, netThem, 'Re-valued by ' + (partnerMeta.name||'their') + ' needs')
+        + _vrow('Their value', thGet, thGive, netThem, (partnerMeta.name||'Their') + ' give/get, re-valued by their needs')
       + '</div>'
     + '<div class="readline" style="margin-top:8px"><span class="readlbl">You gain:</span> ' + gainChips + (posChips?' &nbsp; '+posChips:'') + '</div>'
     + '<div class="readline"><span class="readlbl">You lose:</span> ' + loseChips + '</div>';
