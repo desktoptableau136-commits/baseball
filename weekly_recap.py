@@ -10,7 +10,6 @@ Skip refresh:   python weekly_recap.py --no-refresh
 """
 
 import json
-import os
 import re
 import subprocess
 import sys
@@ -24,54 +23,20 @@ try:
 except Exception:
     _ET = None
 
+# Shared identity/UI/scoring code comes from send_digest (single source — see
+# CLAUDE.md "Shared derived-value helpers"); only recap-specific rendering lives here.
+import send_digest as sd
+from send_digest import (
+    BG, SURFACE, SURFACE2, BORDER, TEXT, MUTED, ACCENT, GREEN, RED, YELLOW,
+    TH_S, TD_S, TDC, MY_TEAM, TO_EMAIL,
+    _n, _fmt_refresh_time, _emoji_avatar, fantasy_logo, band_divider,
+    section_head, luck_standings, send_email,
+    build_season_trajectory, build_season_roto_rankings,
+)
 
-def _fmt_refresh_time(iso_str):
-    if not iso_str:
-        return ""
-    try:
-        dt = datetime.fromisoformat(iso_str)
-    except Exception:
-        return ""
-    if dt.tzinfo is not None and _ET is not None:
-        dt = dt.astimezone(_ET)
-    h = dt.hour % 12 or 12
-    ampm = "AM" if dt.hour < 12 else "PM"
-    return f"{h}:{dt.minute:02d} {ampm} ET"
-
-
-try:
-    from dotenv import load_dotenv
-    load_dotenv(Path(__file__).parent / ".env")
-except ImportError:
-    pass
-
-# ── CONFIG ─────────────────────────────────────────────────────────────────────
-GMAIL_APP_PASSWORD = os.getenv("GMAIL_APP_PASSWORD", "")
-TO_EMAIL   = "desktoptableau136@gmail.com"
-CC_EMAIL   = "katzsam@duck.com"
-FROM_EMAIL = "desktoptableau136@gmail.com"
-MY_TEAM    = "Guerrero Warfare"
-SNAPSHOT   = Path(__file__).parent / "data" / "snapshot.json"
+SNAPSHOT = Path(__file__).parent / "data" / "snapshot.json"
 
 # ── COLORS & STYLES (copied from send_digest.py) ──────────────────────────────
-BG       = "#080e1c"
-SURFACE  = "#101827"
-SURFACE2 = "#0d1424"
-BORDER   = "#1e2d45"
-TEXT     = "#e2e8f0"
-MUTED    = "#64748b"
-ACCENT   = "#3b82f6"
-GREEN    = "#22c55e"
-RED      = "#ef4444"
-YELLOW   = "#f59e0b"
-
-TH_S = (f"padding:8px 10px;background:{SURFACE};color:{MUTED};font-size:10px;"
-        f"font-weight:700;text-transform:uppercase;letter-spacing:.7px;"
-        f"border-bottom:2px solid {BORDER};white-space:nowrap;")
-TD_S = (f"padding:7px 10px;border-bottom:1px solid {BORDER};color:{TEXT};"
-        f"font-size:13px;vertical-align:middle;")
-TDC  = (f"padding:7px 10px;border-bottom:1px solid {BORDER};color:{TEXT};"
-        f"font-size:13px;text-align:center;vertical-align:middle;")
 # Uniform performer-table row height so the side-by-side hitter/pitcher columns
 # in Top Performers line up row-for-row. Rostered rows carry a 2-line name+team
 # cell (taller); FA rows are single-line (name only) so they get a tighter height.
@@ -92,13 +57,6 @@ _CAT_DISPLAY = {
 _CAT_ORDER = ["R", "HR", "RBI", "SB", "OPS", "B_SO", "K", "QS", "W", "ERA", "WHIP", "SVHD"]
 
 # ── SHARED HELPERS ─────────────────────────────────────────────────────────────
-
-def _n(val):
-    try:
-        v = float(val or 0)
-        return v if v > 0 else 0.0
-    except (TypeError, ValueError):
-        return 0.0
 
 
 def _name_key(name):
@@ -129,65 +87,6 @@ def _fix_mojibake(s):
         return s
 
 
-_FANTASY_EMOJI = {
-    "Giga Vlad":        ("\U0001f9db", "#6d28d9"),
-    "Dumpsta Fire":     ("\U0001f525", "#ea580c"),
-    "Kai-Wei Jelly":    ("\U0001f347", "#7e22ce"),
-    "The BIG Dumpers":  ("\U0001f4a9", "#78350f"),
-    "Walking Wounded":  ("\U0001fa79", "#0369a1"),
-}
-_BAD_LOGO_DOMAINS = ("mystique-api.fantasy.espn.com", "cdn.citybeat.com")
-
-
-def _emoji_avatar(team_name, size):
-    norm = " ".join(team_name.split())
-    emoji, color = _FANTASY_EMOJI.get(norm, ("", ""))
-    if not emoji:
-        words = norm.split()
-        emoji = "".join(w[0].upper() for w in words[:2])
-        color = f"#{abs(hash(norm)) % 0xBBBBBB + 0x222222:06x}"
-    font_size = max(10, int(size * 0.58))
-    return (
-        f'<span style="display:inline-block;width:{size}px;height:{size}px;'
-        f'border-radius:50%;background:{color};text-align:center;'
-        f'line-height:{size}px;font-size:{font_size}px;'
-        f'vertical-align:middle;margin-right:6px;">{emoji}</span>'
-    )
-
-
-def fantasy_logo(url, size=26, team_name=""):
-    if not url or any(d in url for d in _BAD_LOGO_DOMAINS):
-        return _emoji_avatar(team_name, size) if team_name else ""
-    return (
-        f'<img src="{url}" width="{size}" height="{size}" '
-        f'style="vertical-align:middle;border-radius:50%;margin-right:6px;object-fit:contain;" '
-        f'alt="">'
-    )
-
-
-def band_divider(label, color=None, anchor=None):
-    c = color or MUTED
-    anchor_tag = (
-        f'<a name="{anchor}" id="{anchor}" style="display:block;position:relative;'
-        f'top:-60px;visibility:hidden;"></a>'
-    ) if anchor else ""
-    top_link = (
-        f'<a href="#top" style="color:{MUTED};font-size:9px;font-weight:600;'
-        f'text-decoration:none;padding-left:10px;opacity:.7;">↑ top</a>'
-    ) if anchor else ""
-    right_div = f'<div style="flex:0;">{top_link}</div>' if top_link else ""
-    return (
-        anchor_tag +
-        f'<div style="display:flex;align-items:center;margin:32px 0 22px;">'
-        f'<div style="flex:1;height:1px;background:{BORDER};"></div>'
-        f'<span style="padding:0 14px;color:{c};font-size:10px;font-weight:700;'
-        f'letter-spacing:2px;text-transform:uppercase;">{label}</span>'
-        f'<div style="flex:1;height:1px;background:{BORDER};"></div>'
-        + right_div +
-        f'</div>'
-    )
-
-
 def _nav_bar():
     links = [
         ("Highlights",  "#band-highlights"),
@@ -211,42 +110,6 @@ def _nav_bar():
         f'{pills}'
         f'</div>'
     )
-
-
-def section_head(title, sub=""):
-    subtitle = (f'<div style="color:{MUTED};font-size:11px;margin-top:2px;">{sub}</div>'
-                if sub else "")
-    return (
-        f'<div style="border-left:3px solid {ACCENT};padding-left:11px;margin:0 0 10px 0;">'
-        f'<div style="color:{TEXT};font-size:12px;font-weight:700;text-transform:uppercase;'
-        f'letter-spacing:.6px;">{title}</div>'
-        f'{subtitle}</div>'
-    )
-
-
-def luck_standings(roto_rows, standings):
-    totals = {}
-    for row in roto_rows:
-        t = row.get("Team", "")
-        totals[t] = totals.get(t, 0) + float(row.get("Roto_Score") or 0)
-    sorted_teams = sorted(totals.items(), key=lambda x: -x[1])
-    roto_rank = {t: i + 1 for i, (t, _) in enumerate(sorted_teams)}
-    result = []
-    for s in standings:
-        t = s["team_name"]
-        rr = roto_rank.get(t, len(standings))
-        result.append({
-            "team":      t,
-            "wins":      s["wins"],
-            "losses":    s["losses"],
-            "ties":      s.get("ties", 0),
-            "standing":  s["standing"],
-            "roto_pts":  round(totals.get(t, 0), 1),
-            "roto_rank": rr,
-            "luck":      rr - s["standing"],
-            "logo_url":  s.get("logo_url", ""),
-        })
-    return sorted(result, key=lambda r: r["standing"])
 
 
 # ── FORMAT HELPERS ─────────────────────────────────────────────────────────────
@@ -721,145 +584,6 @@ def build_weekly_roto_rankings(roto, prev_week, logos):
 # Rate cats are averaged across matchups; everything else is a season sum.
 _RATE_CATS = {"OPS", "ERA", "WHIP"}
 
-def build_season_roto_rankings(roto, logos, season_totals=None):
-    """Season-long twin of the roto rankings grid: rank teams by cumulative roto score
-    (summed weekly roto points) but DISPLAY each category's true season-to-date value
-    from ESPN's cumulative `mTeam` view (`season_totals`, snapshot `season_cat_totals`).
-    Ranking/coloring and the displayed value are independent: points reflect who won each
-    category week by week; the value is ESPN's innings/AB-weighted season stat (rate cats
-    like ERA can't be recovered by averaging weekly values). Falls back to the old
-    summed/averaged weekly value only when a season total is missing."""
-    if not roto:
-        return ""
-
-    season_totals = season_totals or {}
-    _st_lookup = {" ".join(k.split()): v for k, v in season_totals.items()}
-
-    agg: dict[str, dict] = {}
-    for r in roto:
-        team = r.get("Team", "")
-        if not team:
-            continue
-        t = agg.setdefault(team, {
-            "pts":  {c: 0.0 for c in _CAT_ORDER},   # summed roto points → ranking
-            "vsum": {c: 0.0 for c in _CAT_ORDER},   # summed raw value
-            "vcnt": {c: 0   for c in _CAT_ORDER},   # weeks with a value (for rate avg)
-            "roto": 0.0,
-        })
-        t["roto"] += float(r.get("Roto_Score") or 0)
-        for c in _CAT_ORDER:
-            t["pts"][c] += float(r.get(f"{c}_Points") or 0)
-            v = r.get(c)
-            if v not in (None, ""):
-                try:
-                    t["vsum"][c] += float(v)
-                    t["vcnt"][c] += 1
-                except (TypeError, ValueError):
-                    pass
-
-    if not agg:
-        return ""
-
-    # Per-cat coloring tiers from the DISTINCT summed-point values (tie-safe, mirrors
-    # the weekly grid's value-based tiers rather than ordinal ranks).
-    tiers = {}
-    for c in _CAT_ORDER:
-        vals = sorted({t["pts"][c] for t in agg.values()}, reverse=True)
-        tiers[c] = {
-            "best":  vals[0] if vals else None,
-            "2nd":   vals[1] if len(vals) > 1 else None,
-            "worst": vals[-1] if vals else None,
-            "2last": vals[-2] if len(vals) > 1 else None,
-        }
-
-    ranked = sorted(agg.items(), key=lambda kv: -kv[1]["roto"])
-    n      = len(ranked)
-    my_key = " ".join(MY_TEAM.split())
-
-    _th  = TH_S.replace("padding:8px 10px", "padding:3px 5px").replace("font-size:10px", "font-size:9px")
-    _tdc = TDC.replace("padding:7px 10px", "padding:3px 5px").replace("font-size:13px", "font-size:10px")
-    _tds = TD_S.replace("padding:7px 10px", "padding:3px 5px").replace("font-size:13px", "font-size:10px")
-
-    rows_html = ""
-    for rank, (team, t) in enumerate(ranked, 1):
-        is_my = " ".join(team.split()) == my_key
-        if rank <= 3:
-            row_bg = "background:rgba(34,197,94,0.07);"
-        elif rank >= n - 2:
-            row_bg = "background:rgba(239,68,68,0.07);"
-        else:
-            row_bg = ""
-
-        logo = fantasy_logo(logos.get(" ".join(team.split()), ""), 16, team)
-        rank_color = GREEN if rank <= 3 else (RED if rank >= n - 2 else MUTED)
-
-        st_row = _st_lookup.get(" ".join(team.split()), {})
-        stat_cells = ""
-        for c in _CAT_ORDER:
-            pts = t["pts"][c]
-            # Prefer ESPN's true cumulative season value; fall back to the old
-            # summed/averaged weekly value only when a season total is missing.
-            if c in st_row and st_row[c] is not None:
-                val = st_row[c]
-            elif c in _RATE_CATS:
-                val = t["vsum"][c] / t["vcnt"][c] if t["vcnt"][c] else 0.0
-            else:
-                val = t["vsum"][c]
-            val_str = _fmt_cat(val, c)
-            ti = tiers[c]
-            if val_str == "—":
-                color, badge = MUTED, False
-            elif ti["best"] is not None and pts == ti["best"]:
-                color, badge = GREEN, True
-            elif ti["2nd"] is not None and pts == ti["2nd"]:
-                color, badge = "#86efac", False
-            elif ti["worst"] is not None and pts == ti["worst"]:
-                color, badge = RED, True
-            elif ti["2last"] is not None and pts == ti["2last"]:
-                color, badge = YELLOW, False
-            else:
-                color, badge = MUTED, False
-            inner = (
-                f'<span style="border:1px solid {color};border-radius:3px;padding:2px 6px;">{val_str}</span>'
-                if badge else val_str
-            )
-            stat_cells += f'<td style="{_tdc}color:{color};">{inner}</td>'
-
-        rows_html += (
-            f'<tr style="{row_bg}">'
-            f'<td style="{_tdc}color:{rank_color};font-weight:700;width:24px;">{rank}</td>'
-            f'<td style="{_tds}font-weight:{"800" if is_my else "600"};'
-            f'color:{ACCENT if is_my else TEXT};white-space:nowrap;">{logo}{team}</td>'
-            f'<td style="{_tdc}font-weight:700;">{t["roto"]:.1f}</td>'
-            + stat_cells +
-            f'</tr>'
-        )
-
-    stat_headers = "".join(
-        f'<th style="{_th}text-align:center;">{_CAT_DISPLAY.get(c, c)}</th>'
-        for c in _CAT_ORDER
-    )
-    header_row = (
-        f'<th style="{_th}text-align:center;width:24px;">#</th>'
-        f'<th style="{_th}">Team</th>'
-        f'<th style="{_th}text-align:center;">Pts</th>'
-        + stat_headers
-    )
-
-    table = (
-        f'<div style="overflow-x:auto;-webkit-overflow-scrolling:touch;">'
-        f'<table style="width:100%;border-collapse:collapse;font-size:10px;">'
-        f'<thead><tr>{header_row}</tr></thead>'
-        f'<tbody>{rows_html}</tbody></table></div>'
-    )
-
-    return (
-        section_head("Season Roto Rankings",
-                     "Ranked by cumulative roto points \xb7 category values are true season-to-date (ESPN) \xb7 "
-                     "bright green = #1 \xb7 light green = #2 \xb7 amber = 2nd-last \xb7 red = last") +
-        table
-    )
-
 
 def _two_col(left, right):
     """Lay two blocks side-by-side (email-safe table). Falls back to a single
@@ -1082,99 +806,6 @@ def build_standings_section(roto_rows, standings, logos):
     return (
         section_head("Standings & Luck",
                      "Luck = roto rank − actual W-L rank \xb7 positive = W-L better than roto predicts") +
-        table
-    )
-
-
-def build_trajectory(weekly_results, standings, logos):
-    """Season W/L grid: teams as rows, weeks as columns."""
-    if not weekly_results or not standings:
-        return ""
-
-    teams = [s["team_name"] for s in sorted(standings, key=lambda s: s["standing"])]
-    weeks = sorted(weekly_results.keys(), key=lambda w: int(w))
-    if not weeks:
-        return ""
-
-    my_key = " ".join(MY_TEAM.split())
-
-    def _get_result(week_data, team):
-        r = week_data.get(team)
-        if r:
-            return r
-        nteam = " ".join(team.split())
-        for k, v in week_data.items():
-            if " ".join(k.split()) == nteam:
-                return v
-        return ""
-
-    def _streak(team):
-        results = [_get_result(weekly_results[w], team) for w in weeks]
-        results = [r for r in results if r]
-        if not results:
-            return ""
-        last, count = results[-1], 0
-        for r in reversed(results):
-            if r == last:
-                count += 1
-            else:
-                break
-        return f"{last}{count}"
-
-    week_headers = "".join(
-        f'<th style="{TH_S}text-align:center;padding:4px 6px;min-width:22px;">{w}</th>'
-        for w in weeks
-    )
-
-    rows_html = ""
-    for team in teams:
-        is_my  = " ".join(team.split()) == my_key
-        streak = _streak(team)
-        streak_color = GREEN if streak.startswith("W") else (RED if streak.startswith("L") else MUTED)
-        bg = f"background:{ACCENT}12;" if is_my else ""
-
-        team_cell = (
-            f'<td style="{TD_S}font-weight:{"800" if is_my else "600"};'
-            f'color:{ACCENT if is_my else TEXT};white-space:nowrap;padding:4px 8px;">{team}</td>'
-        )
-        week_cells = ""
-        for w in weeks:
-            result = _get_result(weekly_results[w], team)
-            if result == "W":
-                cell_c = f"color:{GREEN};background:rgba(34,197,94,0.15);"
-            elif result == "L":
-                cell_c = f"color:{RED};background:rgba(239,68,68,0.12);"
-            elif result == "T":
-                cell_c = f"color:{TEXT};"
-            else:
-                cell_c = f"color:{MUTED};"
-            week_cells += (
-                f'<td style="{TDC}{cell_c}font-weight:700;font-size:11px;padding:4px 6px;">'
-                f'{result or "\xb7"}</td>'
-            )
-
-        streak_cell = (
-            f'<td style="{TDC}font-weight:700;color:{streak_color};font-size:11px;">'
-            f'{streak}</td>'
-        )
-        rows_html += f'<tr style="{bg}">{team_cell}{week_cells}{streak_cell}</tr>'
-
-    header_row = (
-        f'<th style="{TH_S}">Team</th>'
-        + week_headers
-        + f'<th style="{TH_S}text-align:center;">Streak</th>'
-    )
-
-    table = (
-        f'<div style="overflow-x:auto;-webkit-overflow-scrolling:touch;">'
-        f'<table style="width:100%;border-collapse:collapse;">'
-        f'<thead><tr>{header_row}</tr></thead>'
-        f'<tbody>{rows_html}</tbody></table></div>'
-    )
-
-    return (
-        section_head("Season Trajectory",
-                     "W/L/T by matchup \xb7 current streak in final column") +
         table
     )
 
@@ -1739,9 +1370,9 @@ def build_recap(snap):
         build_standings_section(roto, standings, logos),
         f'<div style="margin-top:28px;"></div>',
         _traj_anchor,
-        build_trajectory(weekly_results, standings, logos),
+        build_season_trajectory(weekly_results, standings),
         f'<div style="margin-top:28px;"></div>',
-        build_season_roto_rankings(roto, logos, snap.get("season_cat_totals")),
+        build_season_roto_rankings(roto, team_logos=logos, season_totals=snap.get("season_cat_totals")),
         _TOP_LINK_DIV,
     ]
     body = "\n".join(p for p in body_parts if p)
@@ -1773,35 +1404,6 @@ def build_recap(snap):
 
 
 # ── EMAIL ─────────────────────────────────────────────────────────────────────
-
-def send_email(html, subject, filename=None):
-    import smtplib
-    from email.mime.multipart import MIMEMultipart
-    from email.mime.text import MIMEText
-
-    if not GMAIL_APP_PASSWORD:
-        print("ERROR: GMAIL_APP_PASSWORD not set — add it to .env")
-        sys.exit(1)
-
-    msg = MIMEMultipart("mixed")
-    msg["Subject"] = subject
-    msg["From"]    = FROM_EMAIL
-    msg["To"]      = TO_EMAIL
-    msg["Cc"]      = CC_EMAIL
-
-    msg.attach(MIMEText(html, "html"))
-
-    attachment = MIMEText(html, "html", "utf-8")
-    attachment.add_header(
-        "Content-Disposition", "attachment",
-        filename=filename or f"recap_{datetime.now().strftime('%Y-%m-%d')}.html",
-    )
-    msg.attach(attachment)
-
-    with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
-        smtp.login(FROM_EMAIL, GMAIL_APP_PASSWORD)
-        smtp.sendmail(FROM_EMAIL, [TO_EMAIL, CC_EMAIL], msg.as_string())
-    return 200
 
 
 # ── MAIN ─────────────────────────────────────────────────────────────────────
@@ -1872,7 +1474,7 @@ def main():
         return
 
     print(f"\n[3/3] Sending to {TO_EMAIL}...")
-    send_email(html, subject, filename=attach_name)
+    send_email(html, html, subject, filename=attach_name)
     print("  Sent.")
     print("\nDone.")
 
