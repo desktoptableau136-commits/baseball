@@ -1378,9 +1378,6 @@ function recompute() {{
     label='COUNTER'; color='{YELLOW}';
     why='leaves you thin at '+leavesMeShort.join(', ')+' &mdash; get a replacement first';
   }}
-  vBox.innerHTML = '<span class="vpill" style="background:'+color+'">'+label+'</span>'
-    + '<div class="vwhy">'+why+'</div>';
-  setDealBar(lKeys.length, rKeys.length, netVal, label, color);
 
   // Value tilt phrase (Trade Radar wording, +/-0.1).
   var tilt = netVal > 0.1 ? 'you win the value' : (netVal < -0.1 ? 'you pay up' : 'even value');
@@ -1413,8 +1410,23 @@ function recompute() {{
     pfTier = 'no'; pfReason = 'it doesn\'t address anything they need';
   }}
 
+  // OVERALL-DEAL check: the pill above answers "is this good FOR ME" — but a trade is a
+  // two-sided negotiation, so an ACCEPT that the rival would flatly balk at (pfTier no/maybe)
+  // isn't really landable as-is. Downgrade to COUNTER and say why, so this pill can't
+  // contradict "Would they do it?" below it.
+  if (label === 'ACCEPT' && pfTier !== 'yes' && pfTier !== 'na') {{
+    label='COUNTER'; color='{YELLOW}';
+    why = "good for you, but " + pfReason;
+  }}
+
+  vBox.innerHTML = '<span class="vpill" style="background:'+color+'">'+label+'</span>'
+    + '<div class="vwhy">'+why+'</div>';
+  setDealBar(lKeys.length, rKeys.length, netVal, label, color);
+
   // MY-side acceptance — the mirror of "Would they do it?". A star surrender at par is the read
   // that makes an even deal one *I* should hold out on, no matter how well the categories fit.
+  // Trap (timing) is checked here too so this line can't disagree with the pill above, which
+  // also gates on trap.
   var yfTier, yfReason;
   if (!lKeys.length && !rKeys.length) {{
     yfTier = 'na'; yfReason = '&mdash;';
@@ -1422,6 +1434,13 @@ function recompute() {{
     yfTier = 'no'; yfReason = 'you\'d ship your star at even value &mdash; hold out for more';
   }} else if (leavesMeShort.length) {{
     yfTier = 'no'; yfReason = 'it leaves you without a backup at ' + leavesMeShort.join(', ') + ' &mdash; get a replacement first';
+  }} else if (trap && !(needFilled.length || posList.length)) {{
+    yfTier = 'no'; yfReason = 'the timing is a trap &mdash; you\'d be selling a riser or buying a regressor';
+  }} else if ((needFilled.length || posList.length) && trap) {{
+    yfTier = 'maybe';
+    yfReason = 'it fills a need (' + needFilled.map(function(c){{return DATA.catLabels[c]||c;}}).join(', ')
+             + (posList.length ? (needFilled.length ? ', ' : '') + posList.join(', ') + ' slot' : '')
+             + '), but the timing is a trap';
   }} else if (needFilled.length || posList.length) {{
     yfTier = 'yes';
     yfReason = 'it fills your needs (' + needFilled.map(function(c){{return DATA.catLabels[c]||c;}}).join(', ')
