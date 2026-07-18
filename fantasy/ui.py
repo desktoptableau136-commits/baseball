@@ -6,6 +6,7 @@ LEAF layer — it imports only the stdlib (and nothing from send_digest), so eve
 other layer can depend on it. send_digest re-exports everything here via
 `from fantasy.ui import *`, so `sd.<name>` keeps working unchanged.
 """
+import hashlib
 import re
 from datetime import datetime
 
@@ -185,7 +186,11 @@ def _emoji_avatar(team_name, size):
     if not emoji:
         words = norm.split()
         emoji = "".join(w[0].upper() for w in words[:2])
-        color = f"#{abs(hash(norm)) % 0xBBBBBB + 0x222222:06x}"
+        # deterministic hash (md5) so the fallback color is stable across runs —
+        # builtin hash() is per-process salted, which forced a PYTHONHASHSEED pin on
+        # the render-diff harness. Same mid-brightness band [0x222222, 0xDDDDDD].
+        seed = int(hashlib.md5(norm.encode("utf-8")).hexdigest(), 16)
+        color = f"#{seed % 0xBBBBBB + 0x222222:06x}"
     font_size = max(10, int(size * 0.58))
     return (
         f'<span style="display:inline-block;width:{size}px;height:{size}px;'

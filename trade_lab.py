@@ -296,10 +296,13 @@ def _fit_get_tags(ins, my_needs):
     """Short need tags an incoming player fills: thin positions (C/SS/...) + my need cats."""
     tags = []
     for p in ins:
-        for pos in (p.get("_tfillpos") or []):
+        # sorted iteration: _tfillpos/_tcats are set-derived (salted order), and these tags
+        # get JSON-serialized into the Partner-Fit board — sort each group so the render is
+        # process-stable while keeping positions-before-cats grouping.
+        for pos in sorted(p.get("_tfillpos") or []):
             if pos not in tags:
                 tags.append(pos)
-        for c in (p.get("_tcats") or []):
+        for c in sorted(p.get("_tcats") or []):
             if c in my_needs:
                 lbl = CAT_LABELS.get(c, c)
                 if lbl not in tags:
