@@ -5,6 +5,7 @@
 data/
 logs/
 previews/
+previews_baseline/
 public/
 
 # Python
