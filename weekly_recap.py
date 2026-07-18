@@ -13,7 +13,6 @@ import json
 import re
 import subprocess
 import sys
-import unicodedata
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -29,7 +28,7 @@ import send_digest as sd
 from send_digest import (
     BG, SURFACE, SURFACE2, BORDER, TEXT, MUTED, ACCENT, GREEN, RED, YELLOW,
     TH_S, TD_S, TDC, MY_TEAM, TO_EMAIL,
-    _n, _fmt_refresh_time, _emoji_avatar, fantasy_logo, band_divider,
+    _n, _name_key, _fmt_refresh_time, _emoji_avatar, fantasy_logo, band_divider,
     section_head, luck_standings, send_email,
     build_season_trajectory, build_season_roto_rankings,
 )
@@ -57,25 +56,23 @@ _CAT_DISPLAY = {
 _CAT_ORDER = ["R", "HR", "RBI", "SB", "OPS", "B_SO", "K", "QS", "W", "ERA", "WHIP", "SVHD"]
 
 # ── SHARED HELPERS ─────────────────────────────────────────────────────────────
-
-
-def _name_key(name):
-    """Accent-strip + lowercase + drop Jr/Sr/II-V — fuzzy name merge key."""
-    if not name:
-        return ""
-    s = unicodedata.normalize("NFD", str(name))
-    s = "".join(c for c in s if unicodedata.category(c) != "Mn")
-    s = s.lower()
-    s = re.sub(r"\s+(jr\.?|sr\.?|ii|iii|iv|v)$", "", s)
-    return re.sub(r"[^a-z0-9 ]", "", s).strip()
+# _name_key is imported from send_digest (the shared canonical join key).
 
 
 def _fix_mojibake(s):
-    """Fix literal \\xNN escape sequences in player names from pybaseball.
-    e.g. 'Hern\\xc3\\xa1ndez' (literal backslashes) → 'Hernández'
-    """
-    if not isinstance(s, str) or "\\x" not in s:
+    """Fix name artifacts from pybaseball/Baseball-Reference scrapes, both stored as
+    literal backslashes in the snapshot:
+      - literal \\xNN escape sequences  ('Hern\\xc3\\xa1ndez' → 'Hernández')
+      - backslash-escaped apostrophes   ("Ryan O\\'Hearn"   → "Ryan O'Hearn")
+    The apostrophe form has no \\x, so it must be cleaned before the \\x early-out.
+    Cleaning it here (rather than relying on the name key to strip punctuation) keeps
+    the shared canonical _name_key — which preserves apostrophes — able to match these
+    names to their clean season-roster rows (else the player wrongly shows as an FA)."""
+    if not isinstance(s, str):
         return s or ""
+    s = s.replace("\\'", "'")          # backslash-escaped apostrophe (carries no \x)
+    if "\\x" not in s:
+        return s
     try:
         # Replace each literal \xNN with the corresponding Latin-1 character
         expanded = re.sub(r"\\x([0-9a-fA-F]{2})",

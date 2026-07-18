@@ -22,6 +22,8 @@ from pathlib import Path
 import pandas as pd
 import requests
 
+from name_utils import _name_key  # canonical player-name join key (shared leaf module)
+
 warnings.filterwarnings("ignore")
 
 # â”€â”€ CONFIG â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -102,23 +104,6 @@ def lf_to_name(x):
         name = f"{parts[1].strip()} {parts[0].strip()}"
         return "".join(c for c in unicodedata.normalize("NFD", name) if unicodedata.category(c) != "Mn")
     return x
-
-
-_NAME_SUFFIXES = {"jr", "sr", "ii", "iii", "iv", "v"}
-
-
-def _name_key(name):
-    """Normalized join key for roster matching: accent-stripped, lowercased, and with
-    trailing generational suffixes (Jr./Sr./II/III/…) and punctuation removed. Lets
-    FantasyPros 'Luis Garcia' match ESPN 'Luis García Jr.' without a per-player patch.
-    Keeps at least the first+last token so it never collapses a real name."""
-    if not isinstance(name, str):
-        return ""
-    s = "".join(c for c in unicodedata.normalize("NFD", name) if unicodedata.category(c) != "Mn")
-    toks = s.lower().replace(".", " ").replace(",", " ").split()
-    while len(toks) > 2 and toks[-1] in _NAME_SUFFIXES:
-        toks.pop()
-    return " ".join(toks)
 
 
 def merge_on_name(fp, right, cols, how="left"):
