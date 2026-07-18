@@ -25,21 +25,26 @@ import requests
 warnings.filterwarnings("ignore")
 
 # â”€â”€ CONFIG â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-# Credentials are read from environment variables (GitHub Actions secrets) and
-# fall back to the hardcoded values below for local development.
-_ESPN_S2_DEFAULT = (
-    "AEB1C0RkPOTa50dJzQQG4BZuBNx1tKiEP7xREJDbsYuebz81BVSgMKZRNSRBBE2tKD"
-    "%2BLiUkt456IRYYqP3pa%2F8WNuzkZWVEoezqYBu9NUMzwY0nDmTWzUwXX8%2BsLi78"
-    "zCaKUe41LX4ILlUG7%2BFnBgprAKjjCpQNsHRxhh6KlH11jAWNZANuteehxSckaybxi"
-    "%2B%2Fk3uFoABmTkzuw%2FHR4lHvXQb89k31ni6O7kSfKdbQgjWgpr3FFUWKnwUu%2F"
-    "ZsuGnzKl7Cin8yPMZ1adpgH6dNF0D"
-)
+# Credentials come ONLY from environment variables: GitHub Actions secrets on CI,
+# .env locally (loaded below; the repo is public, so no hardcoded fallbacks — ever).
+try:
+    from dotenv import load_dotenv
+    load_dotenv(Path(__file__).parent / ".env")
+except ImportError:
+    pass
+
 ESPN_CONFIG = {
     "league_id": 277836,
     "year":      2026,
-    "swid":      os.getenv("ESPN_SWID", "{389786AB-5AC8-47E0-AF7A-771B7B626E04}"),
-    "espn_s2":   os.getenv("ESPN_S2",   _ESPN_S2_DEFAULT),
+    "swid":      os.getenv("ESPN_SWID", ""),
+    "espn_s2":   os.getenv("ESPN_S2", ""),
 }
+if not ESPN_CONFIG["swid"] or not ESPN_CONFIG["espn_s2"]:
+    sys.exit(
+        "ERROR: ESPN_SWID and ESPN_S2 are not set.\n"
+        "Locally: add both to .env (see .env.example for how to find them).\n"
+        "CI: set them as GitHub Actions repository secrets."
+    )
 
 # Your team name on ESPN (used to identify your players in the digest)
 MY_TEAM_NAME = "Guerrero Warfare"   # e.g. "Sam's Sluggers" â€” leave blank to auto-detect first team

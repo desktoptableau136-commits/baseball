@@ -356,4 +356,4 @@ CYAN="#22d3ee"  SILVER="#c8d0da"
 ## Environment notes
 
 - fetch_data.py on Windows: ASCII-only in print/log strings (charmap encoding crashes on Unicode).
-- ESPN credentials (swid, espn_s2) are hardcoded in fetch_data.py as fallbacks; also GitHub Actions secrets.
+- ESPN credentials (ESPN_SWID, ESPN_S2) are env-only — `.env` locally (fetch_data.py loads dotenv), GitHub Actions secrets on CI. NEVER hardcode them in source: the repo is public. fetch_data.py exits with a clear error when they're missing.

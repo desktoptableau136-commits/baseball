@@ -1,5 +1,8 @@
-pandas
-requests
-espn_api
-pybaseball
-python-dotenv
+# Pinned to known-good minor versions: the daily CI job installs fresh every morning,
+# so an unpinned breaking release (pandas, espn_api) would silently kill the digest.
+# Bump deliberately, then let the PR smoke test prove the new version renders.
+pandas~=3.0
+requests~=2.34
+espn_api~=0.46
+pybaseball~=2.2
+python-dotenv~=1.2
