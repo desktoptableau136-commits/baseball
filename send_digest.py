@@ -24,6 +24,7 @@ import subprocess
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
+from urllib.parse import quote
 
 try:
     from zoneinfo import ZoneInfo
@@ -97,6 +98,7 @@ MY_TEAM    = "Guerrero Warfare"
 YEAR       = 2026
 SNAPSHOT   = Path(__file__).parent / "data" / "snapshot.json"
 LOG_DIR    = Path(__file__).parent / "logs"
+TRADE_LAB_URL = "https://desktoptableau136-commits.github.io/baseball/"  # hosted pocket Trade Lab
 
 # ── SCORING ────────────────────────────────────────────────────────────────────
 
@@ -2993,12 +2995,25 @@ def find_trades(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
             if _leaves_position_short(my_pos_count, outs, ins):   # I give outs, receive ins
                 continue
             net_val  = sum(i["_tval"] for i in ins) - sum(o["_tval"] for o in outs)  # my base value edge (+ = I win)
+            # A radar idea is something *I* would send — never suggest one that requires me to
+            # surrender my best-role star at par (same graduated reluctance _deal_star_reach
+            # checks on the rival's side). There's no "counter" on an outgoing offer, so instead
+            # of flagging it, just don't propose it.
+            if _deal_star_surrender(ins, outs, net_val):
+                continue
             # Demand-side net from the RIVAL's POV (+ = they win by THEIR needs): what they
             # receive (my outs) valued by their needs, minus what they surrender (the ins).
             # Category-based (rival positional need isn't plumbed into the digest) — drives the
             # "realistic vs aggressive ask" read so it's roster-aware, not just base-value.
-            net_them = (sum(o["_tval"] * _need_mult(o, t_needs, t_surplus) for o in outs)
-                        - sum(i["_tval"] * _need_mult(i, t_needs, t_surplus) for i in ins))
+            their_get_val = sum(o["_tval"] * _need_mult(o, t_needs, t_surplus) for o in outs)
+            their_give_val = sum(i["_tval"] * _need_mult(i, t_needs, t_surplus) for i in ins)
+            net_them = their_get_val - their_give_val
+            # Demand-side net from MY POV (+ = I win by MY needs) — feeds the quiet value-matrix
+            # (Base / You / Them give-get-net) on the card, not a verdict; there's nothing to
+            # "accept" on a deal I'm the one proposing.
+            my_get_val = sum(i["_tval"] * _need_mult(i, my_needs, my_surplus, need_pos, surplus_pos) for i in ins)
+            my_give_val = sum(o["_tval"] * _need_mult(o, my_needs, my_surplus, need_pos, surplus_pos) for o in outs)
+            net_me = my_get_val - my_give_val
             # HONEST READ: a surviving deal that leaves the rival at exactly the floor at a
             # single-slot position (they give their starting C/1B/2B/3B/SS with no backup) is
             # thin, not clean. Each such slot penalizes net_them so _trade_tilt flips the read
@@ -3039,7 +3054,9 @@ def find_trades(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
                          + 4.0 * timing - 0.5 * (len(ins) - 1))
             trades.append({
                 "team": team, "outs": outs, "ins": ins, "net_val": net_val, "score": score,
-                "net_them": net_them, "thin_note": thin_note,
+                "net_them": net_them, "net_me": net_me, "thin_note": thin_note,
+                "my_give_val": my_give_val, "my_get_val": my_get_val,
+                "their_give_val": their_give_val, "their_get_val": their_get_val,
                 "lane": mode, "sell_out": sell_out, "buy_in": buy_in,
                 "get_cats":  sorted(gcov, key=lambda c: -ranks[my_key][c]),
                 "get_pos":   sorted(gpos, key=lambda p: -need_pos[p][0]),
@@ -3252,6 +3269,39 @@ def _verdict_pill(label, color):
     and the glossary so the two can't drift)."""
     return (f'<span style="background:{color};color:#0b1220;font-weight:800;'
             f'font-size:11px;padding:2px 9px;border-radius:10px;">{label}</span>')
+
+
+def _tradelab_button(partner, give_names, get_names):
+    """Deep-link a Pending Trades / Trade Radar card into the hosted Trade Lab with this
+    exact deal preloaded, via the same #partner=&give=&get= hash trade_lab.py's
+    preloadFromHash() already parses. A plain cross-site link (not the Windows file://
+    launch that DATA.preload works around), so no JS is needed on the digest side.
+    Returns a bare <a> (no wrapper) meant for the card's flex header row, alongside the
+    partner name, so a card doesn't need its own extra row. "" when nothing to preload."""
+    give_names = [nm for nm in give_names if nm]
+    get_names = [nm for nm in get_names if nm]
+    if not (give_names or get_names):
+        return ""
+    frag = (f"partner={quote(partner)}&give={quote(','.join(give_names))}"
+            f"&get={quote(','.join(get_names))}")
+    return (f'<a href="{TRADE_LAB_URL}#{frag}" target="_blank" rel="noopener" '
+            f'style="color:{ACCENT};font-size:10px;font-weight:700;text-decoration:none;'
+            f'letter-spacing:.2px;white-space:nowrap;flex-shrink:0;margin-left:8px;">'
+            f'Build in Trade Lab &#8250;</a>')
+
+
+def _trade_net_summary(base_net, me_net, them_net):
+    """One-line net-value hint in a Trade Radar card header, right before the Trade Lab
+    link — base (universal tval net), you / them (re-valued by each side's own needs).
+    Plain numbers only, no verdict language, nothing to accept/counter/decline."""
+    def _seg(label, net):
+        color = GREEN if net > 0.1 else (RED if net < -0.1 else MUTED)
+        sign = "+" if net >= 0 else ""
+        return (f'<span style="color:{MUTED};">{label} </span>'
+                f'<span style="color:{color};font-weight:700;">{sign}{net:.2f}</span>')
+    return (f'<span style="font-size:9.5px;white-space:nowrap;margin-right:8px;">'
+            f'{_seg("base", base_net)} &middot; {_seg("you", me_net)} &middot; '
+            f'{_seg("them", them_net)}</span>')
 
 
 def _pending_verdict(net_val, addresses_need, timing, incoming, star_surrender=False,
@@ -3515,11 +3565,15 @@ def build_pending_trades_section(graded, best_recent_p, best_recent_h, hit_pctil
                             f' &middot; {g["value"]} from your side</span>')
             counter_html = ""
         logo = fantasy_logo(team_logos.get(partner, ""), size=20, team_name=partner)
+        tradelab_btn = _tradelab_button(partner, g["give_names"], g["get_names"])
         cards.append(
             f'<div style="background:{SURFACE};border:1px solid {BORDER};border-radius:8px;'
             f'padding:12px 14px;margin-bottom:12px;">'
-            f'<div style="font-size:11px;color:{MUTED};margin-bottom:8px;">{tag}'
-            f' &middot; with {logo}<span style="color:{TEXT};font-weight:700;">{partner}</span>{exp}</div>'
+            f'<div style="display:flex;justify-content:space-between;align-items:center;'
+            f'font-size:11px;color:{MUTED};margin-bottom:8px;">'
+            f'<span>{tag} &middot; with {logo}'
+            f'<span style="color:{TEXT};font-weight:700;">{partner}</span>{exp}</span>'
+            f'{tradelab_btn}</div>'
             f'<table style="width:100%;border-collapse:collapse;"><tr>'
             f'<td style="width:47%;vertical-align:top;">'
             f'<div style="font-size:9px;font-weight:700;color:{RED};text-transform:uppercase;'
@@ -3576,12 +3630,25 @@ def build_trade_radar(pitchers, hitters, roto, my_team, best_recent_p, best_rece
         acc_chip = (f'<span style="font-size:8.5px;font-weight:700;letter-spacing:.4px;'
                     f'text-transform:uppercase;color:{acc_color};border:1px solid {acc_color};'
                     f'border-radius:3px;padding:1px 5px;margin-left:6px;">{accept}</span>')
+        # Quiet one-line net hint (Base / You / Them) — see _trade_net_summary.
+        base_give = sum(o["_tval"] for o in t["outs"])
+        base_get  = sum(i["_tval"] for i in t["ins"])
+        net_summary = _trade_net_summary(
+            base_get - base_give,
+            t.get("my_get_val", base_get) - t.get("my_give_val", base_give),
+            t.get("their_get_val", base_get) - t.get("their_give_val", base_give))
         logo = fantasy_logo(team_logos.get(t["team"], ""), size=20, team_name=t["team"])
+        tradelab_btn = _tradelab_button(t["team"],
+                                        [o.get("PlayerName") for o in t["outs"]],
+                                        [i.get("PlayerName") for i in t["ins"]])
         cards.append(
             f'<div style="background:{SURFACE};border:1px solid {BORDER};border-radius:8px;'
             f'padding:12px 14px;margin-bottom:12px;">'
-            f'<div style="font-size:11px;color:{MUTED};margin-bottom:8px;">with {logo}'
-            f'<span style="color:{TEXT};font-weight:700;">{t["team"]}</span>{acc_chip}</div>'
+            f'<div style="display:flex;justify-content:space-between;align-items:center;'
+            f'font-size:11px;color:{MUTED};margin-bottom:8px;">'
+            f'<span>with {logo}'
+            f'<span style="color:{TEXT};font-weight:700;">{t["team"]}</span>{acc_chip}</span>'
+            f'<span>{net_summary}{tradelab_btn}</span></div>'
             f'<table style="width:100%;border-collapse:collapse;"><tr>'
             f'<td style="width:47%;vertical-align:top;">'
             f'<div style="font-size:9px;font-weight:700;color:{RED};text-transform:uppercase;'
