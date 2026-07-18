@@ -37,6 +37,8 @@ fetch_data.py  →  data/snapshot.json  →  send_digest.py   →  daily email
 
 `snapshot_schema.py` validates `data/snapshot.json` against the contract the readers depend on. `fetch_data.py` runs it automatically before saving — if the fetch produced a broken snapshot (a missing key, an empty roster, an upstream column drop) the run fails loudly and the previous good snapshot is left in place, rather than silently emailing a garbled digest. Run it by hand anytime with `python snapshot_schema.py`.
 
+`scripts/render_diff.py` is the refactor safety net: `baseline` renders every preview offline from the current snapshot and saves a golden copy; `check` re-renders and byte-compares against it. A pure refactor should report every file identical — any diff is either a bug or an intentional change to call out in the PR.
+
 ---
 
 ## One-time Setup

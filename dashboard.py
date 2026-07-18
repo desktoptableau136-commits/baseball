@@ -18,7 +18,7 @@ import argparse
 import json
 import math
 import re
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 
 import send_digest as sd
@@ -53,35 +53,15 @@ def build_context(snap, my_team):
     recent_pitching = snap.get("recent_pitching", [])
     weekly_results  = snap.get("weekly_results",  {})
 
-    rec_h = {r["PlayerName"]: r for r in recent_hitting  if r.get("PlayerName")}
-    rec_p = {r["PlayerName"]: r for r in recent_pitching if r.get("PlayerName")}
-    def _idx(rows, ds):
-        return {r["PlayerName"]: r for r in rows if int(r.get("Dataset", 0) or 0) == ds and r.get("PlayerName")}
-    p7, p15, p30 = _idx(pitchers, 7), _idx(pitchers, 15), _idx(pitchers, 30)
-    h7, h15, h30 = _idx(hitters, 7),  _idx(hitters, 15),  _idx(hitters, 30)
-
-    # Derive volume benchmarks / calibration / league averages (ORDER MATTERS — the
-    # scoring functions read the module globals these populate; see build_email).
-    sd.compute_ab_benchmarks(hitters)
-    sd.compute_pitcher_benchmarks(pitchers)
-    sd.compute_score_calibration(pitchers)
-    sd.compute_league_averages(hitters, pitchers)
-    sd.compute_xera_offset(pitchers)   # de-bias the pitcher buy/sell (ERA vs xERA) flag
-
-    rec_p_fp = {}
-    for name, r in rec_p.items():
-        ip = _n(r.get("IP")); k = _n(r.get("K")); g = _n(r.get("G"))
-        rec_p_fp[name] = {**r, "K/IP": round(k / ip, 3) if ip > 0 else 0,
-                          "IP_per_G": round(ip / g, 2) if g > 0 else 0}
-    best_recent_p = {**rec_p_fp, **p7, **p15, **p30}
-    best_recent_h = {**rec_h,    **h7, **h15, **h30}
+    # Scoring calibration + percentile pools + recent-form indexes + claimed set —
+    # the SAME shared send_digest helpers build_email uses, so every number matches.
+    hit_pctile, pit_pctile = sd.prepare_scoring(pitchers, hitters)
+    idx = sd.build_recent_indexes(pitchers, hitters, recent_pitching, recent_hitting)
+    rec_p, rec_h, p15 = idx["rec_p"], idx["rec_h"], idx["p15"]
+    best_recent_p, best_recent_h = idx["best_recent_p"], idx["best_recent_h"]
 
     today_str = datetime.now().strftime("%Y-%m-%d")
-    todays_txns = [t for t in snap.get("transactions", []) if t.get("TransactionDate", "").startswith(today_str)]
-    latest_txn = {}
-    for t in sorted(todays_txns, key=lambda t: t.get("TransactionDate", "")):
-        latest_txn[t["PlayerName"]] = t["TransactionType"]
-    claimed = {name for name, tt in latest_txn.items() if tt == "FA ADDED"}
+    claimed = sd.claimed_today(snap.get("transactions", []), today_str)
 
     fa_sp  = sd.fa_starters(pitchers, claimed, idx_recent=best_recent_p)
     fa_rp  = sd.fa_relievers(pitchers, claimed)
@@ -92,58 +72,18 @@ def build_context(snap, my_team):
     current_week_num = matchup.get("week") or max((int(r.get("Week", 0)) for r in roto), default=0)
     weekly_avgs = sd.compute_weekly_avgs(roto, current_week_num)
     weekly_std  = sd.compute_weekly_std(roto, current_week_num)
-    _today = datetime.now().date()
 
-    _mstart_raw = snap.get("matchup_start_date") or ""
-    _mend_raw   = snap.get("matchup_end_date")   or ""
-    _mdays      = snap.get("matchup_period_days") or 0
-    if _mend_raw:
-        matchup_end_date   = datetime.strptime(_mend_raw, "%Y-%m-%d").date()
-        matchup_start_date = datetime.strptime(_mstart_raw, "%Y-%m-%d").date() if _mstart_raw else (_today - timedelta(days=_today.weekday()))
-        matchup_period_days = int(_mdays) if _mdays else max(7, (matchup_end_date - matchup_start_date).days + 1)
-        week_end_str = _mend_raw
-    else:
-        matchup_start_date  = _today - timedelta(days=_today.weekday())
-        matchup_end_date    = _today + timedelta(days=6 - _today.weekday())
-        matchup_period_days = 7
-        week_end_str = matchup_end_date.strftime("%Y-%m-%d")
-    days_elapsed = max(0, (_today - matchup_start_date).days)
-    _mgdays    = snap.get("matchup_game_days")
-    _mgdays_el = snap.get("matchup_game_days_elapsed")
-    matchup_game_days = int(_mgdays) if _mgdays is not None else matchup_period_days
-    game_days_elapsed = int(_mgdays_el) if _mgdays_el is not None else days_elapsed
-    is_sunday = _today >= matchup_end_date
+    # Matchup window + pitcher K/QS/W projections — shared send_digest helpers.
+    win = sd.parse_matchup_window(snap)
+    matchup_period_days = win["matchup_period_days"]
+    week_end_str        = win["week_end_str"]
+    days_elapsed        = win["days_elapsed"]
+    matchup_game_days   = win["matchup_game_days"]
+    game_days_elapsed   = win["game_days_elapsed"]
+    is_sunday           = win["is_sunday"]
 
-    # Pitcher counting-stat projections from actual remaining starts (K, QS, W) —
-    # replicated from build_email's local closures (public helpers only).
-    _opp_key = " ".join(matchup.get("opp_team", "").split()) if matchup else ""
-    def _remaining_starters(team_key):
-        return [r for r in pitchers
-                if int(r.get("Dataset", 0) or 0) == YEAR
-                and " ".join((r.get("FantasyTeam") or "").split()) == team_key
-                and r.get("PSP_Date", "") not in ("1999-01-01", "", None)
-                and today_str <= r.get("PSP_Date", "") <= week_end_str
-                and _is_sp(r)]
-    def _proj_qs(ss): return sum((sd.qs_probability(r) or 0) / 100 for r in ss)
-    def _proj_k(ss):
-        total = 0
-        for r in ss:
-            gs = _n(r.get("GS")); k = _n(r.get("K")); ip_g = _n(r.get("IP_per_G")); kip = _n(r.get("K/IP") or r.get("KIP"))
-            total += (k / gs) if gs > 0 else (ip_g * kip if ip_g > 0 and kip > 0 else 5)
-        return total
-    def _proj_w(ss):
-        total = 0
-        for r in ss:
-            gs = _n(r.get("GS")); w = _n(r.get("ESPN_W") or r.get("W"))
-            total += (w / gs) if gs > 0 else 0.12
-        return total
-    _my_ss  = _remaining_starters(" ".join(my_team.split()))
-    _opp_ss = _remaining_starters(_opp_key)
-    pit_proj = {
-        "QS": {"my": _proj_qs(_my_ss),  "opp": _proj_qs(_opp_ss)},
-        "K":  {"my": _proj_k(_my_ss),   "opp": _proj_k(_opp_ss)},
-        "W":  {"my": _proj_w(_my_ss),   "opp": _proj_w(_opp_ss)},
-    }
+    pit_proj = sd.compute_pit_proj(pitchers, my_team, matchup.get("opp_team", "") if matchup else "",
+                                   today_str, week_end_str)
 
     classification = sd.classify_categories(
         matchup, weekly_avgs=weekly_avgs, days_elapsed=days_elapsed, remaining_proj=pit_proj,
@@ -163,14 +103,7 @@ def build_context(snap, my_team):
     )
     emerging, fading = sd.save_role_watch(pitchers, my_team, claimed)
 
-    # League SB percentile pool for the hitter SB badge (same qualified YEAR pool as the digest).
-    _ab_pool_floor = (sd._AB_BENCH.get(YEAR) or sd._FULLTIME_AB[YEAR]) * 0.30
-    _hit_pool = [r for r in hitters if int(_n(r.get("Dataset")) or 0) == YEAR and _n(r.get("AB")) >= _ab_pool_floor]
-    hit_pctile = sd.build_cat_percentiles(_hit_pool, sd._FA_HIT_CATS)
-    # Trade Radar (abbreviated on the dashboard — just the top couple of suggestions).
-    _pit_pool = [r for r in pitchers if int(_n(r.get("Dataset")) or 0) == YEAR]
-    pit_pctile = sd.build_cat_percentiles(_pit_pool, sd._FA_RP_CATS)
-    sd.compute_position_scarcity(hitters, hit_pctile)   # positional-scarcity scale → _POS_SCARCITY (hitter _tval)
+    # hit_pctile / pit_pctile / positional scarcity already set by sd.prepare_scoring above.
     # Trade Radar tile is prescriptive ("go send this") — only ever surface deals a rival
     # would realistically accept (see find_trades' realistic_only docstring).
     trades = sd.find_trades_combined(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
@@ -182,46 +115,11 @@ def build_context(snap, my_team):
         best_recent_p, best_recent_h, pos_data, hit_pctile, pit_pctile, today_str=today_str)
         if g["incoming"]] if not override else []
 
-    # Per-week roto scores → sparkline + weekly finishes + KPI averages
+    # Weekly finishes + sparkline + roster hot/cold KPI — shared send_digest helpers.
     my_key = " ".join(my_team.split())
-    week_scores = {}
-    for row in roto:
-        t = " ".join((row.get("Team") or "").split()); wk = int(row.get("Week", 0))
-        week_scores.setdefault(wk, {})[t] = float(row.get("Roto_Score") or 0)
-    wk_ranks, wk_pts, roto_week_results = [], [], {}
-    for wk in sorted(week_scores):
-        if wk >= current_week_num:
-            continue
-        scores = week_scores[wk]
-        if my_key not in scores:
-            continue
-        ranked = sorted(scores.items(), key=lambda x: -x[1])
-        roto_week_results[wk] = {t: ('W' if i == 0 else 'L') for i, (t, _) in enumerate(ranked)}
-        my_rank = next((i + 1 for i, (t, _) in enumerate(ranked) if t == my_key), None)
-        if my_rank:
-            wk_ranks.append(my_rank); wk_pts.append(scores[my_key])
+    wk_ranks, wk_pts, roto_week_results = sd.compute_week_finishes(roto, my_team, current_week_num)
     sparkline, peak_label = sd.make_sparkline(roto, my_team, current_week_num, weekly_results=roto_week_results)
-
-    # Roster-wide hot/cold counts (hitters 7d OPS ±.015, pitchers 15d ERA ±.40) — matches KPI.
-    n_hot = n_cold = 0
-    for r in hitters:
-        if (" ".join((r.get("FantasyTeam") or "").split()) == my_key and int(r.get("Dataset", 0)) == YEAR
-                and float(r.get("OPS") or 0) > 0):
-            s_ops = float(r.get("OPS") or 0); rh = rec_h.get(r.get("PlayerName", ""), {})
-            r_ops = float(rh.get("OPS") or 0) if rh else 0
-            if s_ops > 0 and r_ops > 0:
-                d = r_ops - s_ops
-                if d >= 0.015: n_hot += 1
-                elif d <= -0.015: n_cold += 1
-    for r in pitchers:
-        if (" ".join((r.get("FantasyTeam") or "").split()) == my_key and int(r.get("Dataset", 0) or 0) == YEAR
-                and _n(r.get("ERA")) > 0):
-            s_era = _n(r.get("ERA")); rp = p15.get(r.get("PlayerName", "")) or rec_p.get(r.get("PlayerName", ""), {})
-            r_era = _n(rp.get("ERA")) if rp else 0; r_ip = _n(rp.get("IP")) if rp else 0
-            if s_era > 0 and r_era > 0 and r_ip >= 3:
-                d = s_era - r_era
-                if d >= 0.40: n_hot += 1
-                elif d <= -0.40: n_cold += 1
+    n_hot, n_cold = sd.roster_hot_cold_counts(pitchers, hitters, my_team, rec_h, rec_p, p15)
 
     my_row = next((r for r in luck if " ".join((r.get("team") or "").split()) == my_key), {})
 

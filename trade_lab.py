@@ -127,33 +127,12 @@ def build_data(snap, my_team):
     roto      = snap.get("roto", [])
     standings = snap.get("standings", [])
 
-    # ORDER MATTERS — scoring functions read the module globals these populate.
-    sd.compute_ab_benchmarks(hitters)
-    sd.compute_pitcher_benchmarks(pitchers)
-    sd.compute_score_calibration(pitchers)
-    sd.compute_league_averages(hitters, pitchers)
-    sd.compute_xera_offset(pitchers)   # de-bias the pitcher buy/sell (ERA vs xERA) flag
-
-    # Recent-form indices for score blending (YEAR-preferred: 30 > 15 > 7 > pybaseball).
-    def _idx(rows, ds):
-        return {r["PlayerName"]: r for r in rows if int(r.get("Dataset", 0) or 0) == ds and r.get("PlayerName")}
-    rec_h = {r["PlayerName"]: r for r in snap.get("recent_hitting", [])  if r.get("PlayerName")}
-    rec_p = {r["PlayerName"]: r for r in snap.get("recent_pitching", []) if r.get("PlayerName")}
-    rec_p_fp = {}
-    for name, r in rec_p.items():
-        ip = _n(r.get("IP")); k = _n(r.get("K")); g = _n(r.get("G"))
-        rec_p_fp[name] = {**r, "K/IP": round(k / ip, 3) if ip > 0 else 0,
-                          "IP_per_G": round(ip / g, 2) if g > 0 else 0}
-    best_recent_p = {**rec_p_fp, **_idx(pitchers, 7), **_idx(pitchers, 15), **_idx(pitchers, 30)}
-    best_recent_h = {**rec_h,    **_idx(hitters, 7),  **_idx(hitters, 15),  **_idx(hitters, 30)}
-
-    # Percentile pools — SAME qualified YEAR pools as the digest (so _tval matches).
-    _ab_pool_floor = (sd._AB_BENCH.get(YEAR) or sd._FULLTIME_AB[YEAR]) * 0.30
-    _hit_pool = [r for r in hitters if int(_n(r.get("Dataset")) or 0) == YEAR and _n(r.get("AB")) >= _ab_pool_floor]
-    hit_pctile = sd.build_cat_percentiles(_hit_pool, sd._FA_HIT_CATS)
-    _pit_pool = [r for r in pitchers if int(_n(r.get("Dataset")) or 0) == YEAR]
-    pit_pctile = sd.build_cat_percentiles(_pit_pool, sd._FA_RP_CATS)
-    sd.compute_position_scarcity(hitters, hit_pctile)   # positional-scarcity scale → _POS_SCARCITY (hitter _tval)
+    # Scoring calibration + percentile pools + recent-form indexes — the SAME shared
+    # send_digest helpers build_email uses, so every number (incl. _tval) matches.
+    hit_pctile, pit_pctile = sd.prepare_scoring(pitchers, hitters)
+    idx = sd.build_recent_indexes(pitchers, hitters,
+                                  snap.get("recent_pitching", []), snap.get("recent_hitting", []))
+    best_recent_p, best_recent_h = idx["best_recent_p"], idx["best_recent_h"]
 
     # Per-team category ranks → needs (bottom third) / surplus (top third).
     ranks, n = sd.team_category_ranks(roto)
