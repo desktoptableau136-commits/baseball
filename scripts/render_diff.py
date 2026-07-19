@@ -4,8 +4,8 @@
 Renders every offline preview from the existing snapshot and compares it
 byte-for-byte against a saved baseline, so a pure refactor can prove "nothing
 changed". Volatile fields (Trade Lab builtAt stamp) are normalized before
-comparing; PYTHONHASHSEED is pinned because _emoji_avatar's fallback color
-uses hash() (salted per process).
+comparing. (Renders are otherwise fully deterministic — _emoji_avatar's fallback
+color now uses a stable md5 hash, so no PYTHONHASHSEED pin is needed.)
 
 Usage (from the repo root):
     python scripts/render_diff.py baseline   # render + save as the baseline
@@ -50,7 +50,7 @@ def _normalize(text):
 
 
 def _render():
-    env = {**os.environ, "PYTHONHASHSEED": "0"}
+    env = os.environ.copy()
     written = []
     for cmd, patterns in RENDERS:
         # Track by mtime: only files this render actually (re)wrote count.

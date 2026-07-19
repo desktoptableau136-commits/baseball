@@ -122,7 +122,10 @@ def _team_position_counts(hitters, team_key):
             continue
         for g in _trade_pos_groups(r):
             counts[g] = counts.get(g, 0) + 1
-    return counts
+    # sorted keys: _trade_pos_groups returns a set (salted string order), and this dict is
+    # JSON-serialized into the Trade Lab DATA blob — sort so the render is process-stable.
+    # Readers key by position name, so order is logic-irrelevant.
+    return {k: counts[k] for k in sorted(counts)}
 
 
 def _leaves_position_short(team_counts, give_players, get_players):
