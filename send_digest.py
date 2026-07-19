@@ -1372,23 +1372,43 @@ def _winprob_ctx(matchup, weekly_avgs=None, weekly_std=None, remaining_proj=None
 _PICKUP_WINDELTA_MIN  = 4    # min percentage-point win% gain to surface a pickup chip
 _PICKUP_CONTESTED_MAX = 60   # only surface a cat I'm not already winning comfortably (before% <)
 
-def pickup_win_delta(cand_row, ctx, remaining_frac, today_str, week_end_str):
-    """For an SP free-agent candidate, the category his remaining starts THIS matchup week
-    most improve my win% in — returns (cat, before_pct, after_pct) or None. Folds the
-    candidate's own remaining K/QS/W (same per-start rates as compute_pit_proj) into my
-    projected value and re-runs the CALIBRATED _cat_win_prob. Display-only — never changes
-    a projected W/L/T verdict, only answers 'does streaming this arm move a category?'."""
-    if not ctx or not _is_sp(cand_row):
+def pickup_win_delta(cand_row, ctx, remaining_frac, today_str, week_end_str,
+                     ptype=None, weeks_played=None):
+    """The single contested category a free-agent pickup most improves my win% in —
+    (cat, before_pct, after_pct) or None. Folds the candidate's OWN remaining production
+    into my projected value and re-runs the CALIBRATED _cat_win_prob. Role-aware:
+      - SP  (ptype 'sp' or _is_sp): remaining K/QS/W from actual remaining starts × per-
+             start rate (same as compute_pit_proj) — the most accurate case.
+      - RP  (ptype 'rp'):  remaining SVHD from his season SV+H per matchup-week × remaining_frac.
+      - hit (ptype 'hit'): remaining R/HR/RBI/SB from each season stat per matchup-week × remaining_frac.
+    The RP/hitter estimate uses `weeks_played` (matchup-weeks the season totals span), so it
+    needs no per-team schedule. Display-only — never changes a projected W/L/T verdict; only
+    answers 'does adding him move a category?'. Gated to a contested cat (before% < 60) that
+    gains ≥ _PICKUP_WINDELTA_MIN pts."""
+    if not ctx:
         return None
-    ns = _starts_this_week(cand_row, today_str, week_end_str)
-    if ns <= 0:
+    role = ptype or ("sp" if _is_sp(cand_row) else None)
+    contrib = {}
+    if role == "sp":
+        ns = _starts_this_week(cand_row, today_str, week_end_str)
+        if ns <= 0:
+            return None
+        gs   = _n(cand_row.get("GS")); k = _n(cand_row.get("K"))
+        ip_g = _n(cand_row.get("IP_per_G")); kip = _n(cand_row.get("K/IP") or cand_row.get("KIP"))
+        k_ps  = (k / gs) if gs > 0 else (ip_g * kip if ip_g > 0 and kip > 0 else 5)
+        qs_ps = (qs_probability(cand_row) or 0) / 100.0
+        w_ps  = (_n(cand_row.get("ESPN_W") or cand_row.get("W")) / gs) if gs > 0 else 0.12
+        contrib = {"K": ns * k_ps, "QS": ns * qs_ps, "W": ns * w_ps}
+    elif role in ("rp", "hit") and weeks_played and weeks_played > 0:
+        rf = max(remaining_frac, 0.0)
+        if role == "rp":
+            svhd = _n(cand_row.get("ESPN_SVHD")) or _n(cand_row.get("SVHD"))
+            contrib = {"SVHD": (svhd / weeks_played) * rf}
+        else:   # hit — boost cats only (B_SO is a strikeout cat a bat HURTS, so skip it)
+            contrib = {c: (_n(cand_row.get(c)) / weeks_played) * rf
+                       for c in ("R", "HR", "RBI", "SB")}
+    else:
         return None
-    gs   = _n(cand_row.get("GS")); k = _n(cand_row.get("K"))
-    ip_g = _n(cand_row.get("IP_per_G")); kip = _n(cand_row.get("K/IP") or cand_row.get("KIP"))
-    k_ps  = (k / gs) if gs > 0 else (ip_g * kip if ip_g > 0 and kip > 0 else 5)
-    qs_ps = (qs_probability(cand_row) or 0) / 100.0
-    w_ps  = (_n(cand_row.get("ESPN_W") or cand_row.get("W")) / gs) if gs > 0 else 0.12
-    contrib = {"K": ns * k_ps, "QS": ns * qs_ps, "W": ns * w_ps}
     best = None
     for cat, dc in contrib.items():
         c = ctx.get(cat)
@@ -2429,12 +2449,12 @@ def build_glossary_section():
                "The <b>%</b> in each card corner is your odds of winning that category (normal model of the final "
                "margin), colored to the projected outcome. On a toss-up — odds near even, or a projected tie — a "
                "<b>⚡</b> replaces the number instead."),
-        _entry(f'Streamer win-% swing{_winprob_chip(("K", 46, 58))}',
-               "In <b>FA Pickup — Starting Pitchers</b>, next to a streamer — the one contested category his "
-               "remaining starts this matchup would most improve, shown as <b>before→after</b> win odds (e.g. "
-               "<b>K 46→58%</b>). Uses the same calibrated win-probability model as the Category Pulse cards; only "
-               "shown when he'd move a category you're not already winning comfortably. Green when the add would "
-               "put you over 50%."),
+        _entry(f'Pickup win-% swing{_winprob_chip(("K", 46, 58))}',
+               "On any <b>FA Pickup</b> (starter, reliever, or hitter) — the one contested category his remaining "
+               "production this matchup would most improve, shown as <b>before→after</b> win odds (e.g. "
+               "<b>K 46→58%</b>, <b>SVHD 40→55%</b>, <b>R 44→61%</b>). Uses the same calibrated win-probability model "
+               "as the Category Pulse cards; only shown when he'd move a category you're not already winning "
+               "comfortably. Green when the add would put you over 50%."),
 
         _subhead("Pending trades"),
         _entry(f'Verdict{_verdict_pill("ACCEPT", GREEN)}&nbsp;{_verdict_pill("COUNTER", YELLOW)}&nbsp;{_verdict_pill("DECLINE", RED)}',
@@ -3586,6 +3606,9 @@ def build_email(snap, override_team=None):
         matchup, weekly_avgs=weekly_avgs, weekly_std=weekly_std, remaining_proj=pit_proj,
         days_elapsed=days_elapsed, matchup_days=matchup_period_days,
         game_days_elapsed=game_days_elapsed, matchup_game_days=matchup_game_days)
+    # Matchup-weeks the season totals span (completed weeks + fraction of the current) — the
+    # per-week denominator for the RP/hitter marginal-win% estimate (pickup_win_delta).
+    winprob_weeks = max(1.0, (current_week_num or 1) - winprob_rf)
 
     # Category classification (used by the pickup steering AND the FA "Cats" column).
     # Computed here (before the FA tables) so need_cats is available to them.
@@ -4190,7 +4213,7 @@ def build_email(snap, override_team=None):
                 _bd_uid("farp", r.get("PlayerName", "")), 9)
             return (
                 f'<tr style="{bg}">'
-                f'<td style="{TD_S}font-weight:600;">{team_logo(r.get("Team"))}{r.get("PlayerName","")}{inj_tag(r)}{ds_badge}{pitcher_regression_badge(r)}</td>'
+                f'<td style="{TD_S}font-weight:600;">{team_logo(r.get("Team"))}{r.get("PlayerName","")}{inj_tag(r)}{ds_badge}{pitcher_regression_badge(r)}{_winprob_chip(pickup_win_delta(r, winprob_ctx, winprob_rf, today_str, week_end_str, ptype="rp", weeks_played=winprob_weeks))}</td>'
                 f'<td style="{TDC}color:{MUTED};">{r.get("Position","")}</td>'
                 f'<td style="{TDC}">{v(svhd, 0)}</td>'
                 f'<td style="{TDC}">{v(k, 0)}</td>'
@@ -4265,7 +4288,7 @@ def build_email(snap, override_team=None):
                 _bd_uid("fahit", r.get("PlayerName", "")), 11)
             rows += (
                 f'<tr style="{bg}">'
-                f'<td style="{TD_S}font-weight:600;">{team_logo(r.get("Team"))}{r.get("PlayerName","")}{inj_tag(r)}{hitter_badges(r, hit_pctile)}</td>'
+                f'<td style="{TD_S}font-weight:600;">{team_logo(r.get("Team"))}{r.get("PlayerName","")}{inj_tag(r)}{hitter_badges(r, hit_pctile)}{_winprob_chip(pickup_win_delta(r, winprob_ctx, winprob_rf, today_str, week_end_str, ptype="hit", weeks_played=winprob_weeks))}</td>'
                 f'<td style="{TDC}color:{MUTED};">{r.get("Position","")}</td>'
                 f'<td style="{TDC}">{v(r.get("R"), 0)}</td>'
                 f'<td style="{TDC}">{v(r.get("HR"), 0)}</td>'
