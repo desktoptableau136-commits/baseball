@@ -1080,7 +1080,7 @@ function ledgerItem(side, p) {{
   var arb = arbGlyph(side, m, m ? arbReasons(p, holderMeta, otherMeta, otherName) : '');
   var vsId = 'vs-'+side+'-'+p.id;
   return '<div class="litem">' + p.logo
-    + '<span class="lname" onclick="openVs(\'' + vsId + '\')">' + p.name + '</span>' + arb
+    + '<span class="lname" onclick="openVs(\'' + vsId + '\')">' + p.name + '</span>' + p.badges + arb
     + '<span class="lv" onclick="openVs(\'' + vsId + '\')">' + p.tval.toFixed(2) + '</span>'
     + '<span class="x" onclick="toggle(\'' + side + '\',\'' + p.id + '\')">&times;</span></div>'
     + '<div class="vstory" id="' + vsId + '" style="display:none">' + valueStory(p) + '</div>';
