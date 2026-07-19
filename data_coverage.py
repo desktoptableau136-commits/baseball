@@ -138,6 +138,18 @@ def coverage_report(snap):
         "confirmed_frac": (len(conf) / len(up)) if up else 0.0, "status": "info",
     }
 
+    # batting handedness (platoon reads) -- one statsapi /sports/1/players pull, ~100%
+    # coverage; INFO-level (a display nicety, not injury-safety), so it is reported but
+    # NOT wired into worst_status/the footer badge -- a drop just means the platoon
+    # markers go quiet, never a wrong scoring number.
+    n_hit_all = sum(1 for r in snap.get("hitters", []) if int(r.get("Dataset", 0) or 0) == YEAR)
+    n_bats = sum(1 for r in hit_y if str(r.get("Bats") or "").upper() in ("L", "R", "S"))
+    _bfrac = (n_bats / n_hit_all) if n_hit_all else 0.0
+    rep["handedness"] = {
+        "present": n_bats, "total": n_hit_all, "frac": _bfrac,
+        "status": (_status_frac(_bfrac) if n_hit_all else "n/a"),
+    }
+
     # legitimately-empty optional fields (WARN-level in schema, never an error)
     rep["optional"] = {
         "todays_games": len(snap.get("todays_games", [])),
@@ -200,6 +212,12 @@ def format_report(rep):
     L.append(f"\nPROBABLE STARTERS (info -- confirmed% rises through the week)")
     L.append(f"  {ps['confirmed']}/{ps['upcoming']} upcoming starts confirmed by MLB "
              f"({ps['confirmed_frac']*100:.0f}%); the rest are rotation-walk projections")
+
+    hd = rep["handedness"]
+    if hd["total"]:
+        L.append(f"\nBATTING HANDEDNESS (platoon reads -- info, not gated)")
+        L.append(f"  {hd['present']}/{hd['total']} hitters with a bat-hand "
+                 f"({hd['frac']*100:.0f}%)  [{hd['status']}]")
 
     op = rep["optional"]
     L.append(f"\nOPTIONAL (legitimately 0 on an off-day / quiet week)")

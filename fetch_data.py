@@ -1707,7 +1707,38 @@ def _espn_is_reliever(pl) -> bool:
     return ('RP' in slots) and ('SP' not in slots)
 
 
-def fetch_todays_games(league) -> list:
+def fetch_player_handedness(season=None) -> dict:
+    """Map {name_key: {"bats": "L|R|S", "throws": "L|R"}} for every MLB player in ONE
+    statsapi call (/sports/1/players?season=YYYY -> ~1300 players, ~100% handedness
+    coverage). Feeds hitter `Bats` + probable-starter handedness in todays_games so
+    send_digest can flag platoon matchups (L bat vs RHP, etc.). Names run through the
+    canonical _name_key; an ambiguous key whose players disagree on handedness is dropped
+    (no false platoon call). Broad try/except -> {} so a hiccup never blocks the snapshot."""
+    season = season or datetime.now().year
+    seen = {}
+    try:
+        r = requests.get(
+            f"https://statsapi.mlb.com/api/v1/sports/1/players?season={season}",
+            timeout=20,
+        ).json()
+        for p in r.get("people", []):
+            nm = p.get("fullName")
+            k = _name_key(nm) if nm else ""
+            if not k:
+                continue
+            val = {"bats":   (p.get("batSide")   or {}).get("code", ""),
+                   "throws": (p.get("pitchHand") or {}).get("code", "")}
+            if k in seen:
+                if seen[k] != val:
+                    seen[k] = None   # ambiguous name, differing hands -> no marker
+            else:
+                seen[k] = val
+    except Exception as e:
+        log(f"  fetch_player_handedness failed: {e}")
+    return {k: v for k, v in seen.items() if v}
+
+
+def fetch_todays_games(league, hand_map=None) -> list:
     """Today's real MLB games, enriched with which ROSTERED players (any fantasy team)
     are involved -- so send_digest can surface the games that most overlap the current
     matchup ("which broadcasts actually move my week"). Roster -> game join is on MLB
@@ -1772,10 +1803,17 @@ def fetch_todays_games(league) -> list:
                 home_prob = _prob(home)
                 away_prob = _prob(away)
                 probables = {_strip_accents(n) for n in (home_prob, away_prob) if n}
+                # Probable-starter throwing hand (for platoon reads). "" when TBD/unknown.
+                _hm = hand_map or {}
+                home_prob_hand = (_hm.get(_name_key(home_prob)) or {}).get("throws", "") if home_prob else ""
+                away_prob_hand = (_hm.get(_name_key(away_prob)) or {}).get("throws", "") if away_prob else ""
 
                 involved = []
-                for tid in (home_id, away_id):
-                    for pl in roster_by_mlbid.get(tid, []):
+                for side_id, opp_hand in ((home_id, away_prob_hand), (away_id, home_prob_hand)):
+                    for pl in roster_by_mlbid.get(side_id, []):
+                        # A hitter faces the OTHER side's probable starter; carry his batting
+                        # hand + that opposing hand so the renderer can flag the platoon edge.
+                        bats = (_hm.get(_name_key(pl["name"])) or {}).get("bats", "")
                         involved.append({
                             "name":        pl["name"],
                             "FantasyTeam": pl["FantasyTeam"],
@@ -1783,6 +1821,8 @@ def fetch_todays_games(league) -> list:
                             "is_rp":       bool(pl.get("is_rp")),
                             "is_sp":       bool(pl["is_pitcher"]
                                                 and _strip_accents(pl["name"]) in probables),
+                            "bats":        bats,
+                            "opp_sp_hand": "" if pl["is_pitcher"] else opp_hand,
                         })
                 if not involved:
                     continue
@@ -1809,6 +1849,8 @@ def fetch_todays_games(league) -> list:
                     "away_name":     away["team"].get("name", ""),
                     "home_prob":     home_prob,
                     "away_prob":     away_prob,
+                    "home_prob_hand": home_prob_hand,
+                    "away_prob_hand": away_prob_hand,
                     "national_tv":   national,
                     "home_tv":       home_tv,
                     "away_tv":       away_tv,
@@ -2284,8 +2326,19 @@ def main():
     prev_week_pitching = fetch_recent_pitcher_stats(start_dt=_pw_start, end_dt=_pw_end)
     print(f"       {len(prev_week_pitching)} pitchers in prev-week window")
 
+    print("       Fetching player handedness (bats/throws) for platoon reads...")
+    hand_map = fetch_player_handedness()
+    print(f"       {len(hand_map)} players with handedness")
+    # Attach batting hand to every hitter row (broadcast across datasets by name).
+    _hand_hits = 0
+    for h in hitters:
+        b = hand_map.get(_name_key(h.get("PlayerName", "")))
+        h["Bats"] = b["bats"] if b else ""
+        if b:
+            _hand_hits += 1
+
     print("       Fetching today's MLB games (matchup overlap)...")
-    todays_games = fetch_todays_games(league)
+    todays_games = fetch_todays_games(league, hand_map)
     print(f"       {len(todays_games)} games with rostered-player involvement")
 
     print("       Fetching pending trade proposals...")
