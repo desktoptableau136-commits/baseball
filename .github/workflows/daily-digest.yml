@@ -37,3 +37,11 @@ jobs:
         # so both deliverables arrive together. (The standalone daily-dashboard.yml
         # schedule is retired -- it now only runs on manual dispatch.)
         run: python send_digest.py --with-dashboard
+
+      - name: Data-coverage report (non-blocking)
+        if: always()
+        # Prints the semantic coverage/degradation report for the snapshot the digest
+        # just refreshed, so a silently-degraded source (e.g. a Statcast merge dropping
+        # from 92% -> 60%) is visible in the Actions log. Non-blocking: no --strict, and
+        # `|| true` so it can never fail the digest job.
+        run: python data_coverage.py || true
