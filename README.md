@@ -322,7 +322,7 @@ A summary line above the cards shows your current record and projected end-of-we
 - **Fill bar** showing relative share of the combined total
 - **NN%** (corner) = your odds of winning that category, from a normal model of the final margin, colored to match the projected outcome (green = projected win, red = loss, white = tie) — uncertainty is each team's week-to-week spread in the stat and shrinks for counting cats as the week ends
 - **⚡** (corner) = toss-up — win odds near even (45–55%) **or** a projected tie; on a toss-up the ⚡ **replaces** the % (the exact number doesn't matter at a coin-flip)
-- **proj X.X vs Y.Y** = projected end-of-week (K/QS/W use your actual remaining starts × per-start rate; other cats use each team's weekly average)
+- **proj X.X vs Y.Y** = projected end-of-week. K/QS/W use your actual remaining starts × per-start rate; the hitter counting cats (R/HR/RBI/SB/K) use each team's weekly average scaled by its **real remaining games** (so a team on an off-day or in a doubleheader projects correctly, not by flat calendar time); OPS uses the weekly-average rate blend
 - **▲ / ▼ / ◆** (corner) = the **projected outcome** — ▲ green = projected win, ▼ red = loss, ◆ white = tie. Shown on every card; when it disagrees with the card's current color (WINNING/LOSING/TIED), that's a projected flip
 
 ### Matchup N
