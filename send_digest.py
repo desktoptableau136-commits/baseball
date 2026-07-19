@@ -1292,13 +1292,26 @@ def compute_weekly_std(roto, current_week):
     return {t: {c: _std(v) for c, v in cats.items() if len(v) >= 2}
             for t, cats in buckets.items()}
 
+_WINPROB_SIGMA_INFLATE = 1.5   # calibration widen — see _cat_win_prob
+
 def _cat_win_prob(pm, po, cat, sigma, remaining_frac):
     """Probability (p_win, p_tie) that I win / tie a category, from a normal model of
     the final margin. `pm`/`po` are my/opp projected end-of-week values; `sigma` is the
     combined per-week spread of the margin. Counting-cat uncertainty shrinks toward the
     week's end (× remaining_frac); rate cats keep their weekly spread. The tie band
     matches the display-rounding precision so p_win/p_tie agree with the point-estimate
-    W/L/T (round(pm,dec) vs round(po,dec))."""
+    W/L/T (round(pm,dec) vs round(po,dec)).
+
+    Sigma is widened by `_WINPROB_SIGMA_INFLATE`: `backtest_winprob.py` (walk-forward over
+    ~10k historical category matchups) showed the raw std-of-weekly-values understates the
+    true margin spread — the model was materially OVER-confident (a stated 90%+ won ~73%,
+    ECE 7.4 pts). The raw std treats a team's historical mean as its true level, ignoring
+    that the mean itself is uncertain (roster/role churn). 1.5x pulls ECE to ~2.8 (under the
+    ~3-pt well-calibrated bar); the pre-week optimum is ~1.9 but that would over-widen mid/
+    late-week, where banked stats legitimately cut uncertainty (and counting cats already
+    taper via remaining_frac). DISPLAY-ONLY: this changes the shown Win%/⚡ toss-up flag, never
+    a projected W/L/T verdict (proj_res is a separate point-estimate)."""
+    sigma = sigma * _WINPROB_SIGMA_INFLATE
     dec  = _CAT_DEC.get(cat, 0)
     edge = (po - pm) if cat in _LOWER_BETTER else (pm - po)   # > 0 favors me
     eff  = sigma if cat in _RATE_CATS else sigma * max(remaining_frac, 0.0)
