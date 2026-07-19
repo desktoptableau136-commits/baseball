@@ -3330,6 +3330,42 @@ def roster_hot_cold_counts(pitchers, hitters, my_team, rec_h, rec_p, p15):
                 elif d <= -0.40: n_cold += 1
     return n_hot, n_cold
 
+def build_coverage_footer(snap):
+    """One compact digest-footer line summarizing enrichment coverage — quiet/muted when
+    healthy, colored + prefixed when a source degraded, so you know when to trust the numbers
+    less (the freshness badge answers 'how fresh?'; this answers 'how complete?'). Reuses
+    data_coverage.py so the thresholds match the standalone report + CI. Returns '' on any
+    failure or if data_coverage is unavailable (never breaks the digest)."""
+    try:
+        import data_coverage as _dc
+        rep = _dc.coverage_report(snap)
+        ws = _dc.worst_status(rep)
+    except Exception:
+        return ""
+    try:
+        fracs = [c["frac"] for grp in ("pitcher_savant", "hitter_savant")
+                 for c in rep.get(grp, {}).get("fields", {}).values() if c.get("status") != "n/a"]
+        floor = int(min(fracs) * 100) if fracs else 0
+        if ws == "OK":
+            return (f'<div style="margin-top:6px;color:{MUTED};font-size:11px;">'
+                    f'Data coverage OK &middot; Statcast &ge;{floor}% &middot; recent windows full</div>')
+        bad = []
+        if rep["pitcher_savant"]["status"] != "OK" or rep["hitter_savant"]["status"] != "OK":
+            bad.append(f"Statcast {floor}%")
+        for w, c in rep["recent_windows"].items():
+            if c["status"] != "OK":
+                bad.append(f"{w}d window thin")
+        if rep["freshness"]["status"] != "OK":
+            bad.append("snapshot stale")
+        detail = "; ".join(bad) or "some fields"
+        if ws == "WARN":
+            return (f'<div style="margin-top:6px;color:{YELLOW};font-size:11px;font-weight:600;">'
+                    f'&#9888; Data partially degraded &mdash; {detail}</div>')
+        return (f'<div style="margin-top:6px;color:{RED};font-size:11px;font-weight:700;">'
+                f'&#9888; Data DEGRADED this run &mdash; {detail}; scores may be off</div>')
+    except Exception:
+        return ""
+
 def build_email(snap, override_team=None):
     my_team       = override_team if override_team else snap.get("my_team", MY_TEAM)
     pitchers      = snap.get("pitchers", [])
@@ -4622,6 +4658,8 @@ def build_email(snap, override_team=None):
         print(f"  WARNING: briefing build failed ({_e}); body falls back to full digest.")
         briefing_html = ""
 
+    coverage_footer = build_coverage_footer(snap)   # quiet on healthy data, colored on degradation
+
     full_html = f"""<!DOCTYPE html>
 <html>
 <head>
@@ -4666,6 +4704,7 @@ def build_email(snap, override_team=None):
 
   <div style="text-align:center;padding:14px;color:{MUTED};font-size:11px;border-top:1px solid {BORDER};">
     Data refreshed {refreshed} &middot; ESPN League 277836 &middot; Guerrero Warfare
+    {coverage_footer}
   </div>
 </div>
 {_BD_TOGGLE_SCRIPT}
