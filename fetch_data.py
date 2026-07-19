@@ -221,6 +221,18 @@ def get_pitcher_roster(league) -> pd.DataFrame:
     return apply_name_patches(df, PITCHER_NAME_PATCHES)
 
 
+# league.free_agents() defaults to size=50 (ESPN's top-50-by-%-owned). The realistic FA
+# candidate pool is bounded by FantasyPros' own top-300-per-role scrape, not ESPN's full
+# player universe -- a live cross-check found the default size=50 covers only ~13% of those
+# real candidates by name (an injured/low-owned player like a 10-day-IL bench arm easily
+# ranks outside the top 50), size=300 only ~63%, while size=1000 covers ~100% (verified: a
+# 279/280-name match). Cost is ~1.6s per call at size=1000 (negligible against the ~60s
+# fetch pipeline). Below this size, an unmatched FA's FreeAgentInjuryStatus/ESPN season
+# stats silently default to blank -- indistinguishable from a genuinely healthy, checked
+# player -- so don't lower this without re-running that coverage check.
+_FA_PULL_SIZE = 1000
+
+
 def get_pitcher_espn_svhd(league) -> pd.DataFrame:
     """Pull season stats from ESPN player stats (scoring period 0 = season total).
     Covers both rostered and FA pitchers. Returns K, W, IP, GS, GP, SV, HLD, SVHD."""
@@ -249,7 +261,7 @@ def get_pitcher_espn_svhd(league) -> pd.DataFrame:
         for pl in tm.roster:
             if is_pitcher(pl):
                 _extract(pl)
-    for fa in league.free_agents():
+    for fa in league.free_agents(size=_FA_PULL_SIZE):
         if is_pitcher(fa):
             _extract(fa)
 
@@ -280,7 +292,7 @@ def get_hitter_roster(league) -> pd.DataFrame:
 def get_pitcher_fa(league) -> pd.DataFrame:
     rows = []
     seen = set()
-    for fa in league.free_agents():
+    for fa in league.free_agents(size=_FA_PULL_SIZE):
         if fa.name in seen:
             continue
         if is_pitcher(fa):
@@ -297,7 +309,7 @@ def get_pitcher_fa(league) -> pd.DataFrame:
 def get_hitter_fa(league) -> pd.DataFrame:
     rows = []
     seen = set()
-    for fa in league.free_agents():
+    for fa in league.free_agents(size=_FA_PULL_SIZE):
         if fa.name in seen:
             continue
         if is_hitter(fa):
@@ -1122,6 +1134,10 @@ def build_pitcher_data(league) -> list:
     # would stringify to the *truthy* "False").
     merged["ESPN_OnIL"] = merged.get("ESPN_OnIL", False).fillna(False)
     merged = merge_on_name(merged, fa_df, ["PlayerName", "FreeAgentInjuryStatus", "FA_Position"])
+    # FA_Matched: True only when merge_on_name actually found this player in the ESPN FA pull
+    # (exact or accent/suffix fallback) -- i.e. FreeAgentInjuryStatus below is a real, checked
+    # status rather than a default blank. Computed before FA_Position is filled/dropped.
+    merged["FA_Matched"] = merged["FA_Position"].notna()
 
     # Coalesce position: ESPN roster â†’ ESPN FA â†’ FantasyPros player string
     merged["Position"] = merged["Position"].fillna("").str.strip()
@@ -1236,14 +1252,20 @@ def build_hitter_data(league) -> list:
     roster_df = get_hitter_roster(league)
     fa_df     = get_hitter_fa(league)
 
-    # Same pattern: avoid Position_x / Position_y collision. merge_on_name adds the
-    # accent/suffix-insensitive fallback (FP 'Luis Garcia' ↔ ESPN 'Luis García Jr.').
-    merged = merge_on_name(fp, roster_df, ["PlayerName", "FantasyTeam", "Position", "ESPN_OnIL"])
+    # Same pattern as build_pitcher_data: avoid Position_x / Position_y collision, and bring
+    # ESPN_Status along with the roster merge. merge_on_name adds the accent/suffix-insensitive
+    # fallback (FP 'Luis Garcia' ↔ ESPN 'Luis García Jr.').
+    merged = merge_on_name(fp, roster_df, ["PlayerName", "FantasyTeam", "Position", "ESPN_Status", "ESPN_OnIL"])
+    merged["ESPN_Status"] = merged["ESPN_Status"].fillna("")
     # ESPN_OnIL: True only for a rostered player sitting in an IL lineup slot (dropping
     # them frees no active/bench room). Unmatched (FP-only / FA) rows default to False.
     # Keep native python bools (see build_pitcher_data note on json default=str).
     merged["ESPN_OnIL"] = merged.get("ESPN_OnIL", False).fillna(False)
     merged = merge_on_name(merged, fa_df, ["PlayerName", "FreeAgentInjuryStatus", "FA_Position"])
+    # FA_Matched: True only when merge_on_name actually found this player in the ESPN FA pull
+    # (exact or accent/suffix fallback) -- i.e. FreeAgentInjuryStatus below is a real, checked
+    # status rather than a default blank. Computed before FA_Position is filled/dropped.
+    merged["FA_Matched"] = merged["FA_Position"].notna()
 
     merged["Position"] = merged["Position"].fillna("").str.strip()
     fa_pos = merged.get("FA_Position", pd.Series("", index=merged.index)).fillna("").str.strip()
@@ -1300,15 +1322,10 @@ def build_hitter_data(league) -> list:
     season_df = merge_on_name(season_df, sprint, list(sprint.columns))  # suffix/accent-safe
     season_df = season_df.merge(fp7,    on="PlayerName", how="left")    # FP↔FP names, exact
 
-    roster_status = roster_df[["PlayerName", "ESPN_Status"]].copy() if "ESPN_Status" in roster_df.columns else roster_df.assign(ESPN_Status="ACTIVE")[["PlayerName", "ESPN_Status"]]
-    espn_status = pd.concat([
-        roster_status,
-        fa_df.assign(ESPN_Status="FA")[["PlayerName", "ESPN_Status"]],
-    ], ignore_index=True).drop_duplicates("PlayerName")[["PlayerName", "ESPN_Status"]]
-    apply_name_patches(espn_status, HITTER_NAME_PATCHES)
-
-    season_df = merge_on_name(season_df, espn_status, ["PlayerName", "ESPN_Status"])  # suffix/accent-safe
-    season_df["ESPN_Status"] = season_df["ESPN_Status"].fillna("Unknown")
+    # NOTE: season_df already carries a real ESPN_Status (inherited from `merged`'s roster
+    # merge above) -- an older, narrower re-derivation used to live here before that upstream
+    # merge existed. compute_hr_probability doesn't read ESPN_Status either, so nothing here
+    # needs it recomputed.
     season_df["HR"]        = pd.to_numeric(season_df.get("HR",  0), errors="coerce").fillna(0)
     season_df["AB"]        = pd.to_numeric(season_df.get("AB",  1), errors="coerce").replace(0, 1)
     season_df["HR_per_AB"] = (season_df["HR"] / season_df["AB"]).round(4)

@@ -32,6 +32,13 @@ _PITCHER_SAVANT = ["xERA", "xwOBA_against", "WhiffPctile", "BarrelPctAllowed", "
 _HITTER_SAVANT  = ["xwOBA", "xBA", "xSLG", "SprintSpeed", "Barrel_Pct", "HardHit_Pct"]
 _HITTER_MODEL   = ["HR_Probability", "wRCplus"]
 
+# FA_Matched: True when a free-agent row was actually returned by ESPN's free_agents() pull
+# (fetch_data.py's _FA_PULL_SIZE), so its FreeAgentInjuryStatus is a real, checked status
+# rather than a default blank that reads as "healthy". A drop here means either the FA pull
+# size regressed or the ESPN endpoint is degraded -- either way, pickup suggestions may be
+# missing an injury flag (the Blaze Alexander bug this group exists to catch).
+_FA_STATUS = ["FA_Matched"]
+
 _HEALTHY = 0.85   # >= this fraction present -> OK
 _WARN    = 0.70   # >= this -> WARN; below -> LOW
 
@@ -58,6 +65,11 @@ def _status_frac(frac):
 
 def _yrows(snap, key):
     return [r for r in snap.get(key, []) if int(r.get("Dataset", 0) or 0) == YEAR]
+
+
+def _yrows_fa(snap, key):
+    """YEAR rows for the free-agent pool only (unrostered -- FantasyTeam blank)."""
+    return [r for r in _yrows(snap, key) if not str(r.get("FantasyTeam") or "").strip()]
 
 
 def _field_cov(rows, field):
@@ -95,15 +107,18 @@ def coverage_report(snap):
     pit_y = _yrows(snap, "pitchers")
     hit_y = _yrows(snap, "hitters")
 
+    fa_y = _yrows_fa(snap, "pitchers") + _yrows_fa(snap, "hitters")
+
     rep = {
         "freshness": _freshness(snap),
         "pitcher_savant": _group(pit_y, _PITCHER_SAVANT),
         "hitter_savant": _group(hit_y, _HITTER_SAVANT),
         "hitter_model": _group(hit_y, _HITTER_MODEL),
+        "fa_status": _group(fa_y, _FA_STATUS),
         "recent_windows": {},
         "probable_starters": {},
         "optional": {},
-        "counts": {"pitchers_year": len(pit_y), "hitters_year": len(hit_y)},
+        "counts": {"pitchers_year": len(pit_y), "hitters_year": len(hit_y), "fa_pool": len(fa_y)},
     }
 
     # recent-form windows: row counts per short-range Dataset (pitchers + hitters)
@@ -136,7 +151,8 @@ def worst_status(rep):
     order = {"OK": 0, "n/a": 0, "info": 0, "WARN": 1, "LOW": 2}
     worst = "OK"
     keys = [rep["freshness"]["status"], rep["pitcher_savant"]["status"],
-            rep["hitter_savant"]["status"], rep["hitter_model"]["status"]]
+            rep["hitter_savant"]["status"], rep["hitter_model"]["status"],
+            rep["fa_status"]["status"]]
     keys += [w["status"] for w in rep["recent_windows"].values()]
     for s in keys:
         if order.get(s, 0) > order[worst]:
@@ -173,6 +189,8 @@ def format_report(rep):
     _grp("PITCHER Statcast (Baseball Savant)", rep["pitcher_savant"])
     _grp("HITTER Statcast (Baseball Savant)", rep["hitter_savant"])
     _grp("HITTER model fields", rep["hitter_model"])
+    _grp(f"FA INJURY-STATUS MATCH ({rep['counts']['fa_pool']} free-agent rows -- "
+         f"was ESPN's free_agents() pull actually checked?)", rep["fa_status"])
 
     L.append("\nRECENT-FORM WINDOWS (FantasyPros short-range row counts)")
     for w, c in rep["recent_windows"].items():
