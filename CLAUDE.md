@@ -18,6 +18,7 @@ python weekly_recap.py --dry-run --no-refresh  # instant recap preview → previ
 python bench_leakage.py                         # standalone daily-lineup audit (my team + last week's opponent → console)
 python backtest_projections.py                  # walk-forward accuracy of the SP proj line (IP/ER/K) vs actual game logs → console
 python backtest_projections.py --limit 30 --no-cache  # quick smoke test (small pool, no cache)
+python backtest_winprob.py                      # walk-forward calibration of the category Win% model (_cat_win_prob) → reliability bins + Brier + ECE + sigma-inflation sweep (snapshot-only, no network)
 python snapshot_schema.py                       # validate data/snapshot.json against the reader contract (ERROR/WARN report; exit 1 on error)
 python scripts/render_diff.py baseline          # refactor safety net: render all previews offline + save as golden baseline
 python scripts/render_diff.py check             # re-render + byte-compare vs the baseline (normalizes Trade Lab builtAt; pins PYTHONHASHSEED). Use THIS, not GNU diff — diff emits degenerate whole-file hunks on the digest's >20KB lines
