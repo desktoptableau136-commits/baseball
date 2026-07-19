@@ -3272,6 +3272,40 @@ def compute_pit_proj(pitchers, my_team, opp_team, today_str, week_end_str):
         "W":  {"my": proj_w(my_ss),  "opp": proj_w(opp_ss)},
     }
 
+# Hitter counting cats projected forward. Kept separate from the OPS rate cat, which
+# _project's rate-blend still handles.
+_HIT_PROJ_CATS = ["R", "HR", "RBI", "SB", "B_SO"]
+
+def compute_hit_proj(weekly_avgs, my_team, opp_team, team_hit_sched_frac):
+    """Hitter counting-stat projections (R/HR/RBI/SB/B_SO) for the REST of the matchup,
+    scaled by each team's ACTUAL remaining bat-games instead of a league-wide time
+    fraction — the hitter analog of compute_pit_proj. Returns a remaining_proj slice
+    {cat: {"my": remaining, "opp": remaining}} to merge into compute_pit_proj's dict; the
+    build_category_pulse / classify_categories `rp = remaining_proj.get(cat)` branch then
+    uses it verbatim (pm = current + remaining). `team_hit_sched_frac` (from the snapshot,
+    fetch_data.get_matchup_dates) is each fantasy team's roster-weighted fraction of window
+    bat-games still to come. Empty / unmatched -> {} so the existing league-fraction
+    _project path is used unchanged (graceful fallback for old snapshots)."""
+    fracs = team_hit_sched_frac or {}
+    if not fracs:
+        return {}
+    my_key  = " ".join((my_team  or "").split())
+    opp_key = " ".join((opp_team or "").split())
+    my_avgs  = (weekly_avgs or {}).get(my_key,  {})
+    opp_avgs = (weekly_avgs or {}).get(opp_key, {})
+    if not (my_avgs and opp_avgs):
+        return {}
+    norm     = {" ".join((k or "").split()): v for k, v in fracs.items()}
+    my_frac  = norm.get(my_key)
+    opp_frac = norm.get(opp_key)
+    if my_frac is None or opp_frac is None:
+        return {}
+    out = {}
+    for cat in _HIT_PROJ_CATS:
+        if cat in my_avgs and cat in opp_avgs:
+            out[cat] = {"my": my_avgs[cat] * my_frac, "opp": opp_avgs[cat] * opp_frac}
+    return out
+
 def compute_week_finishes(roto, my_team, current_week_num):
     """Per-completed-week roto finishes. Returns (wk_ranks, wk_pts, roto_week_results):
     my weekly roto rank + points per completed week, and {week: {team: 'W'|'L'}}
@@ -3426,6 +3460,12 @@ def build_email(snap, override_team=None):
 
     pit_proj = compute_pit_proj(pitchers, my_team, matchup.get("opp_team", "") if matchup else "",
                                 today_str, week_end_str)
+    # Fold in schedule-aware hitter counting-cat projections (R/HR/RBI/SB/B_SO). Same
+    # remaining_proj shape, so classify_categories / build_category_pulse / build_matchup_section
+    # all pick it up. Empty on old snapshots -> hitter cats keep the league-fraction path.
+    pit_proj.update(compute_hit_proj(weekly_avgs, my_team,
+                                     matchup.get("opp_team", "") if matchup else "",
+                                     snap.get("team_hit_sched_frac")))
 
     # Category classification (used by the pickup steering AND the FA "Cats" column).
     # Computed here (before the FA tables) so need_cats is available to them.

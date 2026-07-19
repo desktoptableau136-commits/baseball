@@ -68,6 +68,7 @@ _EXPECTED = {
     "next_matchup_end_date":     str,
     "matchup_game_days":         int,
     "matchup_game_days_elapsed": int,
+    "team_hit_sched_frac":       dict,   # per-team remaining-bat-games fraction (schedule-aware hitter proj)
     "league_total_roster_max":   int,
     "recent_hitting":            list,
     "recent_pitching":           list,

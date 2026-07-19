@@ -1610,9 +1610,14 @@ def get_matchup_dates(league) -> dict:
     next_end          = end_date + timedelta(days=next_period_days)
 
     # Count actual MLB game days in the matchup window (excludes All-Star break etc.)
+    # and, from the SAME schedule response, per-MLB-team game counts (whole window vs
+    # still-to-come) so hitter counting-cat projections can respect each team's real
+    # remaining schedule (off-days/doubleheaders) instead of a league-wide time fraction.
     start_str = start_date.strftime("%Y-%m-%d")
     end_str   = end_date.strftime("%Y-%m-%d")
     today_str = today.strftime("%Y-%m-%d")
+    team_win_games = {}   # mlb_team_id -> games in the whole window
+    team_rem_games = {}   # mlb_team_id -> games with date > today
     try:
         sched = requests.get(
             f"https://statsapi.mlb.com/api/v1/schedule"
@@ -1622,9 +1627,44 @@ def get_matchup_dates(league) -> dict:
         game_date_set = {d["date"] for d in sched.get("dates", []) if d.get("games")}
         matchup_game_days    = len(game_date_set)
         game_days_elapsed    = sum(1 for d in game_date_set if d < today_str)
+        for d in sched.get("dates", []):
+            gd = d.get("date", "")
+            for g in d.get("games", []):
+                for side in ("home", "away"):
+                    tid = (((g.get("teams") or {}).get(side) or {}).get("team") or {}).get("id")
+                    if not tid:
+                        continue
+                    team_win_games[tid] = team_win_games.get(tid, 0) + 1
+                    if gd > today_str:
+                        team_rem_games[tid] = team_rem_games.get(tid, 0) + 1
     except Exception:
         matchup_game_days    = period_days
         game_days_elapsed    = (today - start_date).days
+
+    # Per-fantasy-team roster-weighted HITTER schedule fraction = fraction of the team's
+    # window bat-games still to come. Mirrors the fetch_todays_games proTeam->ESPN->MLB id
+    # join. Consumed by send_digest.compute_hit_proj to project R/HR/RBI/SB/B_SO off actual
+    # remaining games (the pitching side already does this via remaining starts). Empty ->
+    # send_digest falls back to the league-wide elapsed-fraction projection unchanged.
+    team_hit_sched_frac = {}
+    try:
+        from espn_api.baseball.constant import PRO_TEAM_MAP
+        _abbrev_to_espn = {v: k for k, v in PRO_TEAM_MAP.items()}
+    except Exception:
+        _abbrev_to_espn = {}
+    if team_win_games:
+        for tm in getattr(league, "teams", []) or []:
+            sum_win = sum_rem = 0
+            for pl in getattr(tm, "roster", []) or []:
+                if not is_hitter(pl):
+                    continue
+                mlbid = _ESPN_PROID_TO_MLBID.get(_abbrev_to_espn.get(getattr(pl, "proTeam", None)))
+                if not mlbid or mlbid not in team_win_games:
+                    continue
+                sum_win += team_win_games.get(mlbid, 0)
+                sum_rem += team_rem_games.get(mlbid, 0)
+            if sum_win > 0:
+                team_hit_sched_frac[tm.team_name] = round(sum_rem / sum_win, 4)
 
     return {
         "matchup_start_date":         start_date.strftime("%Y-%m-%d"),
@@ -1633,6 +1673,7 @@ def get_matchup_dates(league) -> dict:
         "next_matchup_end_date":      next_end.strftime("%Y-%m-%d"),
         "matchup_game_days":          matchup_game_days,
         "matchup_game_days_elapsed":  game_days_elapsed,
+        "team_hit_sched_frac":        team_hit_sched_frac,
     }
 
 
