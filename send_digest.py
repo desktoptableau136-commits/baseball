@@ -2424,12 +2424,6 @@ def build_glossary_section():
         _entry(f'SB{_hit_badge("SB", SILVER)}',
                "Next to a hitter's name — a genuine base-stealer (top-20% SB producer, corroborated by sprint "
                "speed)."),
-        _entry(f'Platoon vs today\'s SP&nbsp;{_mark("&#9650;", GREEN)}RHP&nbsp;{_mark("&#9661;", MUTED)}',
-               "In <b>Today's MLB Games</b> only, next to a hitter — his handedness matchup vs tonight's opposing "
-               "probable starter. Green <b>&#9650;LHP/RHP</b> = a platoon <b>edge</b> (a lefty facing a right-handed "
-               "pitcher, a righty facing a lefty, or a switch-hitter); muted <b>&#9661;</b> = a <b>reverse-platoon</b> "
-               "(same-handed) matchup. Empty when the starter is undecided or the batter's hand is unknown."),
-
         _subhead("Buy-low / sell-high — pitchers &amp; hitters"),
         _entry(f'$ / ▼{_hit_badge("$", GREEN)}{_hit_badge("&#9660;", RED)}',
                "Statcast expected-vs-actual regression flags (mutually exclusive). <b>$</b> (green) = "
@@ -3161,25 +3155,12 @@ def build_todays_games_section(todays_games, my_team, opp_team, max_games=4,
         row = hit_rows.get(key)
         return hitter_badges(row, hit_pctile) if row else ""
 
-    def _platoon_mark(p):
-        """Compact platoon read for a rostered HITTER vs tonight's opposing probable
-        starter: green ▲ = the bat has the platoon edge (L vs RHP, R vs LHP, or a switch
-        hitter), muted ▽ = reverse platoon (same-hand). Empty for pitchers, switch-less
-        gaps, or a TBD probable (no hand)."""
-        if p.get("is_p"):
-            return ""
-        b  = (p.get("bats") or "").upper()
-        oh = (p.get("opp_sp_hand") or "").upper()
-        if not b or oh not in ("L", "R"):
-            return ""
-        hand = "RHP" if oh == "R" else "LHP"
-        fav  = (b == "S") or (b == "L" and oh == "R") or (b == "R" and oh == "L")
-        bat  = "switch" if b == "S" else f"{b}HB"
-        if fav:
-            return (f'<span style="color:{GREEN};font-weight:700;" '
-                    f'title="Platoon edge: {bat} vs {hand}"> ▲{hand}</span>')
-        return (f'<span style="color:{MUTED};" '
-                f'title="Reverse platoon: {bat} vs {hand}"> ▽{hand}</span>')
+    # NOTE: batter handedness (`bats`) + opposing-SP hand (`opp_sp_hand`) are still carried
+    # on every `involved` entry in the snapshot (see fetch_data.fetch_player_handedness /
+    # fetch_todays_games). The inline platoon marker was removed from this panel — it made an
+    # already-dense TV card too busy. The DATA is retained for a future re-placement in a
+    # calmer surface (see the "re-place platoon marker" TODO). Do NOT drop the fetch-side
+    # handedness when trimming here.
 
     def _side(players, label, color):
         if not players:
@@ -3188,7 +3169,6 @@ def build_todays_games_section(todays_games, my_team, opp_team, max_games=4,
             f'<span style="color:{MUTED};">{p.get("name","")}'
             + (f'<span style="color:{CYAN};font-weight:700;"> ⚾</span>' if p.get("is_sp") else "")
             + _badges(p)
-            + _platoon_mark(p)
             + '</span>'
             for p in players
         )
