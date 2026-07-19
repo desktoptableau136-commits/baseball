@@ -53,10 +53,12 @@ def _phi(x):
 
 
 def _probs(edge, sigma, dec, k=1.0):
-    """Faithful re-implementation of sd._cat_win_prob's normal model, with sigma scaled by
-    k (used only for the inflation sweep; the base report calls the shipped function). At
-    remaining_frac=1 the shipped `eff` equals sigma for every category, so k=1 matches it."""
-    eff = max(sigma * k, 1e-9)
+    """Faithful re-implementation of sd._cat_win_prob's normal model with a RESIDUAL sigma
+    multiplier k (used only for the inflation sweep; the base report calls the shipped fn).
+    The shipped fn already widens sigma by _WINPROB_SIGMA_INFLATE, and at remaining_frac=1
+    its eff = sigma * _WINPROB_SIGMA_INFLATE — so k=1 matches shipped and k is the ADDITIONAL
+    widen on top of it."""
+    eff = max(sigma * sd._WINPROB_SIGMA_INFLATE * k, 1e-9)
     h = 0.5 * (10 ** (-dec))
     p_win = 1.0 - _phi((h - edge) / eff)
     p_loss = _phi((-h - edge) / eff)
@@ -247,18 +249,21 @@ def _report(samples, scored_weeks, nbins):
         if e < best_ece:
             best_k, best_ece = k, e
         k += 0.05
-    print("\nSIGMA-INFLATION SWEEP  (scale every sigma by k, re-measure ECE)")
+    infl = sd._WINPROB_SIGMA_INFLATE
+    print(f"\nSIGMA-INFLATION SWEEP  (shipped _WINPROB_SIGMA_INFLATE = {infl:g}; k is an")
+    print("ADDITIONAL residual multiplier on top of it, re-measuring ECE)")
     if best_k > 1.001:
         pv = [_probs(s["edge"], s["sigma"], s["dec"], best_k)[0] for s in samples]
         bb = sum((pv[i] - outcomes[i]) ** 2 for i in range(N)) / N
-        print(f"  best k = {best_k:.2f}  ->  ECE {base_ece*100:.2f} -> {best_ece*100:.2f} pts, "
+        print(f"  best residual k = {best_k:.2f}  ->  ECE {base_ece*100:.2f} -> {best_ece*100:.2f} pts, "
               f"Brier {brier:.4f} -> {bb:.4f}")
-        print(f"  Reading: the model is OVER-confident; widening sigma by ~{(best_k-1)*100:.0f}% "
-              f"pulls the tails back toward reality.")
-        print(f"  To apply, scale sigma at the sd._cat_win_prob call site (send_digest ~L1458)")
-        print(f"  by {best_k:.2f} (display-only; changes the shown Win% but not any W/L verdict).")
+        print(f"  Reading: still slightly over-confident; another ~{(best_k-1)*100:.0f}% widen "
+              f"(total ~{best_k*infl:.2f}x) would flatten the tails a bit more.")
+        print(f"  Tune _WINPROB_SIGMA_INFLATE in send_digest (display-only; changes shown Win%,")
+        print(f"  never a projected W/L/T verdict). Pre-week optimum is ~1.9x total.")
     else:
-        print(f"  best k = {best_k:.2f} (no meaningful improvement) -- sigma is well-scaled as is.")
+        print(f"  best residual k = {best_k:.2f} (no meaningful improvement) -- the shipped "
+              f"{infl:g}x is well-calibrated as is.")
 
     # ---- per-category ----
     print("\nPER-CATEGORY  (over = model too confident, under = too timid)")
