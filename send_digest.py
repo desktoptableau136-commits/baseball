@@ -1334,6 +1334,87 @@ def _project(current, avg, elapsed_frac, cat):
     else:
         return current + remaining * avg                  # counting: add expected remainder
 
+def _winprob_ctx(matchup, weekly_avgs=None, weekly_std=None, remaining_proj=None,
+                 days_elapsed=None, matchup_days=7, game_days_elapsed=None, matchup_game_days=None):
+    """Per-category win-probability context for pickup_win_delta: returns
+    ({cat: (pm, po, sigma)}, remaining_frac) using the SAME projection + sigma setup as
+    build_category_pulse, so a marginal-add win% can't drift from the Category Pulse chip.
+    ({}, 0.0) when there's no live matchup."""
+    if not matchup or not matchup.get("categories"):
+        return {}, 0.0
+    if game_days_elapsed is not None and matchup_game_days:
+        elapsed_frac = min(1.0, max(0.0, game_days_elapsed / matchup_game_days))
+    else:
+        elapsed_frac = min(1.0, max(0.0, (days_elapsed or 0) / matchup_days))
+    remaining_frac = 1.0 - elapsed_frac
+    mk = " ".join(matchup.get("my_team",  "").split())
+    ok = " ".join(matchup.get("opp_team", "").split())
+    my_avgs  = (weekly_avgs or {}).get(mk, {}); opp_avgs = (weekly_avgs or {}).get(ok, {})
+    my_std   = (weekly_std  or {}).get(mk, {}); opp_std  = (weekly_std  or {}).get(ok, {})
+    has_proj = bool(my_avgs and opp_avgs)
+    out = {}
+    for c in matchup["categories"]:
+        cat = c["cat"]; my_v = c["my_val"]; opp_v = c["opp_val"]
+        rp = (remaining_proj or {}).get(cat)
+        if rp is not None:
+            pm, po = my_v + rp["my"], opp_v + rp["opp"]
+        elif has_proj and cat in my_avgs and cat in opp_avgs:
+            pm = _project(my_v,  my_avgs[cat],  elapsed_frac, cat)
+            po = _project(opp_v, opp_avgs[cat], elapsed_frac, cat)
+        else:
+            continue
+        sm, so = my_std.get(cat), opp_std.get(cat)
+        sigma = math.sqrt(sm * sm + so * so) if (sm is not None and so is not None) \
+                else (_CLOSE_THRESH.get(cat, 1) or 1)
+        out[cat] = (pm, po, sigma)
+    return out, remaining_frac
+
+_PICKUP_WINDELTA_MIN  = 4    # min percentage-point win% gain to surface a pickup chip
+_PICKUP_CONTESTED_MAX = 60   # only surface a cat I'm not already winning comfortably (before% <)
+
+def pickup_win_delta(cand_row, ctx, remaining_frac, today_str, week_end_str):
+    """For an SP free-agent candidate, the category his remaining starts THIS matchup week
+    most improve my win% in — returns (cat, before_pct, after_pct) or None. Folds the
+    candidate's own remaining K/QS/W (same per-start rates as compute_pit_proj) into my
+    projected value and re-runs the CALIBRATED _cat_win_prob. Display-only — never changes
+    a projected W/L/T verdict, only answers 'does streaming this arm move a category?'."""
+    if not ctx or not _is_sp(cand_row):
+        return None
+    ns = _starts_this_week(cand_row, today_str, week_end_str)
+    if ns <= 0:
+        return None
+    gs   = _n(cand_row.get("GS")); k = _n(cand_row.get("K"))
+    ip_g = _n(cand_row.get("IP_per_G")); kip = _n(cand_row.get("K/IP") or cand_row.get("KIP"))
+    k_ps  = (k / gs) if gs > 0 else (ip_g * kip if ip_g > 0 and kip > 0 else 5)
+    qs_ps = (qs_probability(cand_row) or 0) / 100.0
+    w_ps  = (_n(cand_row.get("ESPN_W") or cand_row.get("W")) / gs) if gs > 0 else 0.12
+    contrib = {"K": ns * k_ps, "QS": ns * qs_ps, "W": ns * w_ps}
+    best = None
+    for cat, dc in contrib.items():
+        c = ctx.get(cat)
+        if not c or dc <= 0:
+            continue
+        pm, po, sigma = c
+        p0, _ = _cat_win_prob(pm,      po, cat, sigma, remaining_frac)
+        p1, _ = _cat_win_prob(pm + dc, po, cat, sigma, remaining_frac)
+        b, a = round(p0 * 100), round(p1 * 100)
+        if (a - b) >= _PICKUP_WINDELTA_MIN and b < _PICKUP_CONTESTED_MAX \
+                and (best is None or (a - b) > best[3]):
+            best = (cat, b, a, a - b)
+    return best[:3] if best else None
+
+def _winprob_chip(wd):
+    """Render the marginal-win% pickup chip from a pickup_win_delta tuple. '' when None."""
+    if not wd:
+        return ""
+    cat, b, a = wd
+    lbl = _CAT_LABELS_MAP.get(cat, cat)
+    col = GREEN if a >= 50 else ACCENT
+    return (f'<span title="Streaming him lifts your {lbl} win odds {b}% to {a}% this matchup" '
+            f'style="display:inline-block;font-size:9px;font-weight:700;color:{col};'
+            f'background:rgba(59,130,246,0.12);border-radius:3px;padding:1px 5px;'
+            f'margin-left:6px;vertical-align:middle;">{lbl} {b}→{a}%</span>')
+
 def classify_categories(matchup, weekly_avgs=None, days_elapsed=None, remaining_proj=None, matchup_days=7,
                         game_days_elapsed=None, matchup_game_days=None):
     """Classify each category's closeness, using the same projection math as Category
@@ -2343,6 +2424,12 @@ def build_glossary_section():
                "The <b>%</b> in each card corner is your odds of winning that category (normal model of the final "
                "margin), colored to the projected outcome. On a toss-up — odds near even, or a projected tie — a "
                "<b>⚡</b> replaces the number instead."),
+        _entry(f'Streamer win-% swing{_winprob_chip(("K", 46, 58))}',
+               "In <b>FA Pickup — Starting Pitchers</b>, next to a streamer — the one contested category his "
+               "remaining starts this matchup would most improve, shown as <b>before→after</b> win odds (e.g. "
+               "<b>K 46→58%</b>). Uses the same calibrated win-probability model as the Category Pulse cards; only "
+               "shown when he'd move a category you're not already winning comfortably. Green when the add would "
+               "put you over 50%."),
 
         _subhead("Pending trades"),
         _entry(f'Verdict{_verdict_pill("ACCEPT", GREEN)}&nbsp;{_verdict_pill("COUNTER", YELLOW)}&nbsp;{_verdict_pill("DECLINE", RED)}',
@@ -3467,6 +3554,13 @@ def build_email(snap, override_team=None):
                                      matchup.get("opp_team", "") if matchup else "",
                                      snap.get("team_hit_sched_frac")))
 
+    # Marginal-win% context (for pickup_win_delta) — same projection/sigma setup as Category
+    # Pulse, so an FA streamer's "does this flip a category?" chip can't drift from the card.
+    winprob_ctx, winprob_rf = _winprob_ctx(
+        matchup, weekly_avgs=weekly_avgs, weekly_std=weekly_std, remaining_proj=pit_proj,
+        days_elapsed=days_elapsed, matchup_days=matchup_period_days,
+        game_days_elapsed=game_days_elapsed, matchup_game_days=matchup_game_days)
+
     # Category classification (used by the pickup steering AND the FA "Cats" column).
     # Computed here (before the FA tables) so need_cats is available to them.
     category_classification = classify_categories(
@@ -3996,6 +4090,8 @@ def build_email(snap, override_team=None):
                 # Two-start flag always shows — a 2-start FA is a top streaming target
                 _n_starts_fa = _starts_this_week(r, today_str, week_end_str)
                 two_start_html = two_start_badge(f"{_n_starts_fa} starts this matchup week") if _n_starts_fa >= 2 else ""
+                # Marginal-win% chip — the category his remaining starts most move for me.
+                _wd_chip = _winprob_chip(pickup_win_delta(r, winprob_ctx, winprob_rf, today_str, week_end_str))
 
                 _kpct_val = _n(r.get("Kpct_P"))
                 _kpct_top = _kpct_val > 0 and _kpct_val in _top3_kpct_fa
@@ -4012,7 +4108,7 @@ def build_email(snap, override_team=None):
                     _bd_uid("fasp", r.get("PlayerName", "")), 8)
                 rows += (
                     f'<tr style="{bg}">'
-                    f'<td style="{name_border}{_tds}font-weight:600;">{team_logo(r.get("Team"))}{r.get("PlayerName","")}{inj_tag(r)}{two_start_html}{pickup_badge}</td>'
+                    f'<td style="{name_border}{_tds}font-weight:600;">{team_logo(r.get("Team"))}{r.get("PlayerName","")}{inj_tag(r)}{two_start_html}{pickup_badge}{_wd_chip}</td>'
                     f'<td style="{_tdc}">{proj_line_str}</td>'
                     f'<td style="{_tdc}">{opp_logo(ha)}{ha}'
                     f'{"&nbsp;<span style=\"color:#888;font-size:11px\">(proj.)</span>" if r.get("PSP_Projected") else ""}'
