@@ -71,7 +71,7 @@ def _fmt_status(s):
 
 def _get_injury_status(r):
     """Return the best available injury status string for any player (rostered or FA)."""
-    # ESPN_Status is merged for hitters (and pitchers once fetch_data.py is updated)
+    # ESPN_Status is merged for both hitters and pitchers (fetch_data.py's roster merges)
     espn = str(r.get("ESPN_Status") or "").upper()
     if espn and espn not in ("", "ACTIVE", "FA", "UNKNOWN"):
         return espn
