@@ -109,9 +109,15 @@ def coverage_report(snap):
 
     fa_y = _yrows_fa(snap, "pitchers") + _yrows_fa(snap, "hitters")
 
+    # Savant coverage measures whether the enrichment merges populated Statcast for players
+    # that COULD have it. Off-FP pitchers seeded from ESPN (Source=="ESPN", fresh call-ups)
+    # are legitimately below Savant's qualifier minimums, so excluding them keeps a healthy
+    # influx of call-ups from false-tripping the degradation badge.
+    pit_y_fp = [r for r in pit_y if str(r.get("Source") or "") != "ESPN"]
+
     rep = {
         "freshness": _freshness(snap),
-        "pitcher_savant": _group(pit_y, _PITCHER_SAVANT),
+        "pitcher_savant": _group(pit_y_fp, _PITCHER_SAVANT),
         "hitter_savant": _group(hit_y, _HITTER_SAVANT),
         "hitter_model": _group(hit_y, _HITTER_MODEL),
         "fa_status": _group(fa_y, _FA_STATUS),

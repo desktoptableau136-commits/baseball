@@ -235,7 +235,10 @@ _FA_PULL_SIZE = 1000
 
 def get_pitcher_espn_svhd(league) -> pd.DataFrame:
     """Pull season stats from ESPN player stats (scoring period 0 = season total).
-    Covers both rostered and FA pitchers. Returns K, W, IP, GS, GP, SV, HLD, SVHD."""
+    Covers both rostered and FA pitchers. Returns K, W, IP, GS, GP, SV, HLD, SVHD, plus
+    ERA/WHIP and the MLB club abbrev -- the last three exist so build_pitcher_data can
+    SEED synthetic season rows for pitchers absent from the FantasyPros scrape (call-ups /
+    low-owned FAs), which the left-from-FP merge would otherwise silently drop."""
     rows = []
     seen = set()
 
@@ -252,8 +255,12 @@ def get_pitcher_espn_svhd(league) -> pd.DataFrame:
             "ESPN_K":     bd.get('K',   -1),
             "ESPN_W":     bd.get('W',   -1),
             "ESPN_IP":    round(outs / 3, 1) if outs > 0 else -1,
+            "ESPN_OUTS":  int(outs) if outs > 0 else -1,
             "ESPN_GS":    bd.get('GS',  -1),
             "ESPN_GP":    bd.get('GP',  -1),
+            "ESPN_ERA":   bd.get('ERA',  -1),
+            "ESPN_WHIP":  bd.get('WHIP', -1),
+            "ESPN_Team":  getattr(pl, "proTeam", "") or "",
         })
         seen.add(pl.name)
 
@@ -1100,11 +1107,69 @@ def get_pending_trades(league, my_team_name) -> list:
 
 # â”€â”€ PITCHER PIPELINE â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
+def _seed_offfp_pitchers(fp, espn_svhd) -> pd.DataFrame:
+    """Build FP-schema season rows for pitchers present in ESPN (rostered/FA) but ABSENT from
+    the FantasyPros scrape, so the left-from-FP merge in build_pitcher_data can't silently
+    drop them (fresh call-ups / low-owned FAs). Seeds only the fields the scoring/projection
+    math needs from ESPN's own season breakdown (IP/ERA/WHIP/K/GS/G); Statcast (xERA/whiff)
+    is backfilled downstream by the existing Savant merges wherever the arm qualifies, and the
+    projection's _ERA_REG_PRIOR_IP=40 shrinkage regresses a thin sample toward league ERA.
+    Requires a real MLB line (IP>0, K>=0, ERA>=0) so a 0-inning name never seeds a junk row."""
+    if espn_svhd is None or espn_svhd.empty:
+        return pd.DataFrame()
+    fp_keys = set(fp["PlayerName"].map(_name_key))
+    rows = []
+    for r in espn_svhd.to_dict(orient="records"):
+        nm = r.get("PlayerName", "")
+        if not nm or _name_key(nm) in fp_keys:
+            continue
+        outs = int(r.get("ESPN_OUTS", -1) or -1)
+        gp   = int(r.get("ESPN_GP",  -1) or -1)
+        k    = float(r.get("ESPN_K",   -1) or -1)
+        era  = float(r.get("ESPN_ERA", -1) or -1)
+        # Need a real MLB line AND a game count (IP_per_G is GP-derived; a missing GP would
+        # clip IP_per_G to 7.5 and misclassify a reliever as a workhorse starter).
+        if outs <= 0 or gp <= 0 or k < 0 or era < 0:
+            continue
+        # FantasyPros IP is baseball notation (the decimal digit is OUTS, decoded by
+        # innings_to_decimal downstream), so seed IP the same way -- a plain outs/3 decimal
+        # would be mis-decoded (12.33 -> 23 innings). 37 outs -> 12 + 1/10 = "12.1".
+        ip = outs // 3 + (outs % 3) / 10.0
+        rows.append({
+            "PlayerName": nm,
+            "Team":       r.get("ESPN_Team", "") or "",
+            "Dataset":    CURRENT_YEAR,
+            "IP":   ip,
+            "K":    k,
+            "ERA":  era,
+            "WHIP": float(r.get("ESPN_WHIP", -1) or -1),
+            "GS":   r.get("ESPN_GS", -1),
+            "G":    r.get("ESPN_GP", -1),
+            "SV":   r.get("ESPN_SV",  0) or 0,
+            "HLD":  r.get("ESPN_HLD", 0) or 0,
+            "Source": "ESPN",
+        })
+    return pd.DataFrame(rows)
+
+
 def build_pitcher_data(league) -> list:
     log("Fetching pitcher stats from FantasyProsâ€¦")
     fp = fetch_fantasypros("pitchers")
     if fp.empty:
         return []
+    fp["Source"] = "FP"
+
+    # Widen the universe: FantasyPros is the base frame and every downstream enrichment is a
+    # left-join onto it, so a pitcher absent from the FP scrape would be dropped. Seed synthetic
+    # season rows from ESPN's own breakdown (already pulled below) BEFORE the coercion/merges so
+    # they flow through the identical probable-starter + Statcast + season-override pipeline.
+    espn_svhd = get_pitcher_espn_svhd(league)
+    seeded = _seed_offfp_pitchers(fp, espn_svhd)
+    if not seeded.empty:
+        fp = pd.concat([fp, seeded], ignore_index=True)
+        log(f"  Seeded {len(seeded)} off-FantasyPros pitchers from ESPN")
+    # Seed-only breakdown columns must not ride the season-override merge onto every row.
+    espn_svhd = espn_svhd.drop(columns=["ESPN_ERA", "ESPN_WHIP", "ESPN_Team", "ESPN_OUTS"], errors="ignore")
 
     fp["IP"] = pd.to_numeric(fp["IP"], errors="coerce")
     fp["K"]  = pd.to_numeric(fp["K"],  errors="coerce")
@@ -1121,7 +1186,7 @@ def build_pitcher_data(league) -> list:
     log("Getting pitcher roster from ESPN…")
     roster_df   = get_pitcher_roster(league)
     fa_df       = get_pitcher_fa(league)
-    espn_svhd   = get_pitcher_espn_svhd(league)
+    # espn_svhd already fetched above (for the off-FP seeding) — reused here for the season override.
 
     # Merge roster (brings FantasyTeam + Position + ESPN_Status), then FA status separately
     # FA_Position avoids Position_x / Position_y collision. merge_on_name adds an
