@@ -2848,7 +2848,7 @@ def build_bench_watch(eff):
             f'<strong>{" &middot; ".join(net_bits)}</strong> '
             f'<span style="color:{MUTED};">left on your bench so far this week</span></div>'
         )
-        for b in bench[:2]:
+        for b in bench:
             days = b.get("days") or []
             swap = next((d["tag"] for d in days if str(d.get("tag", "")).startswith("vs ")), "")
             hits = " &middot; ".join(f"{b[c]} {c}" for c in ("HR", "RBI", "SB", "R") if b[c])
