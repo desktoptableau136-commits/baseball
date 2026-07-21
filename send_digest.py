@@ -2823,18 +2823,22 @@ def build_season_roto_rankings(roto, my_team=MY_TEAM, team_logos=None, season_to
 def build_bench_watch(eff):
     """Compact matchup-to-date 'Lineup Watch' callout for the daily digest: batter
     production you've stranded on the bench so far this matchup (net of the bat you'd have
-    sat — still fixable for the remaining days) + any starter who imploded in an active
-    slot (ER/WHIP already counted) + hitters idling in an active slot (wasting the spot).
+    sat — still fixable for the remaining days) + good starts (K/QS/W) left on the bench
+    (net of the arm you'd have benched) + any starter who imploded in an active slot
+    (ER/WHIP already counted) + hitters idling in an active slot (wasting the spot).
     eff = snapshot['lineup_efficiency_current'] (matchup start->yesterday). Silent on a
     clean matchup. Fuller post-mortem lives in the recap's build_lineup_efficiency."""
     if not eff:
         return ""
-    bench   = eff.get("bench") or []
-    blowups = eff.get("blowups") or []
-    idle    = eff.get("idle") or []
-    net     = eff.get("net") or {}
+    bench    = eff.get("bench") or []
+    bench_sp = eff.get("bench_sp") or []
+    blowups  = eff.get("blowups") or []
+    idle     = eff.get("idle") or []
+    net      = eff.get("net") or {}
+    net_pit  = eff.get("net_pit") or {}
     net_bits = [f"{net.get(c, 0):+.0f} {c}" for c in ("HR", "RBI", "R", "SB") if net.get(c, 0)]
-    if not net_bits and not blowups and not idle:
+    pit_bits = [f"{net_pit.get(c, 0):+.0f} {c}" for c in ("W", "QS", "K") if net_pit.get(c, 0)]
+    if not net_bits and not pit_bits and not blowups and not idle:
         return ""
 
     rows = []
@@ -2852,6 +2856,27 @@ def build_bench_watch(eff):
             rows.append(
                 f'<div style="font-size:11px;color:{MUTED};padding:1px 0 1px 16px;">'
                 f'<span style="color:{TEXT};font-weight:600;">{b["name"]}</span> &mdash; {hits} on the bench{note}</div>'
+            )
+    if pit_bits:
+        rows.append(
+            f'<div style="font-size:12px;color:{TEXT};padding:3px 0;">'
+            f'<strong>{" &middot; ".join(pit_bits)}</strong> '
+            f'<span style="color:{MUTED};">from starts left on your bench so far this week</span></div>'
+        )
+        for b in bench_sp[:2]:
+            days = b.get("days") or []
+            if len(days) == 1:
+                d0 = days[0]
+                desc = d0.get("line", "")
+                tag = d0.get("tag", "")
+                note = f' <span style="color:{MUTED};">({tag})</span>' if tag else ""
+            else:
+                desc = " &middot; ".join(f"{b[c]} {c}" for c in ("K", "QS", "W") if b[c]) \
+                       + f" across {len(days)} starts"
+                note = ""
+            rows.append(
+                f'<div style="font-size:11px;color:{MUTED};padding:1px 0 1px 16px;">'
+                f'<span style="color:{TEXT};font-weight:600;">{b["name"]}</span> &mdash; {desc} on the bench{note}</div>'
             )
     for p in blowups:
         drop = f', <span style="color:{RED};">dropped {p["drop_when"]}</span>' if p.get("drop_when") else ""

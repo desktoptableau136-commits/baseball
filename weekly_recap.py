@@ -271,15 +271,17 @@ def build_my_matchup(prev_matchup, logos):
 
 def build_lineup_efficiency(eff):
     """MY team's start/sit opportunity cost last matchup: batter production stranded on
-    the bench (net of the bat I'd have sat to play him) + active-slot pitcher blowups
-    that counted then got dropped + hitters idling in an active slot on game days (wasted
-    space). Data from fetch_data.get_lineup_efficiency."""
+    the bench (net of the bat I'd have sat to play him) + good starts (K/QS/W) left on the
+    bench (net of the arm I'd have benched) + active-slot pitcher blowups that counted then
+    got dropped + hitters idling in an active slot on game days (wasted space). Data from
+    fetch_data.get_lineup_efficiency."""
     if not eff:
         return ""
-    bench   = eff.get("bench") or []
-    blowups = eff.get("blowups") or []
-    idle    = eff.get("idle") or []
-    if not bench and not blowups and not idle:
+    bench    = eff.get("bench") or []
+    bench_sp = eff.get("bench_sp") or []
+    blowups  = eff.get("blowups") or []
+    idle     = eff.get("idle") or []
+    if not bench and not bench_sp and not blowups and not idle:
         return ""
 
     net = eff.get("net") or {}
@@ -318,6 +320,36 @@ def build_lineup_efficiency(eff):
                 f'<span style="color:{TEXT};">{d["line"]}</span>'
                 + (f' ({d["extra"]})' if d.get("extra") else '')
                 + f' <span style="color:{MUTED};">[{d["tag"]}]</span></div>'
+                for d in b.get("days", [])
+            )
+            + '</div>'
+        )
+
+    # ── good starts left on the bench ──
+    net_pit = eff.get("net_pit") or {}
+    pit_bits = [f"{net_pit.get(c, 0):+.0f} {c}" for c in ("W", "QS", "K") if net_pit.get(c, 0)]
+    if pit_bits:
+        parts.append(
+            f'<div style="background:{SURFACE};border:1px solid {RED}55;border-radius:6px;'
+            f'padding:12px 16px;margin:14px 0;">'
+            f'<div style="color:{RED};font-weight:800;font-size:13px;letter-spacing:.3px;">'
+            f'STARTS LEFT ON THE BENCH &nbsp;{" &middot; ".join(pit_bits)}</div>'
+            f'<div style="color:{MUTED};font-size:11px;margin-top:3px;">'
+            f'Net of the arm you\'d have benched to start him &mdash; counting stats that never '
+            f'counted (ratios not netted).</div></div>'
+        )
+    for b in bench_sp:
+        tot = " &middot; ".join(f"{b[c]} {c}" for c in ("K", "QS", "W") if b[c])
+        parts.append(
+            f'<div style="background:{SURFACE};border:1px solid {BORDER};border-radius:6px;'
+            f'padding:10px 14px;margin-bottom:8px;">'
+            f'<div><span style="color:{TEXT};font-weight:700;font-size:13px;">{b["name"]}</span>'
+            f'<span style="color:{MUTED};font-size:11px;"> &nbsp;{tot} on the bench</span></div>'
+            + "".join(
+                f'<div style="color:{MUTED};font-size:11px;margin-top:3px;">'
+                f'<span style="color:{YELLOW};">&rsaquo;</span> {d["date"]} '
+                f'<span style="color:{TEXT};">{d["line"]}</span>'
+                f' <span style="color:{MUTED};">[{d["tag"]}]</span></div>'
                 for d in b.get("days", [])
             )
             + '</div>'

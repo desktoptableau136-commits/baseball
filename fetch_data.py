@@ -1882,6 +1882,10 @@ def get_lineup_efficiency(league, my_team_name: str, mode: str = "prev") -> dict
           ABs. Only games his MLB team actually PLAYED count (schedule-gated). Flagged
           only on a pattern: 3+ idle games in a row, or an AB in <50% of active games
           (min 4) - an occasional day off stays silent.
+      (d) BENCHED-SP LEAKAGE - a good start (QS / 6+ K / a W) put up while sitting in a BE
+          slot, so it never counted. Counting cats (K/QS/W) are netted vs the weakest
+          same-day active pitcher I'd have benched to start him (open slot => full gain);
+          ratios (ERA/WHIP) are shown as prose only, never netted (see build_bench_watch).
 
     Uses `mRoster` fetched per `scoringPeriodId` (the only way to see the slot AS SET
     that day for a categories league - box_scores exposes team totals only) plus the
@@ -1893,6 +1897,7 @@ def get_lineup_efficiency(league, my_team_name: str, mode: str = "prev") -> dict
         AB, H, HR, R, RBI, SB, B_SO = "0", "1", "5", "20", "21", "23", "27"
         TB, BB_H = "8", "10"
         OUTS, P_H, P_BB, ER, K = "34", "37", "39", "45", "48"
+        W_ID, GS_ID = "53", "33"  # pitcher win / games-started (daily stat ids)
         PIT_IDS = {13, 14, 15}
         BE_ID, IL_ID = 16, 17
         HIT_POS = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 19}
@@ -2012,7 +2017,17 @@ def get_lineup_efficiency(league, my_team_name: str, mode: str = "prev") -> dict
         except Exception:
             played_days = None
 
-        hit_leak, pit_lines, idle_track = {}, [], {}
+        # Pitcher active-slot instances (the SP/RP/P slots), for the benched-SP feasibility
+        # test - the pitcher analog of hit_inst/hit_ids above.
+        pit_inst, pit_slot_ids = [], set()
+        for sid_str, cnt in slot_counts.items():
+            sid = int(sid_str)
+            if sid not in PIT_IDS or cnt <= 0:
+                continue
+            pit_slot_ids.add(sid)
+            pit_inst.extend([sid] * cnt)
+
+        hit_leak, pit_lines, idle_track, sp_leak = {}, [], {}, {}
         for sp, dt in zip(prev_days, dates):
             ds = dt.strftime("%Y-%m-%d")
             data = league.espn_request.league_get(params={"view": "mRoster", "scoringPeriodId": sp})
@@ -2022,10 +2037,14 @@ def get_lineup_efficiency(league, my_team_name: str, mode: str = "prev") -> dict
             entries = mt["roster"]["entries"]
 
             active_hit = []  # (name, eligible-hit-slot-set, day-stats)
+            active_pit = []  # (name, eligible-pit-slot-set, day-stats)
             for e in entries:
                 pl = e["playerPoolEntry"]["player"]
                 sid = e.get("lineupSlotId")
                 elig = pl.get("eligibleSlots", [])
+                if sid in PIT_IDS:  # a pitcher in an active pitching slot
+                    active_pit.append((pl.get("fullName", "?"),
+                                       {s for s in elig if s in pit_slot_ids}, _split(pl, sp)))
                 if sid not in (BE_ID, IL_ID) and sid not in PIT_IDS and not _is_pit(elig):
                     st = _split(pl, sp)
                     active_hit.append((pl.get("fullName", "?"),
@@ -2043,6 +2062,17 @@ def get_lineup_efficiency(league, my_team_name: str, mode: str = "prev") -> dict
                 base = [[i for i, styp in enumerate(hit_inst) if styp in he] for _, he, _ in active_hit]
                 cand = [i for i, styp in enumerate(hit_inst) if styp in cand_elig]
                 return _full_match(base + [cand])
+
+            def _fits_pit(cand_elig):
+                base = [[i for i, styp in enumerate(pit_inst) if styp in pe] for _, pe, _ in active_pit]
+                cand = [i for i, styp in enumerate(pit_inst) if styp in cand_elig]
+                return _full_match(base + [cand])
+
+            def _pit_qs(s):  # a quality start on the day: 6+ IP (18 outs) and <=3 ER
+                return 1 if (_f(s, OUTS) >= 18 and _f(s, ER) <= 3) else 0
+
+            def _pit_val(s):  # weakest-displaced proxy: same-day pitching counting value
+                return _f(s, K) + 5 * _f(s, W_ID) + 3 * _pit_qs(s)
 
             for e in entries:
                 pl = e["playerPoolEntry"]["player"]
@@ -2090,6 +2120,48 @@ def get_lineup_efficiency(league, my_team_name: str, mode: str = "prev") -> dict
                     pit_lines.append({"name": nm, "date": dt, "outs": _f(st, OUTS), "er": _f(st, ER),
                                       "k": _f(st, K), "h": _f(st, P_H), "bb": _f(st, P_BB)})
 
+                # (d) BENCHED-SP LEAKAGE - a good start put up while sitting in a BE slot
+                # (never counted). GS>=1 (or 5+ IP as a start proxy if daily GS is unset)
+                # marks the appearance as a start; the "good" gate (QS / 6+ K / a W) keeps a
+                # mop-up quiet. Counting cats (K/QS/W) are netted vs the weakest same-day
+                # active pitcher I'd have benched (a rest-day arm contributes 0 => full gain);
+                # ratios (ERA/WHIP) are shown as directional prose only, never netted.
+                if (_is_pit(elig) and sid == BE_ID
+                        and (_f(st, GS_ID) >= 1 or _f(st, OUTS) >= 15)):
+                    outs_, er_ = _f(st, OUTS), _f(st, ER)
+                    k_, w_, qs_ = _f(st, K), _f(st, W_ID), _pit_qs(st)
+                    if not (qs_ or k_ >= 6 or w_ >= 1):
+                        continue
+                    cand_elig = {s for s in elig if s in pit_slot_ids}
+                    free = _fits_pit(cand_elig)
+                    disp_st, disp_nm = {}, None
+                    if not free:
+                        overlap = [(anm, ast) for anm, ae, ast in active_pit if ae & cand_elig]
+                        if overlap:
+                            best = min(overlap, key=lambda x: _pit_val(x[1]))
+                            disp_nm, disp_st = best[0], best[1]
+                    agg = sp_leak.setdefault(nm, {"K": 0, "QS": 0, "W": 0,
+                                                  "net": {"K": 0, "QS": 0, "W": 0}, "days": []})
+                    agg["K"] += k_; agg["QS"] += qs_; agg["W"] += w_
+                    agg["net"]["K"]  += k_  - _f(disp_st, K)
+                    agg["net"]["QS"] += qs_ - _pit_qs(disp_st)
+                    agg["net"]["W"]  += w_  - _f(disp_st, W_ID)
+                    whole, rem = divmod(int(round(outs_)), 3)
+                    ln = (f"{whole}.{rem} IP, {int(er_)} ER, {int(k_)} K"
+                          + (", W" if w_ >= 1 else "") + (", QS" if qs_ else ""))
+                    # A displaced arm who didn't pitch that day (0 outs) cost nothing to
+                    # bench, so that's effectively an open slot - the common "your active
+                    # SP was on his rest day" case.
+                    if free or (disp_nm and _f(disp_st, OUTS) == 0):
+                        tag = "open slot"
+                    elif disp_nm:
+                        d_whole, d_rem = divmod(int(round(_f(disp_st, OUTS))), 3)
+                        tag = f"vs {disp_nm} {d_whole}.{d_rem} IP"
+                    else:
+                        tag = "swap"
+                    agg["days"].append({"date": dt.strftime("%a %m/%d"), "line": ln,
+                                        "k": int(k_), "w": int(w_), "qs": int(qs_), "tag": tag})
+
         # drops of my players (for implode-then-drop flag)
         my_drops = []
         try:
@@ -2124,6 +2196,21 @@ def get_lineup_efficiency(league, my_team_name: str, mode: str = "prev") -> dict
 
         net = {c: round(sum(a["net"][c] for a in hit_leak.values())) for c in ("R", "HR", "RBI", "SB")}
         gross = {c: int(sum(a[c] for a in hit_leak.values())) for c in ("R", "HR", "RBI", "SB")}
+
+        # (d) benched-SP leakage: starts left on the bench, surfaced only when the net
+        # counting gain (over the arm I'd have benched) is actually positive.
+        bench_sp = []
+        for nm, a in sorted(sp_leak.items(),
+                            key=lambda kv: (kv[1]["net"]["W"], kv[1]["net"]["QS"], kv[1]["net"]["K"]),
+                            reverse=True):
+            if not (a["net"]["K"] > 0 or a["net"]["QS"] > 0 or a["net"]["W"] > 0):
+                continue
+            bench_sp.append({"name": nm, "K": int(a["K"]), "QS": int(a["QS"]), "W": int(a["W"]),
+                             "net": {k: round(v) for k, v in a["net"].items()}, "days": a["days"]})
+        # Headline sums only the surfaced (net-positive) starts, and floors each cat at 0 so a
+        # single arm whose displaced replacement happened to grab that cat can't drag the
+        # "left on the bench" total negative (which would read as if benching him was a loss).
+        net_pit = {c: max(0, round(sum(b["net"][c] for b in bench_sp))) for c in ("K", "QS", "W")}
 
         # (c) idle "wasting space": an active-slot hitter not accumulating stats. Only games
         # his team actually played count (schedule-gated above). Flag when it's a pattern -
@@ -2161,6 +2248,7 @@ def get_lineup_efficiency(league, my_team_name: str, mode: str = "prev") -> dict
             "week": week, "mode": mode,
             "week_dates": f"{dates[0].strftime('%b %d')} - {dates[-1].strftime('%b %d')}",
             "bench": bench, "gross": gross, "net": net, "blowups": blowups, "idle": idle,
+            "bench_sp": bench_sp, "net_pit": net_pit,
         }
     except Exception as e:
         log(f"  get_lineup_efficiency failed: {e}")
