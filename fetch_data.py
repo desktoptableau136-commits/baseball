@@ -1107,6 +1107,18 @@ def get_pending_trades(league, my_team_name) -> list:
 
 # â”€â”€ PITCHER PIPELINE â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
+# ESPN proTeam abbrev (from PRO_TEAM_MAP, e.g. 'ChW'/'Oak') -> the UPPERCASE abbrev the logo
+# map (fantasy/ui.py _TEAM_ESPN) + FantasyPros both key on. Only two diverge once uppercased
+# (White Sox ChW->CWS, Athletics Oak->ATH); all 28 others match after .upper(), so a plain
+# uppercase + this override yields both a resolvable logo and FP-consistent Team casing.
+_ESPN_ABBREV_FIX = {"CHW": "CWS", "OAK": "ATH"}
+
+
+def _norm_espn_team(espn_abbrev) -> str:
+    t = str(espn_abbrev or "").upper()
+    return _ESPN_ABBREV_FIX.get(t, t)
+
+
 def _seed_offfp_pitchers(fp, espn_svhd) -> pd.DataFrame:
     """Build FP-schema season rows for pitchers present in ESPN (rostered/FA) but ABSENT from
     the FantasyPros scrape, so the left-from-FP merge in build_pitcher_data can't silently
@@ -1137,7 +1149,7 @@ def _seed_offfp_pitchers(fp, espn_svhd) -> pd.DataFrame:
         ip = outs // 3 + (outs % 3) / 10.0
         rows.append({
             "PlayerName": nm,
-            "Team":       r.get("ESPN_Team", "") or "",
+            "Team":       _norm_espn_team(r.get("ESPN_Team")),
             "Dataset":    CURRENT_YEAR,
             "IP":   ip,
             "K":    k,
