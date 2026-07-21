@@ -31,7 +31,7 @@ fetch_data.py  →  data/snapshot.json  →  send_digest.py   →  daily email
 
 2. **`send_digest.py`** reads the snapshot, builds the email, and sends it via Gmail SMTP. The **inline body** is a short plain-English **Briefing** (time-sensitive actions, then a one-line matchup and season read) meant to be skimmed before you dig in; the **full digest** rides along as an attached `digest_YYYY-MM-DD.html` you open in a browser. Run with `--with-dashboard` (the daily job does) and the single-viewport dashboard is attached too, so one email carries everything. Alternatively saves previews under `previews/` for local viewing (no email).
 
-3. **`weekly_recap.py`** reads the same snapshot every Monday and emails a full-league recap: **Matchup N Highlights** (commissioner-style prose + stat sidebar — roto winner, hitter/pitcher/FA of the matchup with MLB team logos and named historical benchmarks), your matchup result, **Lineup Efficiency** (last matchup's start/sit opportunity cost — bench leakage + active-slot pitcher blowups), all 6 scoreboard matchups, Matchup Roto Rankings (all 12 categories, 5-tier heat-map coloring), Top Performers (hitters and pitchers side-by-side), Standings & Luck, Season Trajectory, and Season Roto Rankings (the same 12-category grid aggregated over every matchup — ranked by cumulative roto points, each category showing its true season-to-date value from ESPN). Saves `previews/recap_week_N.html` on dry runs. GitHub Actions: `.github/workflows/weekly-recap.yml` (Monday 15:30 UTC).
+3. **`weekly_recap.py`** reads the same snapshot every Monday and emails a full-league recap: **Matchup N Highlights** (commissioner-style prose + stat sidebar — roto winner, hitter/pitcher/FA of the matchup with MLB team logos and named historical benchmarks), your matchup result, **Lineup Efficiency** (last matchup's start/sit opportunity cost — bench leakage + good starts left on the bench + active-slot pitcher blowups), all 6 scoreboard matchups, Matchup Roto Rankings (all 12 categories, 5-tier heat-map coloring), Top Performers (hitters and pitchers side-by-side), Standings & Luck, Season Trajectory, and Season Roto Rankings (the same 12-category grid aggregated over every matchup — ranked by cumulative roto points, each category showing its true season-to-date value from ESPN). Saves `previews/recap_week_N.html` on dry runs. GitHub Actions: `.github/workflows/weekly-recap.yml` (Monday 15:30 UTC).
 
 4. **GitHub Actions** runs the daily job (`send_digest.py --with-dashboard`, one email with both attachments) and the Monday recap automatically, using credentials stored as repository secrets — no laptop needed.
 
@@ -253,7 +253,7 @@ KPI row: **Record** · **Current Matchup** (W-L-T + win%) · **Roster** (whole-t
 
 **⚑ MY ROSTER**
 7. **Roster Alerts** — *(only if you have injured players)*
-7b. **Lineup Watch** — *(matchup-to-date bench leakage / active-slot pitcher blowups / idle "wasting space" hitters; silent on a clean matchup)*
+7b. **Lineup Watch** — *(matchup-to-date bench leakage / good starts left on the bench / active-slot pitcher blowups / idle "wasting space" hitters; silent on a clean matchup)*
 8. **Positional Breakdown**
 9. **My Upcoming Starts**
 10. **My Relief Pitchers**
@@ -360,9 +360,10 @@ The league **rank** at each position compares each team on its **top starters th
 Any injured players on your roster. Only shown if there are active alerts. Color: yellow = DTD, red = IL/OUT.
 
 ### Lineup Watch
-A compact callout that audits your **daily** lineup for the matchup so far (its first day → yesterday — the **full matchup period**, so a 14-day All-Star/playoff matchup is covered end-to-end, not just the current calendar week), reconstructed from ESPN's historical per-day slots. It surfaces three kinds of start/sit mistakes:
+A compact callout that audits your **daily** lineup for the matchup so far (its first day → yesterday — the **full matchup period**, so a 14-day All-Star/playoff matchup is covered end-to-end, not just the current calendar week), reconstructed from ESPN's historical per-day slots. It surfaces four kinds of start/sit mistakes:
 
 - **Bench leakage** — counting-stat production (R/HR/RBI/SB) a hitter racked up while sitting in a bench slot, so it never counted. Shown **net of the bat you'd have benched to start him** — if your active lineup was full at his eligible positions, playing him meant sitting someone, so the tool subtracts that player's line (a feasibility check on your lineup slots + each player's position eligibility decides whether an open slot even existed). This is the honest "money left on the table," not raw bench stats.
+- **Starts left on the bench** — a **good start** (a quality start, 6+ strikeouts, or a win) a pitcher threw while sitting in a bench slot, so none of it counted. Shown **net of the arm you'd have benched to start him** — and because your benched starter's natural replacement is usually one of your active starters on his *rest day* (who contributed nothing that day), the common case reads as a clean "open slot." Only the **counting** categories (K / QS / W) are netted; the ratio effect (ERA/WHIP) is described in the line but never turned into a number (netting whole-staff ratios is too fragile to trust). A bad benched start stays silent — you were right to sit him.
 - **Active-slot blowups** — a starter who imploded (5+ ER, or 4+ ER in <3 IP) *in your active lineup*, so the ERA/WHIP damage counted. Flagged with a note if you then dropped him ("imploded then cut").
 - **Wasting active space** — a hitter sitting in an active slot but not accumulating stats (0 AB), **only counting games his MLB team actually played** (a scheduled off day is never held against him). Surfaced only when it's a pattern — idle **3 games in a row**, or an AB in **under half** the games he was slotted active — so an occasional rest day stays silent while a genuinely stranded roster spot gets flagged.
 
