@@ -2863,7 +2863,7 @@ def build_bench_watch(eff):
             f'<strong>{" &middot; ".join(pit_bits)}</strong> '
             f'<span style="color:{MUTED};">from starts left on your bench so far this week</span></div>'
         )
-        for b in bench_sp[:2]:
+        for b in bench_sp:
             days = b.get("days") or []
             if len(days) == 1:
                 d0 = days[0]
