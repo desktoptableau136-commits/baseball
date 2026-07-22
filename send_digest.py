@@ -2259,26 +2259,10 @@ def build_week_overview(matchup, week_cats, week_n, fa_sp, starts, days_elapsed,
                 if best_qsp and best_qsp >= 50:
                     fa_str = _best_fa_str(fa_sp_this_week)
                 else:
-                    fa_next_any = [r for r in fa_sp if week_end is None or r.get("PSP_Date", "") > (week_end or "")]
-                    if fa_next_any:
-                        best_nw = max(fa_next_any, key=lambda r: qs_probability(r) or 0)
-                        qsp_nw  = qs_probability(best_nw)
-                        try:
-                            day_nw = datetime.strptime(best_nw.get("PSP_Date", ""), "%Y-%m-%d").strftime("%a %b %d")
-                        except Exception:
-                            day_nw = "?"
-                        qc_nw = GREEN if qsp_nw >= 60 else (YELLOW if qsp_nw >= 40 else MUTED)
-                        fa_str = (
-                            f'<span style="color:{MUTED};">No FA starters this matchup</span>'
-                            f' — next matchup: <span style="color:{TEXT};font-weight:700;">{best_nw["PlayerName"]}</span>'
-                            f' <span style="color:{MUTED};font-size:10px;">({_pos_label(best_nw)})</span>'
-                            f' ({day_nw}'
-                        )
-                        if qsp_nw:
-                            fa_str += f', QS <span style="color:{qc_nw};font-weight:700;">{qsp_nw}%</span>'
-                        fa_str += ')'
-                    else:
-                        fa_str = f'<span style="color:{MUTED};">No upcoming FA starts found.</span>'
+                    # There ARE FA starts this matchup, just none high-floor (QS >= 50).
+                    # Surface the best available arm honestly rather than claiming there
+                    # are none (which contradicted the FA SP section below).
+                    fa_str = _best_fa_str(fa_sp_this_week, label_prefix="Best FA start this matchup (streamer-tier)")
             else:
                 fa_next_any = [r for r in fa_sp if r.get("PSP_Date", "") > (week_end or "")]
                 if fa_next_any:
