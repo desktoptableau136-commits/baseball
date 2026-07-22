@@ -22,6 +22,7 @@ from name_utils import _name_key
 from fantasy.ui import *          # noqa: F401,F403
 from fantasy.scoring import *     # noqa: F401,F403
 from fantasy.analytics import *   # noqa: F401,F403
+from fantasy.analytics import _on_il   # underscore name -> not pulled by the star import above
 
 _EXCLUDE = set(dir())            # everything above is imported, not exported from trades
 
@@ -114,6 +115,20 @@ _NEED_MULT_CLAMP    = (0.70, 1.60)  # bound the need multiplier so thin data can
 _TRADE_THIN_POS_PENALTY = 0.15
 
 
+# Injury discount on trade value (_tval). An IL/injured player is worth LESS in a trade but
+# never 0 -- he returns. Severity-tiered on ESPN's status vocabulary (a 60-day IL bat is worth
+# far less NOW than a day-to-day one). Applied in _enrich_trade_player, NOT inside _trade_value,
+# so the league scarcity baseline (compute_position_scarcity) stays on healthy value. Symmetric
+# across both trade POVs since _tval is the shared currency: a player I'd acquire off the IL is
+# worth less to me, and one a rival ships off the IL is worth less to them.
+_IL_TVAL_MULT = {
+    "SIXTY_DAY_DL": 0.40, "OUT": 0.45,
+    "FIFTEEN_DAY_DL": 0.60, "TEN_DAY_DL": 0.62, "IL": 0.60,
+    "DAY_TO_DAY": 0.90,
+}
+_IL_TVAL_DEFAULT = 0.60   # on an IL lineup slot but status blank/ACTIVE -> mid-tier DL discount
+
+
 def _trade_pos_groups(r):
     """POS_GROUPS labels this player fills (OF covers LF/CF/RF)."""
     tags = {p.strip() for p in str(r.get("Position") or "").upper().replace("/", ",").split(",") if p.strip()}
@@ -123,13 +138,18 @@ def _trade_pos_groups(r):
 def _team_position_counts(hitters, team_key):
     """Count of a team's rostered YEAR hitters eligible at each POS_GROUPS label (multi-eligible
     bats count at every position they qualify for). Feeds both the my-side redundancy guard and
-    the both-parties depth floor (_leaves_position_short), so it takes any team key. INCLUDES
-    IL-slot players, who still occupy the position on the roster and return to it."""
+    the both-parties depth floor (_leaves_position_short), so it takes any team key. EXCLUDES
+    IL-slot players (_on_il): a body parked on the IL isn't PLAYABLE now, so it can't fill a
+    startable slot -- counting it made a team rostering 1 active + 1 IL catcher read as C-deep,
+    which wrongly suppressed C upgrades and let 'give your only active C' pass the depth floor.
+    (The IL body still returns eventually, but for near-term playability it doesn't count.)"""
     counts = {}
     for r in hitters:
         if int(_n(r.get("Dataset")) or 0) != YEAR:
             continue
         if " ".join((r.get("FantasyTeam") or "").split()) != team_key:
+            continue
+        if _on_il(r):        # not a playable body now -> excluded from depth/redundancy counts
             continue
         for g in _trade_pos_groups(r):
             counts[g] = counts.get(g, 0) + 1
@@ -241,6 +261,20 @@ def compute_position_scarcity(hitters, hit_pctile):
     return _POS_SCARCITY
 
 
+def _health_value_mult(r):
+    """Injury multiplier for _tval (see _IL_TVAL_MULT). Reads ESPN_Status first (rostered rows
+    carry it), then FreeAgentInjuryStatus (FA fallback). A player in an IL lineup slot (_on_il)
+    whose status is blank/ACTIVE still takes the mid-tier DL discount. Healthy -> 1.0. Never 0 --
+    an injured player retains trade value because he returns."""
+    status = (str(r.get("ESPN_Status") or "").strip().upper()
+              or str(r.get("FreeAgentInjuryStatus") or "").strip().upper())
+    if status in _IL_TVAL_MULT:
+        return _IL_TVAL_MULT[status]
+    if _on_il(r):
+        return _IL_TVAL_DEFAULT
+    return 1.0
+
+
 def _enrich_trade_player(r, ptype, best_recent_p, best_recent_h, hit_pctile, pit_pctile):
     """Attach the trade-scoring fields to a player row (role score, cat strengths, value
     currency, buy/sell timing, position groups). Promoted from a find_trades closure so
@@ -251,7 +285,7 @@ def _enrich_trade_player(r, ptype, best_recent_p, best_recent_h, hit_pctile, pit
     else:
         r["_tscore"] = _score_p(r, best_recent_p)
         r["_tcats"]  = set(player_cat_strengths(r, pit_pctile, _FA_RP_CATS, set()))
-    r["_tval"]    = _trade_value(r, ptype, hit_pctile, pit_pctile)
+    r["_tval"]    = _trade_value(r, ptype, hit_pctile, pit_pctile) * _health_value_mult(r)
     _flag = _regression_flag(r) if ptype == "hit" else pitcher_regression_flag(r)
     r["_tsell"]   = (_flag == "sell")
     r["_tbuy"]    = (_flag == "buy")
