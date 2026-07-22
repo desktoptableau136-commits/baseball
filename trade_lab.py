@@ -223,8 +223,8 @@ def build_data(snap, my_team):
         # Acceptance-model tuning baked from send_digest so the Lab JS can't drift from the digest:
         # graduated star reluctance + aggressive realistic band + demand-side need multiplier.
         "tune": {
-            "starFloor": sd._STAR_RELUCT_FLOOR, "starSlope": sd._STAR_RELUCT_SLOPE,
-            "starCap": sd._STAR_RELUCT_CAP, "realisticMax": sd._TRADE_REALISTIC_MAX,
+            "starTvalFloor": sd._STAR_TVAL_FLOOR, "starTvalSlope": sd._STAR_TVAL_SLOPE,
+            "starPremCap": sd._STAR_PREM_CAP, "realisticMax": sd._TRADE_REALISTIC_MAX,
             "needCat": sd._NEED_MULT_CAT, "needPos": sd._NEED_MULT_POS,
             "needSurplus": sd._NEED_MULT_SURPLUS, "needClamp": list(sd._NEED_MULT_CLAMP),
             "thinPosPenalty": sd._TRADE_THIN_POS_PENALTY,   # depth floor: read penalty per single-slot pos a team is left thin at
@@ -244,6 +244,7 @@ def _serialize(r, role, best_recent_h, best_recent_p, hit_pctile):
     else:
         badges    = sd.pitcher_regression_badge(r)
         breakdown = sd._pitcher_score_breakdown(r, best_recent_p)
+    badges += sd._il_badge(r)   # injury chip — explains the _tval discount (mirrors the digest cards)
     return {
         "id":        sd._bd_uid("tl", r.get("PlayerName")),
         "name":      r.get("PlayerName", ""),
@@ -256,6 +257,7 @@ def _serialize(r, role, best_recent_h, best_recent_p, hit_pctile):
         "badges":    badges,
         "breakdown": breakdown,
         "tval":      round(_n(r.get("_tval")), 3),
+        "tvalStar":  round(_n(r.get("_tval_star", r.get("_tval"))), 3),   # star-reach premium basis (healthy unless severe IL)
         "tcats":     sorted(r.get("_tcats") or []),
         "tgroups":   sorted(r.get("_tgroups") or []),
         "sell":      bool(r.get("_tsell")),
@@ -1195,36 +1197,36 @@ function counterAddon(partnerTk, myMeta, gap) {{
   return cands[0];
 }}
 
-function starRole(p) {{ return p.role === 'hit' || p.role === 'sp'; }}  // relievers not cross-role comparable
-
-// JS mirror of send_digest._star_reluctance: graduated endowment premium (in tval) by role
-// SCORE — 0 below the floor, rising per point, capped. Better player => bigger overpay to pry.
-function starReluctance(score) {{
+// JS mirror of send_digest._star_premium: graduated endowment premium keyed on trade VALUE
+// (tval), NOT role score — 0 below the floor, rising per tval point, capped. Value-keyed so a
+// vulture-win role player's inflated role score can't pose as a star and an elite closer earns
+// real premium (relievers now comparable on one axis, so there's no role exclusion).
+function starPremium(tval) {{
   var T = DATA.tune;
-  return Math.max(0, Math.min(T.starCap, (score - T.starFloor) * T.starSlope));
+  return Math.max(0, Math.min(T.starPremCap, (tval - T.starTvalFloor) * T.starTvalSlope));
 }}
 
-// JS mirror of send_digest._deal_star_reach: would a rival balk at parting with a prized
-// player without a real overpay? Required overpay = premium(their best star-role acquire)
-// minus premium(my best star-role give) (a star-for-star swap needs little). Reach (they
-// balk) when that's positive AND I'm not paying up by at least it (net > -req). Relievers
-// excluded both sides. Acceptance-layer only — drives the "Would they do it?" read.
+// JS mirror of send_digest._deal_star_reach: would a rival balk at parting with prized players
+// without a real overpay? Required overpay = SUM of premium across what they surrender (getArr,
+// = what I acquire) minus the SUM across what they receive back (giveArr). Summing (not max)
+// catches "two franchise players for one star + a role player". Reach (they balk) when that's
+// positive AND I'm not paying up by at least it (net > -req). Drives the "Would they do it?" read.
 function dealStarReach(getArr, giveArr, netVal) {{
-  var getPrem = 0, givePrem = 0;
-  getArr.forEach(function(p) {{ if (starRole(p)) getPrem = Math.max(getPrem, starReluctance(p.score)); }});
-  giveArr.forEach(function(p) {{ if (starRole(p)) givePrem = Math.max(givePrem, starReluctance(p.score)); }});
-  var req = Math.max(0, getPrem - givePrem);
+  var surrender = 0, receive = 0;
+  getArr.forEach(function(p) {{ surrender += starPremium(p.tvalStar != null ? p.tvalStar : p.tval); }});
+  giveArr.forEach(function(p) {{ receive += starPremium(p.tvalStar != null ? p.tvalStar : p.tval); }});
+  var req = Math.max(0, surrender - receive);
   return req > 0 && netVal > -req;
 }}
 
-// MY-side mirror (send_digest._deal_star_surrender): would *I* balk at parting with a prized
-// player without a real value win? Required premium = premium(my best star-role give) minus
-// premium(my best star-role acquire). I hold out when that's positive AND I'm not winning by
-// at least it (net < req). Same graduated curve, my side — drives "Would you do it?".
+// MY-side mirror (send_digest._deal_star_surrender): would *I* balk at parting with prized
+// players without a real value win? Required premium = SUM across my give (giveArr) minus the
+// SUM across my acquire (getArr). I hold out when that's positive AND I'm not winning by at
+// least it (net < req). Same value-keyed, summed premium — drives "Would you do it?".
 function dealStarSurrender(getArr, giveArr, netVal) {{
   var givePrem = 0, getPrem = 0;
-  giveArr.forEach(function(p) {{ if (starRole(p)) givePrem = Math.max(givePrem, starReluctance(p.score)); }});
-  getArr.forEach(function(p) {{ if (starRole(p)) getPrem = Math.max(getPrem, starReluctance(p.score)); }});
+  giveArr.forEach(function(p) {{ givePrem += starPremium(p.tvalStar != null ? p.tvalStar : p.tval); }});
+  getArr.forEach(function(p) {{ getPrem += starPremium(p.tvalStar != null ? p.tvalStar : p.tval); }});
   var req = Math.max(0, givePrem - getPrem);
   return req > 0 && netVal < req;
 }}

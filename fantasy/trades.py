@@ -2,7 +2,7 @@
 
 Cross-team trade generation (`find_trades`/`find_trades_combined`), the scarcity-weighted
 trade-value currency (`_trade_value`/`compute_position_scarcity`/`_enrich_trade_player`),
-the acceptance layer (`_need_mult`/`_trade_tilt`/`_star_reluctance`/`_deal_star_reach`/
+the acceptance layer (`_need_mult`/`_trade_tilt`/`_star_premium`/`_deal_star_reach`/
 `_deal_star_surrender`/`_pending_verdict`/`_counter_suggestion`), the real-offer grader
 (`_grade_pending_trades`), and the digest renderers (`build_trade_radar`/
 `build_pending_trades_section` + their line/badge helpers + `_tradelab_button`).
@@ -22,6 +22,7 @@ from name_utils import _name_key
 from fantasy.ui import *          # noqa: F401,F403
 from fantasy.scoring import *     # noqa: F401,F403
 from fantasy.analytics import *   # noqa: F401,F403
+from fantasy.analytics import _on_il   # underscore name -> not pulled by the star import above
 
 _EXCLUDE = set(dir())            # everything above is imported, not exported from trades
 
@@ -58,6 +59,19 @@ _TRADE_MAX_CARDS    = 6     # trades surfaced
 _TRADE_PER_TEAM_CAP = 2     # max cards per partner team (variety)
 
 
+# --- Personal strategy overlays, keyed by CANONICAL team name -----------------------------
+# Applied ONLY when find_trades runs from that team's perspective; every other view (--team)
+# sees the default rank-derived behavior, so these never distort another manager's read.
+#   PUNT: roto cats to DROP from my need set, so the radar stops recommending help I don't want.
+#         (I punt saves — SVHD sits at rank ~10 but chasing closers is counterproductive.)
+#   TARGET: positions to treat as acquisition-worthy even when NOT a bottom-third deficit — a
+#         clear upgrade there still surfaces. C/SS = my weak hitter spots (SS is a real need,
+#         C sits just outside the cutoff); SP = rotation stability so I stream less, knowingly
+#         paying a little value for cats I already win (a solid SP helps K/QS/W where I'm deep).
+_TEAM_PUNT_CATS  = {"Guerrero Warfare": {"SVHD"}}
+_TEAM_TARGET_POS = {"Guerrero Warfare": {"C", "SS", "SP"}}
+
+
 def _set_trade_caps(max_cards=None, per_team_cap=None):
     """Facade-safe override hook for the Partner-Fit board's temporarily-raised caps.
     Post-F5 these caps live in THIS module; an external `sd._TRADE_MAX_CARDS = N` would
@@ -76,13 +90,11 @@ _TRADE_POOL_WIDTH   = 4     # top-N of each side fed into the 2-for-2 combinatio
 _POS_DEPTH_SLACK    = 1     # bodies beyond POS_STARTERS I can still use (bench/flex) before a position reads "stacked"
 
 
-_STAR_RELUCT_FLOOR  = 74    # role score below which a player moves freely (no endowment premium)
+_STAR_TVAL_FLOOR    = 1.10  # _tval below which a player moves freely (no endowment premium) — mid relievers/role bats sit here
+_STAR_TVAL_SLOPE    = 1.4   # premium added per _tval point above the floor
 
 
-_STAR_RELUCT_SLOPE  = 0.05  # tval premium added per point above the floor
-
-
-_STAR_RELUCT_CAP    = 1.10  # ceiling so a 95+ score can't demand an impossible overpay
+_STAR_PREM_CAP      = 1.10  # ceiling so a franchise anchor can't demand an impossible overpay
 
 
 _TRADE_REALISTIC_MAX = 0.05 # rival "realistic" read: most value I may win and still call it realistic (aggressive)
@@ -103,6 +115,37 @@ _NEED_MULT_CLAMP    = (0.70, 1.60)  # bound the need multiplier so thin data can
 _TRADE_THIN_POS_PENALTY = 0.15
 
 
+# Injury discount on trade value (_tval). An IL/injured player is worth LESS in a trade but
+# never 0 -- he returns. Severity-tiered on ESPN's status vocabulary (a 60-day IL bat is worth
+# far less NOW than a day-to-day one). Applied in _enrich_trade_player, NOT inside _trade_value,
+# so the league scarcity baseline (compute_position_scarcity) stays on healthy value. Symmetric
+# across both trade POVs since _tval is the shared currency: a player I'd acquire off the IL is
+# worth less to me, and one a rival ships off the IL is worth less to them.
+_IL_TVAL_MULT = {
+    "SIXTY_DAY_DL": 0.45, "OUT": 0.45,                       # severe / season-lost -> deep discount
+    "FIFTEEN_DAY_DL": 0.82, "TEN_DAY_DL": 0.85, "IL": 0.82,  # short-term -> misses a week or two, small haircut
+    "DAY_TO_DAY": 0.95,                                       # barely misses time
+}
+_IL_TVAL_DEFAULT = 0.82   # on an IL lineup slot but status blank/stale-ACTIVE -> treat as a short-term absence
+
+# Only the SEVERE tiers also strip "untouchable star" status in trade talks (a rival will move a
+# season-lost star, so the star-reach premium is computed off his DISCOUNTED value). Short-term
+# injuries keep full star status -- an injured superstar still can't be pried at par (see
+# _tval_star in _enrich_trade_player + _deal_star_reach).
+_IL_STAR_STRIP = {"SIXTY_DAY_DL", "OUT"}
+
+# Trade-card injury chip: severity label mirrors the _IL_TVAL_MULT discount tiers so the badge
+# and the value hit tell the same story (a discounted player reads *why*). {status: (label, tip)}.
+_IL_BADGE = {
+    "SIXTY_DAY_DL":   ("IL-60", "on the 60-day IL &mdash; long-term absence, deeply discounted"),
+    "OUT":            ("OUT",   "ruled out &mdash; discounted"),
+    "FIFTEEN_DAY_DL": ("IL-15", "on the 15-day IL &mdash; discounted"),
+    "TEN_DAY_DL":     ("IL-10", "on the 10-day IL &mdash; short-term, discounted"),
+    "IL":             ("IL",    "on the IL &mdash; discounted"),
+    "DAY_TO_DAY":     ("DTD",   "day-to-day &mdash; lightly discounted"),
+}
+
+
 def _trade_pos_groups(r):
     """POS_GROUPS labels this player fills (OF covers LF/CF/RF)."""
     tags = {p.strip() for p in str(r.get("Position") or "").upper().replace("/", ",").split(",") if p.strip()}
@@ -112,13 +155,18 @@ def _trade_pos_groups(r):
 def _team_position_counts(hitters, team_key):
     """Count of a team's rostered YEAR hitters eligible at each POS_GROUPS label (multi-eligible
     bats count at every position they qualify for). Feeds both the my-side redundancy guard and
-    the both-parties depth floor (_leaves_position_short), so it takes any team key. INCLUDES
-    IL-slot players, who still occupy the position on the roster and return to it."""
+    the both-parties depth floor (_leaves_position_short), so it takes any team key. EXCLUDES
+    IL-slot players (_on_il): a body parked on the IL isn't PLAYABLE now, so it can't fill a
+    startable slot -- counting it made a team rostering 1 active + 1 IL catcher read as C-deep,
+    which wrongly suppressed C upgrades and let 'give your only active C' pass the depth floor.
+    (The IL body still returns eventually, but for near-term playability it doesn't count.)"""
     counts = {}
     for r in hitters:
         if int(_n(r.get("Dataset")) or 0) != YEAR:
             continue
         if " ".join((r.get("FantasyTeam") or "").split()) != team_key:
+            continue
+        if _on_il(r):        # not a playable body now -> excluded from depth/redundancy counts
             continue
         for g in _trade_pos_groups(r):
             counts[g] = counts.get(g, 0) + 1
@@ -230,6 +278,49 @@ def compute_position_scarcity(hitters, hit_pctile):
     return _POS_SCARCITY
 
 
+def _health_value_mult(r):
+    """Injury multiplier for _tval (see _IL_TVAL_MULT). Reads ESPN_Status first (rostered rows
+    carry it), then FreeAgentInjuryStatus (FA fallback). A player in an IL lineup slot (_on_il)
+    whose status is blank/ACTIVE still takes the mid-tier DL discount. Healthy -> 1.0. Never 0 --
+    an injured player retains trade value because he returns."""
+    status = (str(r.get("ESPN_Status") or "").strip().upper()
+              or str(r.get("FreeAgentInjuryStatus") or "").strip().upper())
+    if status in _IL_TVAL_MULT:
+        return _IL_TVAL_MULT[status]
+    if _on_il(r):
+        return _IL_TVAL_DEFAULT
+    return 1.0
+
+
+def _il_strips_star(r):
+    """True only for the SEVERE injury tiers (_IL_STAR_STRIP: 60-day IL / out for season) where a
+    player genuinely loses 'untouchable star' status in trade talks — a rival WILL move a season-
+    lost star, so the star-reach premium is computed off his DISCOUNTED value. Short-term injuries
+    (DTD/10-day/15-day) return False → the reach premium is computed off HEALTHY value, so an
+    injured superstar still can't be pried at par (a 10-day IL shouldn't make a franchise SS a
+    freebie). Drives `_tval_star` in `_enrich_trade_player`."""
+    status = (str(r.get("ESPN_Status") or "").strip().upper()
+              or str(r.get("FreeAgentInjuryStatus") or "").strip().upper())
+    return status in _IL_STAR_STRIP
+
+
+def _il_badge(r):
+    """A small injury chip for a trade-card player line so a discounted player reads *why*
+    his _tval took a hit (the value discount from _health_value_mult is otherwise invisible).
+    Severity label mirrors the discount tiers (_IL_BADGE). Reads ESPN_Status first (rostered
+    rows), then FreeAgentInjuryStatus (FA); an IL-slot player with a stale/blank status still
+    gets a generic IL chip via the _on_il fallback. "" for a healthy, active player."""
+    status = (str(r.get("ESPN_Status") or "").strip().upper()
+              or str(r.get("FreeAgentInjuryStatus") or "").strip().upper())
+    lab = _IL_BADGE.get(status)
+    if lab is None and _on_il(r):
+        lab = ("IL", "on an IL slot &mdash; discounted")   # slot-based; status stale/blank (e.g. J. Ramirez)
+    if not lab:
+        return ""
+    label, tip = lab
+    return _hit_badge(label, ORANGE if label == "DTD" else RED, tip)
+
+
 def _enrich_trade_player(r, ptype, best_recent_p, best_recent_h, hit_pctile, pit_pctile):
     """Attach the trade-scoring fields to a player row (role score, cat strengths, value
     currency, buy/sell timing, position groups). Promoted from a find_trades closure so
@@ -240,7 +331,12 @@ def _enrich_trade_player(r, ptype, best_recent_p, best_recent_h, hit_pctile, pit
     else:
         r["_tscore"] = _score_p(r, best_recent_p)
         r["_tcats"]  = set(player_cat_strengths(r, pit_pctile, _FA_RP_CATS, set()))
-    r["_tval"]    = _trade_value(r, ptype, hit_pctile, pit_pctile)
+    _raw_val      = _trade_value(r, ptype, hit_pctile, pit_pctile)   # healthy trade value (pre-injury)
+    r["_tval"]    = _raw_val * _health_value_mult(r)
+    # Star-reach premium is computed off _tval_star: HEALTHY value for a short-term injury (a
+    # 10-day-IL superstar is still a star a rival won't ship at par), the DISCOUNTED value only for
+    # a severe/season-lost injury (a rival WILL move him). See _il_strips_star / _deal_star_reach.
+    r["_tval_star"] = r["_tval"] if _il_strips_star(r) else _raw_val
     _flag = _regression_flag(r) if ptype == "hit" else pitcher_regression_flag(r)
     r["_tsell"]   = (_flag == "sell")
     r["_tbuy"]    = (_flag == "buy")
@@ -296,8 +392,13 @@ def find_trades(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
     needs_of   = lambda team: {c for c, rk in ranks[team].items() if rk >= n - third + 1}
     surplus_of = lambda team: {c for c, rk in ranks[team].items() if rk <= third}
 
-    my_needs, my_surplus = needs_of(my_key), surplus_of(my_key)
-    if not my_needs:
+    # Personal strategy overlay (my perspective only): drop punted cats from my needs so the
+    # radar stops chasing them, and note target positions to surface even absent a rank deficit.
+    punt_cats  = _TEAM_PUNT_CATS.get(my_key, set())
+    target_pos = _TEAM_TARGET_POS.get(my_key, set())
+
+    my_needs, my_surplus = (needs_of(my_key) - punt_cats), surplus_of(my_key)
+    if not my_needs and not target_pos:
         return []
 
     # Position groups I'm deep in (top-third rank) — safe to trade FROM without a hole.
@@ -307,6 +408,15 @@ def find_trades(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
     # aren't bottom-third — positional scarcity is its own need. (Pitching need is
     # category-shaped — QS/SP vs SV+H/K balance — so it stays category-driven.)
     need_pos, surplus_pos = _pos_need_surplus(pos_data, n)
+    # Fold in explicit TARGET positions (C/SS hitter spots, SP for rotation stability) even when
+    # NOT a bottom-third deficit — an incomer still has to clear my starter avg there (upgrade-
+    # gated in _fills_need_pos below), so this surfaces a real upgrade at a spot I care about
+    # without flagging phantom needs. SP joins need_pos as an honorary entry so its downstream
+    # (rank ranking, upgrade gate) works; _need_mult skips the positional term for pitchers, so
+    # the SP key never distorts a pitcher's demand-side value.
+    for d in pos_data:
+        if d.get("pos") in target_pos and d.get("pos") not in need_pos:
+            need_pos[d["pos"]] = ((d.get("rank") or n), (d.get("my_avg") or 0))
 
     def roster(source, team):
         return [r for r in source
@@ -325,12 +435,16 @@ def find_trades(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
                  if (r.get("FantasyTeam") or "").strip()}
 
     def _fills_need_pos(r):
-        """Need positions this player upgrades — a hitter at a thin position of mine whose
-        value clears my current average there (a genuine upgrade, not a lateral move)."""
-        if r["_tptype"] != "hit":
-            return set()
-        return {pos for pos in (r["_tgroups"] & set(need_pos))
-                if r["_tscore"] > need_pos[pos][1]}
+        """Need/target positions this player upgrades — a hitter at a thin (or explicitly
+        targeted) position of mine whose value clears my current average there (a genuine
+        upgrade, not a lateral move). SP is credited only as an explicit rotation-stability
+        TARGET (not a category need — my pitching cats are a surplus), same upgrade gate."""
+        if r["_tptype"] == "hit":
+            return {pos for pos in (r["_tgroups"] & set(need_pos))
+                    if r["_tscore"] > need_pos[pos][1]}
+        if "SP" in need_pos and _is_sp(r) and r["_tscore"] > need_pos["SP"][1]:
+            return {"SP"}
+        return set()
 
     trades = []
     for team in all_teams:
@@ -539,22 +653,18 @@ def find_trades_combined(pitchers, hitters, roto, my_team, best_recent_p, best_r
     return picked
 
 
-def _star_role(p):
-    """Star-comparison eligibility: hitters and starters only. Relievers are excluded from
-    BOTH sides of every star comparison — a closer's within-role score isn't cross-role
-    comparable to a hitter's, so counting him would falsely mask a genuine star on the other
-    side (the Witt-for-McCarthy+reliever bug). Punt-saves arms move at par."""
-    return p.get("_tptype") == "hit" or (p.get("_tptype") == "pit" and _is_sp(p))
-
-
-def _star_reluctance(score):
-    """Graduated endowment/star premium (in _tval) a manager attaches to a player of this role
-    SCORE: 0 below _STAR_RELUCT_FLOOR, rising _STAR_RELUCT_SLOPE per point, capped at
-    _STAR_RELUCT_CAP. Acceptance-layer only (NEVER folds into _tval). The better the player,
-    the bigger the overpay needed to pry him loose. 74->0.00, 78->0.20, 82->0.40, 88->0.70,
-    94->1.00. Replaces the old binary score>=80 cliff so good-not-elite players (76-79) carry
-    real reluctance too."""
-    return max(0.0, min(_STAR_RELUCT_CAP, (_n(score) - _STAR_RELUCT_FLOOR) * _STAR_RELUCT_SLOPE))
+def _star_premium(tval):
+    """Graduated endowment/star premium a manager attaches to a player of this trade VALUE:
+    0 below _STAR_TVAL_FLOOR, rising _STAR_TVAL_SLOPE per _tval point, capped at _STAR_PREM_CAP.
+    Acceptance-layer only (NEVER folds into _tval). Keyed on `_tval`, NOT the role score — role
+    score and value diverge structurally (rho~0.82): a vulture-win reliever (Aaron Ashby: score
+    95, _tval 0.88) scores like a star but trades like a role player, and an elite closer scores
+    like every other closer while trading much cheaper. Pricing the premium on the cross-role
+    value currency fixes both, and makes relievers comparable to hitters/starters on ONE axis —
+    so the old `_star_role` exclusion is gone (a mid reliever simply sits below the floor at ~0,
+    an elite closer earns real premium). 0.88->0.00, 1.10->0.00, 1.42->0.45, 1.52->0.59,
+    1.90->1.10."""
+    return max(0.0, min(_STAR_PREM_CAP, (_n(tval) - _STAR_TVAL_FLOOR) * _STAR_TVAL_SLOPE))
 
 
 def _need_mult(row, need_cats, surplus_cats, need_pos=None, surplus_pos=None):
@@ -583,33 +693,34 @@ def _need_mult(row, need_cats, surplus_cats, need_pos=None, surplus_pos=None):
 
 def _deal_star_reach(ins, outs, net_val):
     """Market-perception (NOT value) check: would a rival balk because the deal asks them to
-    part with a prized player without a real overpay? Uses the GRADUATED reluctance curve
-    (`_star_reluctance`): the overpay required to pry their best star-role acquire is his
-    premium minus my best star-role give's premium (so a star-for-star swap needs little/none).
-    Reach (they balk) when that required overpay is positive AND I'm NOT paying up by at least
-    that much (`net_val > -req`). Because `_star_reluctance` is monotonic in score, `req > 0`
-    also encodes the old "acquired star outranks anything I send back" condition — just
-    graduated by how good he is. Relievers excluded both sides (see `_star_role`). Keeps
-    `_tval` a pure value currency; the premium lives in the acceptance layer only. Called by
-    `_trade_tilt`."""
+    part with prized players without a real overpay? The premium the rival must be paid to
+    SURRENDER their side (`ins` = what I acquire) is the SUM of `_star_premium(_tval_star)` across
+    those players; the premium they RECEIVE back is the sum across `outs` (what I give). Reach
+    (they balk) when required overpay `req = sum(surrender) - sum(receive)` is positive AND I'm
+    NOT paying up by at least that much (`net_val > -req`). SUMMING (not max-per-side) is what
+    catches "two franchise players for one star + a role player": a lone high-value return can't
+    mask that the rival is shipping two premium assets. Value-keyed via `_star_premium`, so a
+    role-player's inflated role score no longer counts as a star and a mid reliever contributes
+    ~0. Keeps `_tval` a pure value currency; the premium lives in the acceptance layer only.
+    Called by `_trade_tilt`."""
     if not ins:
         return False
-    get_prem  = max((_star_reluctance(p.get("_tscore")) for p in ins if _star_role(p)), default=0.0)
-    give_prem = max((_star_reluctance(o.get("_tscore")) for o in (outs or []) if _star_role(o)), default=0.0)
-    req = max(0.0, get_prem - give_prem)
+    surrender = sum(_star_premium(p.get("_tval_star", p.get("_tval"))) for p in ins)
+    receive   = sum(_star_premium(o.get("_tval_star", o.get("_tval"))) for o in (outs or []))
+    req = max(0.0, surrender - receive)
     return req > 0.0 and net_val > -req
 
 
 def _deal_star_surrender(ins, outs, net_val):
-    """The MY-side mirror of `_deal_star_reach`: would *I* balk at parting with a prized player
-    without a real value win? Required premium = my best star-role give's `_star_reluctance`
-    minus my best star-role acquire's (a star-for-star swap needs little). I hold out when
-    that's positive AND I'm NOT winning by at least that much (`net_val < req`). Same graduated
-    curve, relievers excluded both sides, acceptance-layer only. Used by `_pending_verdict`."""
+    """The MY-side mirror of `_deal_star_reach`: would *I* balk at parting with prized players
+    without a real value win? Required premium = SUM of `_star_premium(_tval_star)` across my give
+    (`outs`) minus the sum across my acquire (`ins`) — a star-for-star swap nets ~0. I hold out
+    when that's positive AND I'm NOT winning by at least that much (`net_val < req`). Same
+    value-keyed, summed premium; acceptance-layer only. Used by `_pending_verdict`."""
     if not outs:
         return False
-    give_prem = max((_star_reluctance(o.get("_tscore")) for o in outs if _star_role(o)), default=0.0)
-    get_prem  = max((_star_reluctance(p.get("_tscore")) for p in (ins or []) if _star_role(p)), default=0.0)
+    give_prem = sum(_star_premium(o.get("_tval_star", o.get("_tval"))) for o in outs)
+    get_prem  = sum(_star_premium(p.get("_tval_star", p.get("_tval"))) for p in (ins or []))
     req = max(0.0, give_prem - get_prem)
     return req > 0.0 and net_val < req
 
@@ -665,8 +776,9 @@ def _trade_player_line(r, hi_cats, hi_color, side, show_pos=False,
     trade), same as the section tables."""
     logo  = team_logo(r.get("Team"), 14)
     nm    = str(r.get("PlayerName") or "")
-    chips = "".join(_hit_badge(_CAT_DISPLAY.get(c, c), hi_color, f"strong in {c}")
-                    for c in sorted(r["_tcats"] & hi_cats))
+    chips = _il_badge(r)   # injury chip first (most salient) — explains the _tval discount
+    chips += "".join(_hit_badge(_CAT_DISPLAY.get(c, c), hi_color, f"strong in {c}")
+                     for c in sorted(r["_tcats"] & hi_cats))
     if show_pos:
         chips += "".join(_hit_badge(p, CYAN, f"upgrades your thin {p}")
                          for p in r.get("_tfillpos", []))
