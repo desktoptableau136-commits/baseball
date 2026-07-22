@@ -522,20 +522,18 @@ GitHub Actions automatically uses whatever is on `main`. The next scheduled run 
 | Recent hitter stats (last 7d) | Baseball Reference via `pybaseball.batting_stats_range` | No |
 | Recent pitcher stats (last 15d) | Baseball Reference via `pybaseball.pitching_stats_range` | No |
 | Roster, FA, transactions, roto scores, team logos, **season counting stats** (SV/K/W/IP/GS/GP) | ESPN Fantasy API (`espn_api` library) | Yes — `swid` + `espn_s2` cookies |
-| Probable starters (rotation-order projection) | MLB Stats API | No |
+| Probable starters (full-week projection) | ESPN public MLB scoreboard | No |
 | Opponent team **OPS and K rate** | MLB Stats API | No |
 | Barrel%/hard-hit% allowed, **xERA, xwOBA-against, whiff percentile, raw whiff%** (pitchers) | Baseball Savant via `pybaseball` | No |
 | xwOBA, xBA, xSLG, Barrel%, hard-hit%, sprint speed (hitters) | Baseball Savant via `pybaseball` | No |
 
 > **Note:** FanGraphs blocks direct HTTP requests with 403 errors. Always use `pybaseball` — it handles the necessary headers automatically.
 
-### How probable starters are fetched (3-phase logic)
+> **Widened player universe:** FantasyPros scrapes only its top ~300 per role, so a fresh call-up or a struggling-veteran free agent who fell off that list would be invisible to the whole digest. Both the **pitcher and hitter** pools are widened past that: any player ESPN knows about (rostered or free agent) who's missing from the FantasyPros scrape is seeded a synthetic season row from ESPN's own stat breakdown, so they still appear in FA lists, positional depth, trade tools, and hot/cold. Statcast expected stats backfill automatically wherever the player has enough playing time to qualify.
 
-1. **Range schedule call** — one request gets all game IDs for the next 7 days
-2. **Batch hydrate** — one request gets confirmed probable pitchers for all those games (`PSP_Projected = False`); these are published only ~1–2 days out
-3. **Rotation-order projection** — for unannounced slots, each team's rotation is advanced through its *actual upcoming games*, one pitcher per game (`PSP_Projected = True`). Each team's recent confirmed starts reconstruct its rotation order; the longest-rested arm is "due" next, and confirmed starts re-sync the cycle. Because slots are filled game-by-game, two projected pitchers can never land on the same team/day, and turns counted by games (not calendar days) handle off-days and two-start weeks correctly. (This replaced an older `last start + 6 calendar days` guess that could double-list two projected starters on one team/day.)
+### How probable starters are fetched
 
-Projected starts show `(proj.)` in the digest. If the batch call returns nothing, falls back to per-game live-feed calls.
+Probable starters come **purely from ESPN's public MLB scoreboard** — one call per day over the upcoming week. ESPN's own rotation model projects a probable for *every* game a full week out, which fills the mid-week days (Thu/Fri) that the MLB Stats API leaves blank (MLB only *confirms* probables ~48h ahead). Since ESPN carries no confirmed/projected flag, `PSP_Projected` is inferred from how many days out the start is — today + tomorrow are treated as **confirmed** (`PSP_Projected = False`, shown plainly), everything further out as **projected** (`PSP_Projected = True`, shown with a muted `(proj.)`). The daily re-fetch supersedes a projection with the real line as its date approaches. A pitcher appearing on two dates in the window is flagged as a two-start week. (This replaced an older MLB-confirmed + homemade rotation-walk approach that left the mid-week days empty.)
 
 ---
 

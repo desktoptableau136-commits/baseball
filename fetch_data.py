@@ -331,6 +331,50 @@ def get_hitter_fa(league) -> pd.DataFrame:
     return pd.DataFrame(rows).drop_duplicates(subset="PlayerName")
 
 
+def get_hitter_espn_stats(league) -> pd.DataFrame:
+    """Pull season hitting totals from ESPN's player stats breakdown (scoring period 0),
+    for both rostered and FA hitters. The hitter analog of get_pitcher_espn_svhd, but used
+    ONLY to SEED synthetic season rows for hitters absent from the FantasyPros scrape (hot
+    call-ups / low-owned bats) that the left-from-FP merge in build_hitter_data would drop --
+    it is never merged back onto existing rows, so no ESPN_* hitter columns pollute the
+    snapshot. Batter strikeouts live under ESPN's 'B_SO' key (its 'K' is pitcher Ks, null for
+    hitters); everything else is the standard AB/R/HR/RBI/SB + AVG/OBP/SLG/OPS breakdown."""
+    rows = []
+    seen = set()
+
+    def _extract(pl):
+        if pl.name in seen:
+            return
+        bd = (pl.stats or {}).get(0, {}).get('breakdown', {})
+        rows.append({
+            "PlayerName": pl.name,
+            "ESPN_AB":   bd.get('AB',  -1),
+            "ESPN_R":    bd.get('R',   -1),
+            "ESPN_HR":   bd.get('HR',  -1),
+            "ESPN_RBI":  bd.get('RBI', -1),
+            "ESPN_SB":   bd.get('SB',  -1),
+            "ESPN_B_SO": bd.get('B_SO', -1),
+            "ESPN_AVG":  bd.get('AVG', -1),
+            "ESPN_OBP":  bd.get('OBP', -1),
+            "ESPN_SLG":  bd.get('SLG', -1),
+            "ESPN_OPS":  bd.get('OPS', -1),
+            "ESPN_Team": getattr(pl, "proTeam", "") or "",
+        })
+        seen.add(pl.name)
+
+    for tm in league.teams:
+        for pl in tm.roster:
+            if is_hitter(pl):
+                _extract(pl)
+    for fa in league.free_agents(size=_FA_PULL_SIZE):
+        if is_hitter(fa):
+            _extract(fa)
+
+    df = pd.DataFrame(rows).drop_duplicates(subset="PlayerName")
+    log(f"  ESPN season stats: {len(df)} hitters")
+    return apply_name_patches(df, HITTER_NAME_PATCHES)
+
+
 # â”€â”€ PROBABLE STARTERS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def _strip_accents(name: str) -> str:
@@ -968,6 +1012,45 @@ def _seed_offfp_pitchers(fp, espn_svhd) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def _seed_offfp_hitters(fp, espn_hit) -> pd.DataFrame:
+    """Hitter analog of _seed_offfp_pitchers: build FP-schema season rows for hitters present
+    in ESPN (rostered/FA) but ABSENT from the FantasyPros scrape, so the left-from-FP merge in
+    build_hitter_data can't silently drop them (hot call-ups / low-owned bats). Seeds only the
+    counting/rate fields the scoring math needs from ESPN's breakdown (AB/R/HR/RBI/SB + AVG/
+    OBP/SLG/OPS, plus batter Ks under FP's 'K' column). wRC+ derives from the seeded OPS, ISO
+    from SLG-AVG, and Statcast (xBA/xSLG/xwOBA/SprintSpeed/Barrel) is backfilled downstream by
+    the existing Savant merges wherever the bat qualifies. Requires a real MLB line (AB>0) so a
+    0-AB name never seeds a junk row. Unlike pitcher IP, hitter counts need no notation fix."""
+    if espn_hit is None or espn_hit.empty:
+        return pd.DataFrame()
+    fp_keys = set(fp["PlayerName"].map(_name_key))
+    rows = []
+    for r in espn_hit.to_dict(orient="records"):
+        nm = r.get("PlayerName", "")
+        if not nm or _name_key(nm) in fp_keys:
+            continue
+        ab = float(r.get("ESPN_AB", -1) or -1)
+        if ab <= 0:
+            continue
+        rows.append({
+            "PlayerName": nm,
+            "Team":       _norm_espn_team(r.get("ESPN_Team")),
+            "Dataset":    CURRENT_YEAR,
+            "AB":  ab,
+            "R":   r.get("ESPN_R",   -1),
+            "HR":  r.get("ESPN_HR",  -1),
+            "RBI": r.get("ESPN_RBI", -1),
+            "SB":  r.get("ESPN_SB",  -1),
+            "K":   r.get("ESPN_B_SO", -1),   # FP's hitter 'K' column = batter strikeouts (ESPN 'B_SO')
+            "AVG": r.get("ESPN_AVG", -1),
+            "OBP": r.get("ESPN_OBP", -1),
+            "SLG": r.get("ESPN_SLG", -1),
+            "OPS": r.get("ESPN_OPS", -1),
+            "Source": "ESPN",
+        })
+    return pd.DataFrame(rows)
+
+
 def build_pitcher_data(league) -> list:
     log("Fetching pitcher stats from FantasyProsâ€¦")
     fp = fetch_fantasypros("pitchers")
@@ -1128,6 +1211,18 @@ def build_hitter_data(league) -> list:
     fp = fetch_fantasypros("hitters")
     if fp.empty:
         return []
+    fp["Source"] = "FP"
+
+    # Widen the universe (mirror of build_pitcher_data): FantasyPros is the base frame and
+    # every downstream enrichment is a left-join onto it, so a hitter absent from the FP scrape
+    # would be dropped. Seed synthetic season rows from ESPN's own hitting breakdown BEFORE the
+    # merges so they flow through the identical roster/FA + Statcast + wRC+/ISO pipeline. Lower
+    # risk than pitchers: the hit_pctile pool gates on AB, so low-AB seeds can't skew percentiles.
+    espn_hit = get_hitter_espn_stats(league)
+    seeded   = _seed_offfp_hitters(fp, espn_hit)
+    if not seeded.empty:
+        fp = pd.concat([fp, seeded], ignore_index=True)
+        log(f"  Seeded {len(seeded)} off-FantasyPros hitters from ESPN")
 
     log("Getting hitter roster from ESPNâ€¦")
     roster_df = get_hitter_roster(league)

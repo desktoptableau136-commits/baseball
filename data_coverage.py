@@ -110,16 +110,19 @@ def coverage_report(snap):
     fa_y = _yrows_fa(snap, "pitchers") + _yrows_fa(snap, "hitters")
 
     # Savant coverage measures whether the enrichment merges populated Statcast for players
-    # that COULD have it. Off-FP pitchers seeded from ESPN (Source=="ESPN", fresh call-ups)
-    # are legitimately below Savant's qualifier minimums, so excluding them keeps a healthy
-    # influx of call-ups from false-tripping the degradation badge.
+    # that COULD have it. Off-FP players seeded from ESPN (Source=="ESPN", fresh call-ups /
+    # low-owned bats) are legitimately below Savant's qualifier minimums and lack the
+    # HR_Probability/wRC+ Statcast inputs, so excluding them from BOTH the pitcher- and
+    # hitter-Savant denominators (and the hitter model) keeps a healthy influx of call-ups
+    # from false-tripping the degradation badge. fa_status/recent windows stay on the full pool.
     pit_y_fp = [r for r in pit_y if str(r.get("Source") or "") != "ESPN"]
+    hit_y_fp = [r for r in hit_y if str(r.get("Source") or "") != "ESPN"]
 
     rep = {
         "freshness": _freshness(snap),
         "pitcher_savant": _group(pit_y_fp, _PITCHER_SAVANT),
-        "hitter_savant": _group(hit_y, _HITTER_SAVANT),
-        "hitter_model": _group(hit_y, _HITTER_MODEL),
+        "hitter_savant": _group(hit_y_fp, _HITTER_SAVANT),
+        "hitter_model": _group(hit_y_fp, _HITTER_MODEL),
         "fa_status": _group(fa_y, _FA_STATUS),
         "recent_windows": {},
         "probable_starters": {},
