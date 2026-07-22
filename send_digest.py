@@ -146,7 +146,8 @@ def fetch_injury_notes():
         return {}
 
 _FA_SP_MIN_SCORE = 35   # hide streamer-tier FA starters below this SP score (not worth the risk)
-_FA_SP_PER_DAY_CAP = 3  # max FA starters shown per day, REDUCED by how many starts I already have that day (thinness-aware) — a day I'm covered on shrinks to its single best available; a thin day shows the full 3. 7 moves/wk means a 12-arm wall is noise.
+_FA_SP_PER_DAY_CAP = 3  # max FA starters shown per day, REDUCED by how many starts I already have that day (thinness-aware) — a day I'm covered on shrinks toward its best arms; a thin day shows the full 3. 7 moves/wk means a 12-arm wall is noise.
+_FA_SP_PER_DAY_MIN = 2  # ...but never below this many when present, even on a fully-covered ("fat") day — always surface at least 2 startable FA arms if the day has them.
 
 def fa_starters(pitchers, claimed=None, week_end=None, idx_recent=None):
     claimed = claimed or set()
@@ -936,7 +937,27 @@ def build_matchup_section(matchup, logos=None, my_team=MY_TEAM,
 
 # ── ROSTER HOT/COLD ──────────────────────────────────────────────────────────
 
-def build_hot_cold_section(hitters, recent_hitting, my_team, best_recent_h=None, hit_pctile=None):
+def _platoon_badge(bats, opp_hand):
+    """Compact today's-platoon read for a rostered hitter vs tonight's opposing probable
+    starter — the re-placed platoon marker (pulled from the busy Today's MLB Games TV card,
+    now a calm per-hitter tag in Roster Hot/Cold). Green ▲ = platoon edge (LHB vs RHP, RHB
+    vs LHP, or a switch-hitter), muted ▽ = reverse platoon (same-hand). Empty when there's no
+    game today, the probable is TBD, or the batter's hand is unknown. Handedness DATA comes
+    from fetch_player_handedness (see the load-bearing NOTE in build_todays_games_section)."""
+    b  = (bats or "").upper()
+    oh = (opp_hand or "").upper()
+    if b not in ("L", "R", "S") or oh not in ("L", "R"):
+        return ""
+    hand = "RHP" if oh == "R" else "LHP"
+    fav  = (b == "S") or (b == "L" and oh == "R") or (b == "R" and oh == "L")
+    bat  = "switch-hitter" if b == "S" else f"{b}HB"
+    if fav:
+        return (f'<span style="color:{GREEN};font-weight:700;margin-left:5px;" '
+                f'title="Platoon edge today: {bat} vs {hand}">▲</span>')
+    return (f'<span style="color:{MUTED};margin-left:5px;" '
+            f'title="Reverse platoon today: {bat} vs {hand}">▽</span>')
+
+def build_hot_cold_section(hitters, recent_hitting, my_team, best_recent_h=None, hit_pctile=None, platoon_lookup=None):
     if not recent_hitting:
         return ""
 
@@ -1013,9 +1034,10 @@ def build_hot_cold_section(hitters, recent_hitting, my_team, best_recent_h=None,
         _cell, _bdrow = score_reveal(
             r["score"], _hitter_score_breakdown(r["srow"], best_recent_h, hit_pctile),
             _bd_uid("rhc", r["name"]), 7)
+        _plt = _platoon_badge(r["srow"].get("Bats"), (platoon_lookup or {}).get(_badge_name_key(r["name"]))) if platoon_lookup else ""
         rows_html += (
             f'<tr style="{bg}">'
-            f'<td style="{TD_S}font-weight:600;">{team_logo(r["team"])}{r["name"]}{r["inj"]}{hitter_badges(r["srow"], hit_pctile)}</td>'
+            f'<td style="{TD_S}font-weight:600;">{team_logo(r["team"])}{r["name"]}{r["inj"]}{hitter_badges(r["srow"], hit_pctile)}{_plt}</td>'
             f'<td style="{TDC}color:{MUTED};">{r["pos"]}</td>'
             f'<td style="{TDC}">{r["season_ops"]:.3f}</td>'
             f'<td style="{TDC}">{recent_str}</td>'
@@ -1029,6 +1051,8 @@ def build_hot_cold_section(hitters, recent_hitting, my_team, best_recent_h=None,
     n_hot  = sum(1 for r in with_data if r["delta"] >= 0.015)
     n_cold = sum(1 for r in with_data if r["delta"] <= -0.015)
     sub = f"{n_hot} hot · {n_cold} cold · last 7 days vs season OPS · HR% = modeled per-game HR probability"
+    if platoon_lookup:
+        sub += f' · <span style="color:{GREEN};font-weight:700;">▲</span>/<span style="color:{MUTED};">▽</span> = today\'s platoon edge / reverse vs the opposing starter'
 
     return (
         section_head("Roster Hot/Cold", sub) +
@@ -2425,6 +2449,12 @@ def build_glossary_section():
         _entry(f'SB{_hit_badge("SB", SILVER)}',
                "Next to a hitter's name — a genuine base-stealer (top-20% SB producer, corroborated by sprint "
                "speed)."),
+        _entry(f'Platoon vs today\'s SP&nbsp;{_mark("&#9650;", GREEN)}&nbsp;{_mark("&#9661;", MUTED)}',
+               "In <b>Roster Hot/Cold</b>, next to a hitter with a game today — his handedness matchup vs tonight's "
+               "opposing probable starter. Green <b>&#9650;</b> = a platoon <b>edge</b> (a lefty facing a right-handed "
+               "pitcher, a righty facing a lefty, or a switch-hitter); muted <b>&#9661;</b> = a <b>reverse-platoon</b> "
+               "(same-handed) matchup. Hover for the exact hands. Empty when there's no game today, the starter is "
+               "undecided, or the batter's hand is unknown."),
         _subhead("Buy-low / sell-high — pitchers &amp; hitters"),
         _entry(f'$ / ▼{_hit_badge("$", GREEN)}{_hit_badge("&#9660;", RED)}',
                "Statcast expected-vs-actual regression flags (mutually exclusive). <b>$</b> (green) = "
@@ -3539,6 +3569,24 @@ def build_coverage_footer(snap):
     except Exception:
         return ""
 
+def _matchup_closing_note(is_final_day):
+    """Explicit end-of-matchup callout for the top of the TRANSACTIONS band. On the LAST day
+    of the matchup the win% pickup chips and the schedule-aware remaining-production
+    projections both go near-no-op (≈no games left to fold in), so rather than silently
+    rendering nothing, say so plainly. Empty on any non-final day."""
+    if not is_final_day:
+        return ""
+    return (
+        f'<div style="margin:0 0 20px;padding:10px 14px;border-radius:8px;'
+        f'background:{SURFACE2};border:1px solid {BORDER};border-left:3px solid {YELLOW};'
+        f'color:{MUTED};font-size:12px;line-height:1.5;">'
+        f'<span style="color:{YELLOW};font-weight:700;">&#9203; Matchup closes today</span> '
+        f'&mdash; pickups can\'t swing it. Win% chips and remaining-production projections are '
+        f'near-zero because there are essentially no games left in the window; anyone you add '
+        f'now counts toward <i>next</i> matchup, not tonight.'
+        f'</div>'
+    )
+
 def build_email(snap, override_team=None):
     my_team       = override_team if override_team else snap.get("my_team", MY_TEAM)
     pitchers      = snap.get("pitchers", [])
@@ -4076,11 +4124,11 @@ def build_email(snap, override_team=None):
                 day_label = date_str[5:]
             my_count = my_starts_by_day.get(date_str, 0)
             # Thinness-aware per-day cap: show at most _FA_SP_PER_DAY_CAP arms, minus the
-            # starts I already have that day — a covered day shrinks to its single best
-            # available (floored at 1, never fully hidden); a thin day shows the full 3.
-            # day_pitchers arrives score-desc (fa_starters sorts, by_date_fa preserves order),
-            # so the slice keeps the top arms.
-            day_cap = max(1, _FA_SP_PER_DAY_CAP - my_count)
+            # starts I already have that day — a covered day shrinks toward its best arms but
+            # ALWAYS shows at least 2 when present (floored at 2, never a lone arm); a thin day
+            # shows the full 3. day_pitchers arrives score-desc (fa_starters sorts, by_date_fa
+            # preserves order), so the slice keeps the top arms.
+            day_cap = max(_FA_SP_PER_DAY_MIN, _FA_SP_PER_DAY_CAP - my_count)
             hidden  = max(0, len(day_pitchers) - day_cap)
             day_pitchers = day_pitchers[:day_cap]
             count = len(day_pitchers)
@@ -4748,6 +4796,20 @@ def build_email(snap, override_team=None):
     # drops both (section '' + teaser '').
     todays_games_section = ""
     _tune_in = ""
+    # Platoon lookup for Roster Hot/Cold's re-placed platoon marker: name_key -> today's
+    # opposing probable-starter throwing hand, from the todays_games `involved` HITTER entries
+    # (batter's own hand comes from the hitter row's `Bats`). Empty on an off-day / TBD probables.
+    _platoon_lookup = {}
+    try:
+        for _g in (snap.get("todays_games") or []):
+            for _inv in (_g.get("involved") or []):
+                if _inv.get("is_p"):
+                    continue
+                _oh = _inv.get("opp_sp_hand")
+                if _oh and _inv.get("name"):
+                    _platoon_lookup[_badge_name_key(_inv["name"])] = _oh
+    except Exception:
+        _platoon_lookup = {}
     try:
         _tg_list = snap.get("todays_games") or []
         # Best-available stat row per player, keyed loosely (ESPN roster names vs
@@ -4822,8 +4884,9 @@ def build_email(snap, override_team=None):
         starts_section,                                                                   # 6
         my_rp_section,                                                                    # 7
         build_pitcher_hot_cold_section(pitchers, my_team, rec_p, best_recent_p),         # 8
-        build_hot_cold_section(hitters, recent_hitting, my_team, best_recent_h, hit_pctile),  # 9
+        build_hot_cold_section(hitters, recent_hitting, my_team, best_recent_h, hit_pctile, platoon_lookup=_platoon_lookup),  # 9
         band_divider("TRANSACTIONS", anchor="band-fa"),                                   # ACTION band header (FA pickups + Trade Radar)
+        _matchup_closing_note(today_str == week_end_str),                                 # end-of-matchup: pickups can't swing today's closing matchup
         pending_section,                                                                  # 10b Pending Trades (real offers — Accept/Counter/Decline)
         fa_sp_section,                                                                    # 11
         fa_rp_section,                                                                    # 12
