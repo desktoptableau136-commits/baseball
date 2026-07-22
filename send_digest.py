@@ -3182,13 +3182,6 @@ def build_todays_games_section(todays_games, my_team, opp_team, max_games=4,
         row = hit_rows.get(key)
         return hitter_badges(row, hit_pctile) if row else ""
 
-    # NOTE: batter handedness (`bats`) + opposing-SP hand (`opp_sp_hand`) are still carried
-    # on every `involved` entry in the snapshot (see fetch_data.fetch_player_handedness /
-    # fetch_todays_games). The inline platoon marker was removed from this panel — it made an
-    # already-dense TV card too busy. The DATA is retained for a future re-placement in a
-    # calmer surface (see the "re-place platoon marker" TODO). Do NOT drop the fetch-side
-    # handedness when trimming here.
-
     def _side(players, label, color):
         if not players:
             return f'<span style="color:{MUTED};">{label}: 0</span>'
