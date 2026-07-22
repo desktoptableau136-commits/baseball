@@ -2,7 +2,7 @@
 
 Cross-team trade generation (`find_trades`/`find_trades_combined`), the scarcity-weighted
 trade-value currency (`_trade_value`/`compute_position_scarcity`/`_enrich_trade_player`),
-the acceptance layer (`_need_mult`/`_trade_tilt`/`_star_reluctance`/`_deal_star_reach`/
+the acceptance layer (`_need_mult`/`_trade_tilt`/`_star_premium`/`_deal_star_reach`/
 `_deal_star_surrender`/`_pending_verdict`/`_counter_suggestion`), the real-offer grader
 (`_grade_pending_trades`), and the digest renderers (`build_trade_radar`/
 `build_pending_trades_section` + their line/badge helpers + `_tradelab_button`).
@@ -58,6 +58,19 @@ _TRADE_MAX_CARDS    = 6     # trades surfaced
 _TRADE_PER_TEAM_CAP = 2     # max cards per partner team (variety)
 
 
+# --- Personal strategy overlays, keyed by CANONICAL team name -----------------------------
+# Applied ONLY when find_trades runs from that team's perspective; every other view (--team)
+# sees the default rank-derived behavior, so these never distort another manager's read.
+#   PUNT: roto cats to DROP from my need set, so the radar stops recommending help I don't want.
+#         (I punt saves — SVHD sits at rank ~10 but chasing closers is counterproductive.)
+#   TARGET: positions to treat as acquisition-worthy even when NOT a bottom-third deficit — a
+#         clear upgrade there still surfaces. C/SS = my weak hitter spots (SS is a real need,
+#         C sits just outside the cutoff); SP = rotation stability so I stream less, knowingly
+#         paying a little value for cats I already win (a solid SP helps K/QS/W where I'm deep).
+_TEAM_PUNT_CATS  = {"Guerrero Warfare": {"SVHD"}}
+_TEAM_TARGET_POS = {"Guerrero Warfare": {"C", "SS", "SP"}}
+
+
 def _set_trade_caps(max_cards=None, per_team_cap=None):
     """Facade-safe override hook for the Partner-Fit board's temporarily-raised caps.
     Post-F5 these caps live in THIS module; an external `sd._TRADE_MAX_CARDS = N` would
@@ -76,13 +89,11 @@ _TRADE_POOL_WIDTH   = 4     # top-N of each side fed into the 2-for-2 combinatio
 _POS_DEPTH_SLACK    = 1     # bodies beyond POS_STARTERS I can still use (bench/flex) before a position reads "stacked"
 
 
-_STAR_RELUCT_FLOOR  = 74    # role score below which a player moves freely (no endowment premium)
+_STAR_TVAL_FLOOR    = 1.10  # _tval below which a player moves freely (no endowment premium) — mid relievers/role bats sit here
+_STAR_TVAL_SLOPE    = 1.4   # premium added per _tval point above the floor
 
 
-_STAR_RELUCT_SLOPE  = 0.05  # tval premium added per point above the floor
-
-
-_STAR_RELUCT_CAP    = 1.10  # ceiling so a 95+ score can't demand an impossible overpay
+_STAR_PREM_CAP      = 1.10  # ceiling so a franchise anchor can't demand an impossible overpay
 
 
 _TRADE_REALISTIC_MAX = 0.05 # rival "realistic" read: most value I may win and still call it realistic (aggressive)
@@ -296,8 +307,13 @@ def find_trades(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
     needs_of   = lambda team: {c for c, rk in ranks[team].items() if rk >= n - third + 1}
     surplus_of = lambda team: {c for c, rk in ranks[team].items() if rk <= third}
 
-    my_needs, my_surplus = needs_of(my_key), surplus_of(my_key)
-    if not my_needs:
+    # Personal strategy overlay (my perspective only): drop punted cats from my needs so the
+    # radar stops chasing them, and note target positions to surface even absent a rank deficit.
+    punt_cats  = _TEAM_PUNT_CATS.get(my_key, set())
+    target_pos = _TEAM_TARGET_POS.get(my_key, set())
+
+    my_needs, my_surplus = (needs_of(my_key) - punt_cats), surplus_of(my_key)
+    if not my_needs and not target_pos:
         return []
 
     # Position groups I'm deep in (top-third rank) — safe to trade FROM without a hole.
@@ -307,6 +323,15 @@ def find_trades(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
     # aren't bottom-third — positional scarcity is its own need. (Pitching need is
     # category-shaped — QS/SP vs SV+H/K balance — so it stays category-driven.)
     need_pos, surplus_pos = _pos_need_surplus(pos_data, n)
+    # Fold in explicit TARGET positions (C/SS hitter spots, SP for rotation stability) even when
+    # NOT a bottom-third deficit — an incomer still has to clear my starter avg there (upgrade-
+    # gated in _fills_need_pos below), so this surfaces a real upgrade at a spot I care about
+    # without flagging phantom needs. SP joins need_pos as an honorary entry so its downstream
+    # (rank ranking, upgrade gate) works; _need_mult skips the positional term for pitchers, so
+    # the SP key never distorts a pitcher's demand-side value.
+    for d in pos_data:
+        if d.get("pos") in target_pos and d.get("pos") not in need_pos:
+            need_pos[d["pos"]] = ((d.get("rank") or n), (d.get("my_avg") or 0))
 
     def roster(source, team):
         return [r for r in source
@@ -325,12 +350,16 @@ def find_trades(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
                  if (r.get("FantasyTeam") or "").strip()}
 
     def _fills_need_pos(r):
-        """Need positions this player upgrades — a hitter at a thin position of mine whose
-        value clears my current average there (a genuine upgrade, not a lateral move)."""
-        if r["_tptype"] != "hit":
-            return set()
-        return {pos for pos in (r["_tgroups"] & set(need_pos))
-                if r["_tscore"] > need_pos[pos][1]}
+        """Need/target positions this player upgrades — a hitter at a thin (or explicitly
+        targeted) position of mine whose value clears my current average there (a genuine
+        upgrade, not a lateral move). SP is credited only as an explicit rotation-stability
+        TARGET (not a category need — my pitching cats are a surplus), same upgrade gate."""
+        if r["_tptype"] == "hit":
+            return {pos for pos in (r["_tgroups"] & set(need_pos))
+                    if r["_tscore"] > need_pos[pos][1]}
+        if "SP" in need_pos and _is_sp(r) and r["_tscore"] > need_pos["SP"][1]:
+            return {"SP"}
+        return set()
 
     trades = []
     for team in all_teams:
@@ -539,22 +568,18 @@ def find_trades_combined(pitchers, hitters, roto, my_team, best_recent_p, best_r
     return picked
 
 
-def _star_role(p):
-    """Star-comparison eligibility: hitters and starters only. Relievers are excluded from
-    BOTH sides of every star comparison — a closer's within-role score isn't cross-role
-    comparable to a hitter's, so counting him would falsely mask a genuine star on the other
-    side (the Witt-for-McCarthy+reliever bug). Punt-saves arms move at par."""
-    return p.get("_tptype") == "hit" or (p.get("_tptype") == "pit" and _is_sp(p))
-
-
-def _star_reluctance(score):
-    """Graduated endowment/star premium (in _tval) a manager attaches to a player of this role
-    SCORE: 0 below _STAR_RELUCT_FLOOR, rising _STAR_RELUCT_SLOPE per point, capped at
-    _STAR_RELUCT_CAP. Acceptance-layer only (NEVER folds into _tval). The better the player,
-    the bigger the overpay needed to pry him loose. 74->0.00, 78->0.20, 82->0.40, 88->0.70,
-    94->1.00. Replaces the old binary score>=80 cliff so good-not-elite players (76-79) carry
-    real reluctance too."""
-    return max(0.0, min(_STAR_RELUCT_CAP, (_n(score) - _STAR_RELUCT_FLOOR) * _STAR_RELUCT_SLOPE))
+def _star_premium(tval):
+    """Graduated endowment/star premium a manager attaches to a player of this trade VALUE:
+    0 below _STAR_TVAL_FLOOR, rising _STAR_TVAL_SLOPE per _tval point, capped at _STAR_PREM_CAP.
+    Acceptance-layer only (NEVER folds into _tval). Keyed on `_tval`, NOT the role score — role
+    score and value diverge structurally (rho~0.82): a vulture-win reliever (Aaron Ashby: score
+    95, _tval 0.88) scores like a star but trades like a role player, and an elite closer scores
+    like every other closer while trading much cheaper. Pricing the premium on the cross-role
+    value currency fixes both, and makes relievers comparable to hitters/starters on ONE axis —
+    so the old `_star_role` exclusion is gone (a mid reliever simply sits below the floor at ~0,
+    an elite closer earns real premium). 0.88->0.00, 1.10->0.00, 1.42->0.45, 1.52->0.59,
+    1.90->1.10."""
+    return max(0.0, min(_STAR_PREM_CAP, (_n(tval) - _STAR_TVAL_FLOOR) * _STAR_TVAL_SLOPE))
 
 
 def _need_mult(row, need_cats, surplus_cats, need_pos=None, surplus_pos=None):
@@ -583,33 +608,34 @@ def _need_mult(row, need_cats, surplus_cats, need_pos=None, surplus_pos=None):
 
 def _deal_star_reach(ins, outs, net_val):
     """Market-perception (NOT value) check: would a rival balk because the deal asks them to
-    part with a prized player without a real overpay? Uses the GRADUATED reluctance curve
-    (`_star_reluctance`): the overpay required to pry their best star-role acquire is his
-    premium minus my best star-role give's premium (so a star-for-star swap needs little/none).
-    Reach (they balk) when that required overpay is positive AND I'm NOT paying up by at least
-    that much (`net_val > -req`). Because `_star_reluctance` is monotonic in score, `req > 0`
-    also encodes the old "acquired star outranks anything I send back" condition — just
-    graduated by how good he is. Relievers excluded both sides (see `_star_role`). Keeps
-    `_tval` a pure value currency; the premium lives in the acceptance layer only. Called by
-    `_trade_tilt`."""
+    part with prized players without a real overpay? The premium the rival must be paid to
+    SURRENDER their side (`ins` = what I acquire) is the SUM of `_star_premium(_tval)` across
+    those players; the premium they RECEIVE back is the sum across `outs` (what I give). Reach
+    (they balk) when required overpay `req = sum(surrender) - sum(receive)` is positive AND I'm
+    NOT paying up by at least that much (`net_val > -req`). SUMMING (not max-per-side) is what
+    catches "two franchise players for one star + a role player": a lone high-value return can't
+    mask that the rival is shipping two premium assets. Value-keyed via `_star_premium`, so a
+    role-player's inflated role score no longer counts as a star and a mid reliever contributes
+    ~0. Keeps `_tval` a pure value currency; the premium lives in the acceptance layer only.
+    Called by `_trade_tilt`."""
     if not ins:
         return False
-    get_prem  = max((_star_reluctance(p.get("_tscore")) for p in ins if _star_role(p)), default=0.0)
-    give_prem = max((_star_reluctance(o.get("_tscore")) for o in (outs or []) if _star_role(o)), default=0.0)
-    req = max(0.0, get_prem - give_prem)
+    surrender = sum(_star_premium(p.get("_tval")) for p in ins)
+    receive   = sum(_star_premium(o.get("_tval")) for o in (outs or []))
+    req = max(0.0, surrender - receive)
     return req > 0.0 and net_val > -req
 
 
 def _deal_star_surrender(ins, outs, net_val):
-    """The MY-side mirror of `_deal_star_reach`: would *I* balk at parting with a prized player
-    without a real value win? Required premium = my best star-role give's `_star_reluctance`
-    minus my best star-role acquire's (a star-for-star swap needs little). I hold out when
-    that's positive AND I'm NOT winning by at least that much (`net_val < req`). Same graduated
-    curve, relievers excluded both sides, acceptance-layer only. Used by `_pending_verdict`."""
+    """The MY-side mirror of `_deal_star_reach`: would *I* balk at parting with prized players
+    without a real value win? Required premium = SUM of `_star_premium(_tval)` across my give
+    (`outs`) minus the sum across my acquire (`ins`) — a star-for-star swap nets ~0. I hold out
+    when that's positive AND I'm NOT winning by at least that much (`net_val < req`). Same
+    value-keyed, summed premium; acceptance-layer only. Used by `_pending_verdict`."""
     if not outs:
         return False
-    give_prem = max((_star_reluctance(o.get("_tscore")) for o in outs if _star_role(o)), default=0.0)
-    get_prem  = max((_star_reluctance(p.get("_tscore")) for p in (ins or []) if _star_role(p)), default=0.0)
+    give_prem = sum(_star_premium(o.get("_tval")) for o in outs)
+    get_prem  = sum(_star_premium(p.get("_tval")) for p in (ins or []))
     req = max(0.0, give_prem - get_prem)
     return req > 0.0 and net_val < req
 
