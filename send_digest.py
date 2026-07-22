@@ -2419,6 +2419,13 @@ def build_glossary_section():
                "the read is xBA/xSLG vs actual AVG/SLG; for <b>pitchers</b> it's xERA vs ERA (measured relative to "
                "the league's typical xERA-vs-ERA offset, since xERA runs a bit high). Display-only — never changes "
                "a Score — and it powers the buy-low / sell-high timing in Trade Radar. <b>Hover</b> for the numbers."),
+        _entry(f'Injury (trade cards){_il_badge({"ESPN_Status": "TEN_DAY_DL"})}{_il_badge({"ESPN_Status": "SIXTY_DAY_DL"})}{_il_badge({"ESPN_Status": "DAY_TO_DAY"})}',
+               "On a <b>Trade Radar</b>, <b>Pending Trades</b>, or <b>Trade Lab</b> player line, a red "
+               "<b>IL-10 / IL-15 / IL-60 / OUT</b> (or orange <b>DTD</b>) chip flags an injured player. His "
+               "trade value is automatically <b>discounted by severity</b> — a 60-day-IL bat is worth far "
+               "less than a day-to-day one — but never to zero, since he comes back. The chip tells you "
+               "<i>why</i> a card values him below his healthy line, on both sides of the deal. <b>Hover</b> "
+               "for the timeline."),
 
         _subhead("Category Pulse cards"),
         _entry(f'Outcome markers{_mark("&#9650;", GREEN)}{_mark("&#9660;", RED)}{_mark("&#9670;", TEXT)}',

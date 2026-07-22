@@ -128,6 +128,17 @@ _IL_TVAL_MULT = {
 }
 _IL_TVAL_DEFAULT = 0.60   # on an IL lineup slot but status blank/ACTIVE -> mid-tier DL discount
 
+# Trade-card injury chip: severity label mirrors the _IL_TVAL_MULT discount tiers so the badge
+# and the value hit tell the same story (a discounted player reads *why*). {status: (label, tip)}.
+_IL_BADGE = {
+    "SIXTY_DAY_DL":   ("IL-60", "on the 60-day IL &mdash; long-term absence, deeply discounted"),
+    "OUT":            ("OUT",   "ruled out &mdash; discounted"),
+    "FIFTEEN_DAY_DL": ("IL-15", "on the 15-day IL &mdash; discounted"),
+    "TEN_DAY_DL":     ("IL-10", "on the 10-day IL &mdash; short-term, discounted"),
+    "IL":             ("IL",    "on the IL &mdash; discounted"),
+    "DAY_TO_DAY":     ("DTD",   "day-to-day &mdash; lightly discounted"),
+}
+
 
 def _trade_pos_groups(r):
     """POS_GROUPS labels this player fills (OF covers LF/CF/RF)."""
@@ -273,6 +284,23 @@ def _health_value_mult(r):
     if _on_il(r):
         return _IL_TVAL_DEFAULT
     return 1.0
+
+
+def _il_badge(r):
+    """A small injury chip for a trade-card player line so a discounted player reads *why*
+    his _tval took a hit (the value discount from _health_value_mult is otherwise invisible).
+    Severity label mirrors the discount tiers (_IL_BADGE). Reads ESPN_Status first (rostered
+    rows), then FreeAgentInjuryStatus (FA); an IL-slot player with a stale/blank status still
+    gets a generic IL chip via the _on_il fallback. "" for a healthy, active player."""
+    status = (str(r.get("ESPN_Status") or "").strip().upper()
+              or str(r.get("FreeAgentInjuryStatus") or "").strip().upper())
+    lab = _IL_BADGE.get(status)
+    if lab is None and _on_il(r):
+        lab = ("IL", "on an IL slot &mdash; discounted")   # slot-based; status stale/blank (e.g. J. Ramirez)
+    if not lab:
+        return ""
+    label, tip = lab
+    return _hit_badge(label, ORANGE if label == "DTD" else RED, tip)
 
 
 def _enrich_trade_player(r, ptype, best_recent_p, best_recent_h, hit_pctile, pit_pctile):
@@ -725,8 +753,9 @@ def _trade_player_line(r, hi_cats, hi_color, side, show_pos=False,
     trade), same as the section tables."""
     logo  = team_logo(r.get("Team"), 14)
     nm    = str(r.get("PlayerName") or "")
-    chips = "".join(_hit_badge(_CAT_DISPLAY.get(c, c), hi_color, f"strong in {c}")
-                    for c in sorted(r["_tcats"] & hi_cats))
+    chips = _il_badge(r)   # injury chip first (most salient) — explains the _tval discount
+    chips += "".join(_hit_badge(_CAT_DISPLAY.get(c, c), hi_color, f"strong in {c}")
+                     for c in sorted(r["_tcats"] & hi_cats))
     if show_pos:
         chips += "".join(_hit_badge(p, CYAN, f"upgrades your thin {p}")
                          for p in r.get("_tfillpos", []))

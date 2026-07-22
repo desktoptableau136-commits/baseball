@@ -244,6 +244,7 @@ def _serialize(r, role, best_recent_h, best_recent_p, hit_pctile):
     else:
         badges    = sd.pitcher_regression_badge(r)
         breakdown = sd._pitcher_score_breakdown(r, best_recent_p)
+    badges += sd._il_badge(r)   # injury chip — explains the _tval discount (mirrors the digest cards)
     return {
         "id":        sd._bd_uid("tl", r.get("PlayerName")),
         "name":      r.get("PlayerName", ""),
