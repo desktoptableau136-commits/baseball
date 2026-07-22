@@ -146,7 +146,8 @@ def fetch_injury_notes():
         return {}
 
 _FA_SP_MIN_SCORE = 35   # hide streamer-tier FA starters below this SP score (not worth the risk)
-_FA_SP_PER_DAY_CAP = 3  # max FA starters shown per day, REDUCED by how many starts I already have that day (thinness-aware) — a day I'm covered on shrinks to its single best available; a thin day shows the full 3. 7 moves/wk means a 12-arm wall is noise.
+_FA_SP_PER_DAY_CAP = 3  # max FA starters shown per day, REDUCED by how many starts I already have that day (thinness-aware) — a day I'm covered on shrinks toward its best arms; a thin day shows the full 3. 7 moves/wk means a 12-arm wall is noise.
+_FA_SP_PER_DAY_MIN = 2  # ...but never below this many when present, even on a fully-covered ("fat") day — always surface at least 2 startable FA arms if the day has them.
 
 def fa_starters(pitchers, claimed=None, week_end=None, idx_recent=None):
     claimed = claimed or set()
@@ -3539,6 +3540,28 @@ def build_coverage_footer(snap):
     except Exception:
         return ""
 
+def _matchup_closing_note(is_final_day):
+    """Explicit end-of-matchup callout for the top of the TRANSACTIONS band. On the LAST day
+    of the matchup only today's games are left to play, so the win% pickup chips and the
+    schedule-aware remaining-production projections go quiet (the EXPECTED swing from one day
+    is small — under the flag threshold). It's an explanation for why the chips read empty, NOT
+    a claim that a pickup can't matter: this league runs daily lineups, so a bat/arm you add
+    before his game locks today still counts, and a big single-day line can tip a close cat.
+    Empty on any non-final day."""
+    if not is_final_day:
+        return ""
+    return (
+        f'<div style="margin:0 0 20px;padding:10px 14px;border-radius:8px;'
+        f'background:{SURFACE2};border:1px solid {BORDER};border-left:3px solid {YELLOW};'
+        f'color:{MUTED};font-size:12px;line-height:1.5;">'
+        f'<span style="color:{YELLOW};font-weight:700;">&#9203; Matchup ends today</span> '
+        f'&mdash; only today\'s games are left, so the win% chips are quiet (one day rarely '
+        f'moves a category enough to flag). A pickup can still help if he plays today: daily '
+        f'lineups mean anyone you add before his game locks counts, and a big line can tip a '
+        f'close cat &mdash; but the odds of a swing are slim.'
+        f'</div>'
+    )
+
 def build_email(snap, override_team=None):
     my_team       = override_team if override_team else snap.get("my_team", MY_TEAM)
     pitchers      = snap.get("pitchers", [])
@@ -4076,11 +4099,11 @@ def build_email(snap, override_team=None):
                 day_label = date_str[5:]
             my_count = my_starts_by_day.get(date_str, 0)
             # Thinness-aware per-day cap: show at most _FA_SP_PER_DAY_CAP arms, minus the
-            # starts I already have that day — a covered day shrinks to its single best
-            # available (floored at 1, never fully hidden); a thin day shows the full 3.
-            # day_pitchers arrives score-desc (fa_starters sorts, by_date_fa preserves order),
-            # so the slice keeps the top arms.
-            day_cap = max(1, _FA_SP_PER_DAY_CAP - my_count)
+            # starts I already have that day — a covered day shrinks toward its best arms but
+            # ALWAYS shows at least 2 when present (floored at 2, never a lone arm); a thin day
+            # shows the full 3. day_pitchers arrives score-desc (fa_starters sorts, by_date_fa
+            # preserves order), so the slice keeps the top arms.
+            day_cap = max(_FA_SP_PER_DAY_MIN, _FA_SP_PER_DAY_CAP - my_count)
             hidden  = max(0, len(day_pitchers) - day_cap)
             day_pitchers = day_pitchers[:day_cap]
             count = len(day_pitchers)
@@ -4824,6 +4847,7 @@ def build_email(snap, override_team=None):
         build_pitcher_hot_cold_section(pitchers, my_team, rec_p, best_recent_p),         # 8
         build_hot_cold_section(hitters, recent_hitting, my_team, best_recent_h, hit_pctile),  # 9
         band_divider("TRANSACTIONS", anchor="band-fa"),                                   # ACTION band header (FA pickups + Trade Radar)
+        _matchup_closing_note(today_str == week_end_str),                                 # end-of-matchup: pickups can't swing today's closing matchup
         pending_section,                                                                  # 10b Pending Trades (real offers — Accept/Counter/Decline)
         fa_sp_section,                                                                    # 11
         fa_rp_section,                                                                    # 12
