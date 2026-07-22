@@ -122,11 +122,17 @@ _TRADE_THIN_POS_PENALTY = 0.15
 # across both trade POVs since _tval is the shared currency: a player I'd acquire off the IL is
 # worth less to me, and one a rival ships off the IL is worth less to them.
 _IL_TVAL_MULT = {
-    "SIXTY_DAY_DL": 0.40, "OUT": 0.45,
-    "FIFTEEN_DAY_DL": 0.60, "TEN_DAY_DL": 0.62, "IL": 0.60,
-    "DAY_TO_DAY": 0.90,
+    "SIXTY_DAY_DL": 0.45, "OUT": 0.45,                       # severe / season-lost -> deep discount
+    "FIFTEEN_DAY_DL": 0.82, "TEN_DAY_DL": 0.85, "IL": 0.82,  # short-term -> misses a week or two, small haircut
+    "DAY_TO_DAY": 0.95,                                       # barely misses time
 }
-_IL_TVAL_DEFAULT = 0.60   # on an IL lineup slot but status blank/ACTIVE -> mid-tier DL discount
+_IL_TVAL_DEFAULT = 0.82   # on an IL lineup slot but status blank/stale-ACTIVE -> treat as a short-term absence
+
+# Only the SEVERE tiers also strip "untouchable star" status in trade talks (a rival will move a
+# season-lost star, so the star-reach premium is computed off his DISCOUNTED value). Short-term
+# injuries keep full star status -- an injured superstar still can't be pried at par (see
+# _tval_star in _enrich_trade_player + _deal_star_reach).
+_IL_STAR_STRIP = {"SIXTY_DAY_DL", "OUT"}
 
 # Trade-card injury chip: severity label mirrors the _IL_TVAL_MULT discount tiers so the badge
 # and the value hit tell the same story (a discounted player reads *why*). {status: (label, tip)}.
@@ -286,6 +292,18 @@ def _health_value_mult(r):
     return 1.0
 
 
+def _il_strips_star(r):
+    """True only for the SEVERE injury tiers (_IL_STAR_STRIP: 60-day IL / out for season) where a
+    player genuinely loses 'untouchable star' status in trade talks — a rival WILL move a season-
+    lost star, so the star-reach premium is computed off his DISCOUNTED value. Short-term injuries
+    (DTD/10-day/15-day) return False → the reach premium is computed off HEALTHY value, so an
+    injured superstar still can't be pried at par (a 10-day IL shouldn't make a franchise SS a
+    freebie). Drives `_tval_star` in `_enrich_trade_player`."""
+    status = (str(r.get("ESPN_Status") or "").strip().upper()
+              or str(r.get("FreeAgentInjuryStatus") or "").strip().upper())
+    return status in _IL_STAR_STRIP
+
+
 def _il_badge(r):
     """A small injury chip for a trade-card player line so a discounted player reads *why*
     his _tval took a hit (the value discount from _health_value_mult is otherwise invisible).
@@ -313,7 +331,12 @@ def _enrich_trade_player(r, ptype, best_recent_p, best_recent_h, hit_pctile, pit
     else:
         r["_tscore"] = _score_p(r, best_recent_p)
         r["_tcats"]  = set(player_cat_strengths(r, pit_pctile, _FA_RP_CATS, set()))
-    r["_tval"]    = _trade_value(r, ptype, hit_pctile, pit_pctile) * _health_value_mult(r)
+    _raw_val      = _trade_value(r, ptype, hit_pctile, pit_pctile)   # healthy trade value (pre-injury)
+    r["_tval"]    = _raw_val * _health_value_mult(r)
+    # Star-reach premium is computed off _tval_star: HEALTHY value for a short-term injury (a
+    # 10-day-IL superstar is still a star a rival won't ship at par), the DISCOUNTED value only for
+    # a severe/season-lost injury (a rival WILL move him). See _il_strips_star / _deal_star_reach.
+    r["_tval_star"] = r["_tval"] if _il_strips_star(r) else _raw_val
     _flag = _regression_flag(r) if ptype == "hit" else pitcher_regression_flag(r)
     r["_tsell"]   = (_flag == "sell")
     r["_tbuy"]    = (_flag == "buy")
@@ -671,7 +694,7 @@ def _need_mult(row, need_cats, surplus_cats, need_pos=None, surplus_pos=None):
 def _deal_star_reach(ins, outs, net_val):
     """Market-perception (NOT value) check: would a rival balk because the deal asks them to
     part with prized players without a real overpay? The premium the rival must be paid to
-    SURRENDER their side (`ins` = what I acquire) is the SUM of `_star_premium(_tval)` across
+    SURRENDER their side (`ins` = what I acquire) is the SUM of `_star_premium(_tval_star)` across
     those players; the premium they RECEIVE back is the sum across `outs` (what I give). Reach
     (they balk) when required overpay `req = sum(surrender) - sum(receive)` is positive AND I'm
     NOT paying up by at least that much (`net_val > -req`). SUMMING (not max-per-side) is what
@@ -682,22 +705,22 @@ def _deal_star_reach(ins, outs, net_val):
     Called by `_trade_tilt`."""
     if not ins:
         return False
-    surrender = sum(_star_premium(p.get("_tval")) for p in ins)
-    receive   = sum(_star_premium(o.get("_tval")) for o in (outs or []))
+    surrender = sum(_star_premium(p.get("_tval_star", p.get("_tval"))) for p in ins)
+    receive   = sum(_star_premium(o.get("_tval_star", o.get("_tval"))) for o in (outs or []))
     req = max(0.0, surrender - receive)
     return req > 0.0 and net_val > -req
 
 
 def _deal_star_surrender(ins, outs, net_val):
     """The MY-side mirror of `_deal_star_reach`: would *I* balk at parting with prized players
-    without a real value win? Required premium = SUM of `_star_premium(_tval)` across my give
+    without a real value win? Required premium = SUM of `_star_premium(_tval_star)` across my give
     (`outs`) minus the sum across my acquire (`ins`) — a star-for-star swap nets ~0. I hold out
     when that's positive AND I'm NOT winning by at least that much (`net_val < req`). Same
     value-keyed, summed premium; acceptance-layer only. Used by `_pending_verdict`."""
     if not outs:
         return False
-    give_prem = sum(_star_premium(o.get("_tval")) for o in outs)
-    get_prem  = sum(_star_premium(p.get("_tval")) for p in (ins or []))
+    give_prem = sum(_star_premium(o.get("_tval_star", o.get("_tval"))) for o in outs)
+    get_prem  = sum(_star_premium(p.get("_tval_star", p.get("_tval"))) for p in (ins or []))
     req = max(0.0, give_prem - get_prem)
     return req > 0.0 and net_val < req
 

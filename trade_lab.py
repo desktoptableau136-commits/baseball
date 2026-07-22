@@ -257,6 +257,7 @@ def _serialize(r, role, best_recent_h, best_recent_p, hit_pctile):
         "badges":    badges,
         "breakdown": breakdown,
         "tval":      round(_n(r.get("_tval")), 3),
+        "tvalStar":  round(_n(r.get("_tval_star", r.get("_tval"))), 3),   # star-reach premium basis (healthy unless severe IL)
         "tcats":     sorted(r.get("_tcats") or []),
         "tgroups":   sorted(r.get("_tgroups") or []),
         "sell":      bool(r.get("_tsell")),
@@ -1212,8 +1213,8 @@ function starPremium(tval) {{
 // positive AND I'm not paying up by at least it (net > -req). Drives the "Would they do it?" read.
 function dealStarReach(getArr, giveArr, netVal) {{
   var surrender = 0, receive = 0;
-  getArr.forEach(function(p) {{ surrender += starPremium(p.tval); }});
-  giveArr.forEach(function(p) {{ receive += starPremium(p.tval); }});
+  getArr.forEach(function(p) {{ surrender += starPremium(p.tvalStar != null ? p.tvalStar : p.tval); }});
+  giveArr.forEach(function(p) {{ receive += starPremium(p.tvalStar != null ? p.tvalStar : p.tval); }});
   var req = Math.max(0, surrender - receive);
   return req > 0 && netVal > -req;
 }}
@@ -1224,8 +1225,8 @@ function dealStarReach(getArr, giveArr, netVal) {{
 // least it (net < req). Same value-keyed, summed premium — drives "Would you do it?".
 function dealStarSurrender(getArr, giveArr, netVal) {{
   var givePrem = 0, getPrem = 0;
-  giveArr.forEach(function(p) {{ givePrem += starPremium(p.tval); }});
-  getArr.forEach(function(p) {{ getPrem += starPremium(p.tval); }});
+  giveArr.forEach(function(p) {{ givePrem += starPremium(p.tvalStar != null ? p.tvalStar : p.tval); }});
+  getArr.forEach(function(p) {{ getPrem += starPremium(p.tvalStar != null ? p.tvalStar : p.tval); }});
   var req = Math.max(0, givePrem - getPrem);
   return req > 0 && netVal < req;
 }}

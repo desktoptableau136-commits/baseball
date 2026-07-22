@@ -2,6 +2,17 @@
 
 Forensic detail and "why we did it this way" narrative moved out of `CLAUDE.md` to keep that file to actionable rules. Nothing here is required to follow the rules; consult it only when you need the history behind a decision. Rules live in `CLAUDE.md`; this is the "why".
 
+## IL discount softened + star status off healthy value (2026-07-22)
+
+Follow-up the same day, from the user reviewing a live radar card: **give Riley Greene + Jake McCarthy → get Bobby Witt Jr. + Drake Baldwin**, marked "realistic." Two problems surfaced:
+
+- **The 10-day-IL discount was too steep.** `TEN_DAY_DL` ×0.62 is a ~38% haircut for a ~2-week absence in a season-long roto league — overkill. Softened the short tiers: `TEN_DAY_DL` ×0.85, `FIFTEEN_DAY_DL`/`IL` ×0.82, `DAY_TO_DAY` ×0.95, `_IL_TVAL_DEFAULT` 0.60→0.82. Severe tiers (`SIXTY_DAY_DL`/`OUT`) stay deep at ×0.45.
+- **The injury discount was silently removing STAR status.** The star-reach guard (`_deal_star_reach`) keys `_star_premium` off `_tval`; the ×0.62 discount dropped Witt from 1.44 → 0.89, **below the 1.10 star floor**, so his reach premium went to 0 and the "they won't ship their star" balk stopped firing — which is exactly why the absurd 2-elite-for-2 read "realistic." Root fix (user's call): **compute the reach premium off `_tval_star`** = healthy value for a short-term injury, discounted value only for a severe tier (`_IL_STAR_STRIP = {SIXTY_DAY_DL, OUT}` — a season-lost star genuinely IS pry-able; a 10-day one is not). Witt now: value 1.22 (softened), star basis 1.44 (healthy) → premium 0.48 → **reach fires → "aggressive ask"** → the 2-for-2 drops off the radar, which instead surfaces a sensible 1-for-1 (Greene → Witt, pay the small reach premium). Mirrored into Trade Lab via a new serialized `tvalStar` field (the two JS reach fns read `p.tvalStar`).
+
+**Diagnostic aside — the hosted pocket Trade Lab was a time capsule.** The user noticed the hosted Lab still said "they won't ship their star" while the digest said "realistic." Not a logic split: the "Build in Trade Lab" link points at the GitHub-Pages pocket build, last deployed **2026-07-19** — before the IL discount (07-22). It still valued Witt at the healthy 1.44 (premium fired), so it was showing the *pre-discount* read. Confirmed the fresh local Lab build agreed with the digest (Witt `tval` 0.893 at that point). Lesson: after any trade-math change, the pocket Lab must be **redeployed** (`pocket-tradelab.yml`, from `main`) or it keeps showing stale value math. Since this fix restores the correct "won't ship their star" read, redeploy AFTER merge so the two surfaces reconcile.
+
+`render_diff check`: diffs confined to the digest ("6 swaps"→"5"), the dashboard Trade Radar tile, and the Trade Lab (`tvalStar` added); briefing + recap byte-identical.
+
 ## IL-aware trade value + playable-body counts (2026-07-22)
 
 Follow-up to the same-day strategy-overlay work (PR #110). The user flagged that their rostered catcher stack was an artifact: Francisco Alvarez is active, but Will Smith sits on the **60-day IL** — "I have 1 startable/playable C, not 2." Two consequences the engine had wrong, both keyed on the existing `_on_il` signal (no new data):
