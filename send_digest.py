@@ -145,7 +145,8 @@ def fetch_injury_notes():
     except Exception:
         return {}
 
-_FA_SP_MIN_SCORE = 30   # hide streamer-tier FA starters below this SP score (not worth the risk)
+_FA_SP_MIN_SCORE = 35   # hide streamer-tier FA starters below this SP score (not worth the risk)
+_FA_SP_PER_DAY_CAP = 3  # max FA starters shown per day, REDUCED by how many starts I already have that day (thinness-aware) — a day I'm covered on shrinks to its single best available; a thin day shows the full 3. 7 moves/wk means a 12-arm wall is noise.
 
 def fa_starters(pitchers, claimed=None, week_end=None, idx_recent=None):
     claimed = claimed or set()
@@ -4073,8 +4074,16 @@ def build_email(snap, override_team=None):
                 day_label = datetime.strptime(date_str, "%Y-%m-%d").strftime("%a %b %d")
             except Exception:
                 day_label = date_str[5:]
-            count = len(day_pitchers)
             my_count = my_starts_by_day.get(date_str, 0)
+            # Thinness-aware per-day cap: show at most _FA_SP_PER_DAY_CAP arms, minus the
+            # starts I already have that day — a covered day shrinks to its single best
+            # available (floored at 1, never fully hidden); a thin day shows the full 3.
+            # day_pitchers arrives score-desc (fa_starters sorts, by_date_fa preserves order),
+            # so the slice keeps the top arms.
+            day_cap = max(1, _FA_SP_PER_DAY_CAP - my_count)
+            hidden  = max(0, len(day_pitchers) - day_cap)
+            day_pitchers = day_pitchers[:day_cap]
+            count = len(day_pitchers)
             if my_count == 0:
                 my_starts_label, badge_color = "0 my starts", RED
             elif my_count == 1:
@@ -4098,7 +4107,8 @@ def build_email(snap, override_team=None):
                 f'<span style="color:{ACCENT};font-size:11px;font-weight:700;'
                 f'text-transform:uppercase;letter-spacing:.5px;">{day_label}</span>'
                 f'<span style="color:{MUTED};font-size:10px;margin-left:8px;">'
-                f'{count} FA start{"s" if count != 1 else ""}</span>'
+                f'{count} FA start{"s" if count != 1 else ""}'
+                f'{f" (+{hidden} more)" if hidden else ""}</span>'
                 f'{thin_badge}'
                 f'{next_wk_badge}'
                 f'</td></tr>'
