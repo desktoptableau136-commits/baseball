@@ -471,16 +471,9 @@ def _sp_badge_context(row, qs_fires, k_fires, two_start_n, recent_era=None):
         tail = ": " + " &middot; ".join(drivers) if drivers else ""
         lines.append(f'{blowup_badge(row, recent_era)} low floor &mdash; blowup-prone{tail}. '
                      f'A floor warning only; it doesn&rsquo;t lower the score.')
-    _rflag = pitcher_regression_flag(row)
-    if _rflag:
-        era, xera = _n(row.get("ERA")), _n(row.get("xERA"))
-        if _rflag == "sell":
-            lines.append(f'{pitcher_regression_badge(row)} ERA {era:.2f} is running below his '
-                         f'{xera:.2f} xERA &mdash; getting lucky, regression risk (sell-high). '
-                         f'Separate from &#9888;: this is mean regression, not blowup floor.')
-        else:
-            lines.append(f'{pitcher_regression_badge(row)} ERA {era:.2f} is running above his '
-                         f'{xera:.2f} xERA &mdash; unlucky, positive regression likely (buy-low).')
+    # The $/▼ regression badge is explained by `_pitcher_badge_context`, appended inside
+    # `_pitcher_score_breakdown` (which every SP render pairs with this fn) so RP + Trade Lab
+    # + positional-breakdown panels get it too — do NOT re-add it here or SP panels double it.
     return _badge_ctx_wrap(lines)
 
 # Progressive enhancement for the tap-to-expand Score breakdown: with JS (the
