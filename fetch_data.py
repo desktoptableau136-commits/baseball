@@ -341,228 +341,73 @@ def _strip_accents(name: str) -> str:
     )
 
 
-def _get_team_recent_starts(days_back: int = 14) -> dict:
-    """
-    Returns {team_name: [(date_str, pitcher_name), ...]} â€” every confirmed start
-    over the past `days_back` days, sorted chronologically per team.  Used to
-    reconstruct each team's rotation ORDER so unannounced slots can be projected
-    by advancing the rotation through the team's actual upcoming games (rather
-    than a crude last_start + 6 calendar days guess).
-    """
-    end_str   = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
-    start_str = (datetime.now() - timedelta(days=days_back)).strftime("%Y-%m-%d")
-    try:
-        sched = requests.get(
-            f"https://statsapi.mlb.com/api/v1/schedule"
-            f"?sportId=1&startDate={start_str}&endDate={end_str}&gameType=R",
-            timeout=15,
-        ).json()
-    except Exception:
-        return {}
-
-    game_meta = {}
-    for d in sched.get("dates", []):
-        for g in d.get("games", []):
-            pk = g["gamePk"]
-            game_meta[pk] = (d["date"], g["teams"]["home"]["team"]["name"],
-                             g["teams"]["away"]["team"]["name"])
-
-    team_starts = {}  # team_name -> list of (date_str, pitcher_name)
-    all_pks = list(game_meta)
-    for i in range(0, len(all_pks), 30):
-        chunk = all_pks[i : i + 30]
-        try:
-            resp = requests.get(
-                f"https://statsapi.mlb.com/api/v1/schedule"
-                f"?gamePks={','.join(str(p) for p in chunk)}&hydrate=probablePitcher",
-                timeout=15,
-            ).json()
-        except Exception:
-            continue
-        for d in resp.get("dates", []):
-            for g in d.get("games", []):
-                pk = g["gamePk"]
-                if pk not in game_meta:
-                    continue
-                date_str = game_meta[pk][0]
-                for side in ("home", "away"):
-                    sp   = g["teams"][side].get("probablePitcher") or {}
-                    name = sp.get("fullName", "")
-                    if not name or name == "TBD":
-                        continue
-                    cleaned = _strip_accents(name)
-                    team    = g["teams"][side]["team"]["name"]
-                    team_starts.setdefault(team, []).append((date_str, cleaned))
-
-    for team in team_starts:
-        team_starts[team].sort()  # chronological
-    return team_starts
+# ESPN publishes a PROJECTED probable starter for every game a full week out (its own
+# rotation model), while the MLB Stats API only CONFIRMS ~2 days out -- so sourcing purely
+# from ESPN populates the mid-week days (Thu/Fri) the old MLB-confirmed + homemade
+# rotation-walk approach left empty. ESPN exposes NO confirmed/projected flag, so
+# PSP_Projected is inferred from how many days out the start is: today+tomorrow are treated
+# as confirmed (MLB has firmed those up and ESPN mirrors them), >= _PROJECTED_MIN_DAYS_OUT
+# out as projected. Since the daily fetch re-runs, a projection is superseded by the real
+# confirmed line as the date approaches; confirmed also wins the _attach_start_lists dedup.
+_PROJECTED_MIN_DAYS_OUT = 2
+_ESPN_SCOREBOARD = "https://site.api.espn.com/apis/site/v2/sports/baseball/mlb/scoreboard?dates={ymd}"
 
 
 def get_probable_starters(days: int = SP_DAYS_OUT) -> pd.DataFrame:
-    """
-    Two-call strategy:
-      1. One range schedule call â†’ all gamePks for the window
-      2. One batched call with ?gamePks=...&hydrate=probablePitcher
-    Falls back to the per-game live-feed if the batch returns nothing.
-    Unconfirmed (TBD) slots are filled by rotation projection: last_start + 5 days Â±1.
-    Names are accent-stripped so 'MartÃ­n PÃ©rez' merges as 'Martin Perez'.
-    PSP_Projected=True marks rotation projections vs confirmed MLB entries.
-    """
-    start_str = datetime.now().strftime("%Y-%m-%d")
-    end_str   = (datetime.now() + timedelta(days=days - 1)).strftime("%Y-%m-%d")
+    """Probable starters for the next `days` days from ESPN's public MLB scoreboard.
 
-    # Step 1 â€” one call for all gamePks in the window
-    try:
-        sched = requests.get(
-            f"https://statsapi.mlb.com/api/v1/schedule"
-            f"?sportId=1&startDate={start_str}&endDate={end_str}&gameType=R",
-            timeout=15,
-        ).json()
-    except Exception as e:
-        log(f"  Probable starters schedule fetch failed: {e}")
-        return _probable_starters_live_feed(days)
-
-    game_meta = {}  # gamePk -> (date_str, home_name, away_name)
-    for d in sched.get("dates", []):
-        date_str = d["date"]
-        for g in d.get("games", []):
-            pk   = g["gamePk"]
-            home = g["teams"]["home"]["team"]["name"]
-            away = g["teams"]["away"]["team"]["name"]
-            game_meta[pk] = (date_str, home, away)
-
-    if not game_meta:
-        return pd.DataFrame(columns=["PlayerName", "PSP_HomeVAway", "PSP_Date", "PSP_Projected"])
-
-    # Step 2 â€” batch hydrate in chunks of 30
-    all_pks           = list(game_meta.keys())
-    frames            = []
-    confirmed_slots   = set()   # (team_name, date_str) that already have a named pitcher
-    confirmed_upcoming = {}     # pitcher_name -> (date_str, team_name) for upcoming confirmed starts
-
-    for i in range(0, len(all_pks), 30):
-        chunk = all_pks[i : i + 30]
+    One scoreboard call per day; each game's home/away `probables` entry gives the starter.
+    ESPN projects a probable for every game a full week out (where the MLB Stats API only
+    confirms ~48h ahead), so this fills the mid-week gap the prior MLB-only + rotation-walk
+    method left empty. ESPN carries no confirmed/projected flag, so PSP_Projected is inferred
+    from days-out (< _PROJECTED_MIN_DAYS_OUT -> confirmed). Team display names match MLB's
+    exactly, so PSP_HomeVAway keeps the 'vs/@  <full team name>' form the opponent-OPS merge
+    and opp_logo already expect. Names are accent-stripped so 'Martin Perez' merges cleanly.
+    Returns the _attach_start_lists output (adds PSP_Dates/PSP_HomeVAways for two-start
+    detection). Empty DataFrame (never raises) on total failure -> downstream degrades to
+    'no upcoming starts', same as an MLB outage under the old method."""
+    today  = datetime.now().date()
+    frames = []
+    for off in range(days):
+        d = today + timedelta(days=off)
         try:
-            resp = requests.get(
-                f"https://statsapi.mlb.com/api/v1/schedule"
-                f"?gamePks={','.join(str(p) for p in chunk)}&hydrate=probablePitcher",
-                timeout=15,
-            ).json()
-        except Exception:
+            j = requests.get(_ESPN_SCOREBOARD.format(ymd=d.strftime("%Y%m%d")), timeout=15).json()
+        except Exception as e:
+            log(f"  ESPN scoreboard {d} fetch failed: {e}")
             continue
-        for d in resp.get("dates", []):
-            for g in d.get("games", []):
-                pk   = g["gamePk"]
-                meta = game_meta.get(pk)
-                if not meta:
-                    continue
-                date_str, home, away = meta
-                for side in ("home", "away"):
-                    sp   = g["teams"][side].get("probablePitcher") or {}
-                    name = sp.get("fullName", "")
-                    team = g["teams"][side]["team"]["name"]
-                    opp  = away if side == "home" else home
-                    ha   = f"vs {opp}" if side == "home" else f"@ {home}"
-                    if name and name != "TBD":
-                        cleaned = _strip_accents(name)
-                        confirmed_slots.add((team, date_str))
-                        confirmed_upcoming[cleaned] = (date_str, team)
-                        frames.append({
-                            "PlayerName":    cleaned,
-                            "PSP_HomeVAway": ha,
-                            "PSP_Date":      date_str,
-                            "PSP_Projected": False,
-                        })
-
+        date_str  = d.strftime("%Y-%m-%d")
+        projected = off >= _PROJECTED_MIN_DAYS_OUT
+        for event in j.get("events", []):
+            for comp in event.get("competitions", []):
+                comps = comp.get("competitors", [])
+                # home/away full team names for the "vs/@ OPP" string (match MLB names exactly)
+                names = {c.get("homeAway"): (c.get("team") or {}).get("displayName", "") for c in comps}
+                for c in comps:
+                    probs = c.get("probables") or []
+                    if not probs:
+                        continue
+                    ath = probs[0].get("athlete") or {}
+                    nm  = ath.get("displayName") or probs[0].get("displayName") or ""
+                    if not nm or nm.strip().upper() == "TBD":
+                        continue
+                    side = c.get("homeAway")
+                    opp  = names.get("away") if side == "home" else names.get("home")
+                    ha   = f"vs {opp}" if side == "home" else f"@ {opp}"
+                    frames.append({
+                        "PlayerName":    _strip_accents(nm),
+                        "PSP_HomeVAway": ha,
+                        "PSP_Date":      date_str,
+                        "PSP_Projected": bool(projected),
+                    })
     if not frames:
-        log("  Batch probable starters returned nothing â€” falling back to live-feed method")
-        return _probable_starters_live_feed(days)
-
-    # Step 3 â€” rotation projection: advance each team's rotation ORDER through its
-    # actual upcoming games (one pitcher per game), rather than a crude
-    # last_start + 6 calendar days guess. Walking real games (a) makes each game
-    # slot exclusive, so two projected SPs can never land on the same team/day,
-    # and (b) counts turns by games (honoring off-days/doubleheaders), which also
-    # surfaces legitimate two-start weeks. Confirmed MLB entries (already in
-    # frames) act as anchors that re-sync the cycle.
-    _ROT_RECENCY   = 11  # a rotation member must have started within this many days
-    _PROJ_MIN_DAYS = 4   # only surface projections >= this many days out (near-term
-                         # slots are usually confirmed by MLB soon, so an early
-                         # projection there is noise). The walk still advances the
-                         # rotation through near-term games to keep phase; it just
-                         # doesn't EMIT a projected row until the date is far enough.
-    team_recent  = _get_team_recent_starts()
-    today        = datetime.now().date()
-
-    # confirmed upcoming start date per (team, pitcher) so we never project a
-    # pitcher onto an open game earlier than a start the MLB API already confirmed
-    confirmed_date = {}  # (team, pitcher) -> date_str
-    for pitcher, (date_str, team) in confirmed_upcoming.items():
-        confirmed_date[(team, pitcher)] = date_str
-
-    # confirmed pitcher per (team, date) slot, to anchor/re-sync the walk
-    confirmed_pitcher = {}  # (team, date_str) -> pitcher_name
-    for pitcher, (date_str, team) in confirmed_upcoming.items():
-        confirmed_pitcher[(team, date_str)] = pitcher
-
-    # upcoming games grouped per team, chronological
-    team_games = {}  # team_name -> list of (date_str, ha)
-    for pk, (date_str, home, away) in game_meta.items():
-        for team, opp, side in [(home, away, "home"), (away, home, "away")]:
-            ha = f"vs {opp}" if side == "home" else f"@ {home}"
-            team_games.setdefault(team, []).append((date_str, ha))
-
-    proj_count = 0
-    for team, games in team_games.items():
-        games.sort(key=lambda g: g[0])
-
-        # rotation queue: members who started within the recency guard, ordered
-        # by last start date ascending (longest-rested / most "due" at the front)
-        last_by_pitcher = {}
-        for d, p in team_recent.get(team, []):
-            last_by_pitcher[p] = d  # chronological input -> keeps latest
-        members = sorted(
-            ((d, p) for p, d in last_by_pitcher.items()
-             if (today - datetime.strptime(d, "%Y-%m-%d").date()).days <= _ROT_RECENCY),
-        )
-        queue = [p for _, p in members]
-
-        for date_str, ha in games:
-            conf = confirmed_pitcher.get((team, date_str))
-            if conf is not None:
-                # confirmed slot (already in frames) â€” rotate the anchor to the back
-                if conf in queue:
-                    queue.remove(conf)
-                    queue.append(conf)
-                continue
-            # next due pitcher who isn't already spoken for by a later confirmed start
-            chosen_idx = None
-            for i, p in enumerate(queue):
-                cd = confirmed_date.get((team, p))
-                if cd and cd > date_str:
-                    continue
-                chosen_idx = i
-                break
-            if chosen_idx is None:
-                continue
-            pitcher = queue.pop(chosen_idx)
-            queue.append(pitcher)  # just started -> back of the rotation
-            days_out = (datetime.strptime(date_str, "%Y-%m-%d").date() - today).days
-            if days_out < _PROJ_MIN_DAYS:
-                continue  # phase kept, but too near to surface as a projection
-            frames.append({
-                "PlayerName":    pitcher,
-                "PSP_HomeVAway": ha,
-                "PSP_Date":      date_str,
-                "PSP_Projected": True,
-            })
-            proj_count += 1
-
-    n_confirmed = len(frames) - proj_count
-    # Sort confirmed before projected so dedup keeps confirmed when pitcher appears in both
-    df = pd.DataFrame(frames).sort_values(["PSP_Projected", "PSP_Date"])
-    log(f"  Probable starters: {n_confirmed} confirmed + {proj_count} projected over {days} days (batch method)")
+        log("  Probable starters (ESPN): 0 entries (scoreboard empty or unreachable)")
+        return pd.DataFrame(columns=["PlayerName", "PSP_HomeVAway", "PSP_Date",
+                                     "PSP_Projected", "PSP_Dates", "PSP_HomeVAways"])
+    # confirmed (False) sorts before projected (True), so the _attach_start_lists dedup keeps
+    # a confirmed entry over a projected one for the same pitcher/date.
+    df = pd.DataFrame(frames).sort_values(["PSP_Date", "PSP_Projected"])
+    n_conf = int((~df["PSP_Projected"]).sum())
+    log(f"  Probable starters (ESPN): {len(df)} entries ({n_conf} confirmed + {len(df) - n_conf} projected) over {days} days")
     return _attach_start_lists(df)
 
 
@@ -581,47 +426,6 @@ def _attach_start_lists(df: pd.DataFrame) -> pd.DataFrame:
     deduped["PSP_HomeVAways"] = deduped["PlayerName"].map(
         lambda p: [by_player[p][d] for d in sorted(by_player.get(p, {}))])
     return deduped
-
-
-def _probable_starters_live_feed(days: int) -> pd.DataFrame:
-    """Fallback: one live-feed call per game (original method)."""
-    frames = []
-    for i in range(days):
-        date_str = (datetime.now() + timedelta(days=i)).strftime("%Y-%m-%d")
-        try:
-            sched = requests.get(
-                f"https://statsapi.mlb.com/api/v1/schedule?sportId=1&date={date_str}",
-                timeout=10,
-            ).json()
-        except Exception:
-            continue
-        for date_info in sched.get("dates", []):
-            for game in date_info.get("games", []):
-                try:
-                    gd = requests.get(
-                        f"https://statsapi.mlb.com/api/v1.1/game/{game['gamePk']}/feed/live",
-                        timeout=10,
-                    ).json().get("gameData", {})
-                    pitchers = gd.get("probablePitchers", {})
-                    home = game["teams"]["home"]["team"]["name"]
-                    away = game["teams"]["away"]["team"]["name"]
-                    for side, ha in [("home", f"vs {away}"), ("away", f"@ {home}")]:
-                        name = pitchers.get(side, {}).get("fullName", "TBD")
-                        if name and name != "TBD":
-                            frames.append({
-                                "PlayerName":    _strip_accents(name),
-                                "PSP_HomeVAway": ha,
-                                "PSP_Date":      date_str,
-                                "PSP_Projected": False,
-                            })
-                except Exception:
-                    pass
-    if not frames:
-        return pd.DataFrame(columns=["PlayerName", "PSP_HomeVAway", "PSP_Date",
-                                     "PSP_Projected", "PSP_Dates", "PSP_HomeVAways"])
-    df = pd.DataFrame(frames).sort_values("PSP_Date")
-    log(f"  Probable starters: {len(df)} entries over {days} days (live-feed fallback)")
-    return _attach_start_lists(df)
 
 
 # â”€â”€ OPPONENT OPS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
