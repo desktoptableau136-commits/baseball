@@ -33,7 +33,7 @@ ORANGE   = "#ea580c"   # starter low-floor ⚠ badge (burnt orange) — delibera
 PURPLE   = "#a855f7"   # hitter PWR badge (translucent) — distinct from green/yellow/red
 CYAN     = "#22d3ee"   # pitcher QS badge (translucent) — QS + two-start can co-occur, so 2 moved to blue
 SILVER   = "#c8d0da"   # hitter SB "Quicksilver" speed badge (metallic, distinct from TEXT/MUTED)
-PINK     = "#ec4899"   # Trade Radar "upgrades your thin {pos}" chip — its own hue (moved off CYAN, which now means only the QS season-skill badge on a trade card; pink collides with nothing else on the card)
+MAGENTA  = "#e935c1"   # Trade Radar "upgrades your thin {pos}" chip — its own hue (moved off CYAN, which now means only the QS season-skill badge on a trade card; toned magenta fits the 500-level palette and collides with nothing else on the card — widest margin from PWR purple of the candidates tested)
 
 TH_S = f"padding:8px 10px;background:{SURFACE};color:{MUTED};font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.7px;border-bottom:2px solid {BORDER};white-space:nowrap;"
 TD_S = f"padding:7px 10px;border-bottom:1px solid {BORDER};color:{TEXT};font-size:13px;vertical-align:middle;"
