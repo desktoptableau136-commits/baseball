@@ -2483,7 +2483,7 @@ def build_glossary_section():
                "Trade ideas that <b>fix a rival's category need</b> (their reason to accept) "
                "while <b>tilting value to you</b>. You send a player strong in a category you're deep in and "
                "they're weak in; you get back one who fills a category <i>or a thin roster position</i> you "
-               "need. Only players at a position where you have <b>surplus</b> are offered (no hole opened), "
+               "need. Only players at a position where you have <b>surplus</b> are offered (no gap opened), "
                "and your <b>elite bats are protected</b> — never offered unless they're a sell-high regression "
                "candidate you'd want to move anyway. Value is judged on <b>true category contribution</b>, not "
                "the role-score badge (a closer and an everyday bat can both post a 90+ score, but the bat "
