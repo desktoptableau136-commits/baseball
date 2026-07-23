@@ -364,6 +364,27 @@ def _sp_skill_context(row):
     return _badge_ctx_wrap(lines)
 
 
+def _pitcher_badge_context(row):
+    """Explain the pitcher regression badge ($ buy-low / ▼ sell-high) `row` earns — SAME
+    predicate as `pitcher_regression_badge` — so the tap-to-expand panel explains the chip
+    shown beside the name. Row-only (ERA vs xERA, no recent-form input), so it renders from
+    the shared breakdown for BOTH SP and RP. The SP-only ⚠ blowup badge — which needs the
+    render-site L15 ERA to stay in lockstep with its chip — stays in `_sp_badge_context`."""
+    flag = pitcher_regression_flag(row)
+    if not flag:
+        return ""
+    era, xera = _n(row.get("ERA")), _n(row.get("xERA"))
+    if flag == "sell":
+        line = (f'{pitcher_regression_badge(row)} ERA {era:.2f} is running below his '
+                f'{xera:.2f} xERA &mdash; getting lucky, regression risk (sell-high).')
+        if _is_sp(row):   # ⚠ only shows for startable arms, so the distinction is SP-only
+            line += ' Separate from &#9888;: this is mean regression, not blowup floor.'
+    else:
+        line = (f'{pitcher_regression_badge(row)} ERA {era:.2f} is running above his '
+                f'{xera:.2f} xERA &mdash; unlucky, positive regression likely (buy-low).')
+    return _badge_ctx_wrap([line])
+
+
 def _hitter_score_breakdown(r, idx_recent=None, hit_pctile=None):
     """Prose breakdown of a hitter's Score for the tap-to-expand panel."""
     comps, mult = hitter_score(r, _parts=True)
@@ -417,6 +438,7 @@ def _pitcher_score_breakdown(r, idx_recent=None):
                 tag = "hot" if rs > season else ("cold" if rs < season else "steady")
                 html += (f' {win} form {rs} ({tag}) → shown blends '
                          f'{round((1 - _BLEND_W) * 100)}% season / {round(_BLEND_W * 100)}% recent.')
+    html += _pitcher_badge_context(r)
     return html
 
 
