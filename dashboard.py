@@ -171,13 +171,21 @@ def _reg_chip8(r):
             f'border-radius:3px;padding:0 3px;vertical-align:middle;">{glyph}</span>')
 
 
-def _tile(title, body, flex=1.0, accent=ACCENT, sub=""):
+def _tile(title, body, flex=1.0, accent=ACCENT, sub="", header_right=""):
     sub_html = f'<span style="color:{MUTED};font-weight:400;text-transform:none;letter-spacing:0;font-size:10px;margin-left:6px;">{sub}</span>' if sub else ""
+    _tstyle = f'color:{TEXT};font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.6px;'
+    if header_right:
+        head = (
+            f'<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px;'
+            f'margin-bottom:4px;flex:0 0 auto;">'
+            f'<span style="{_tstyle}min-width:0;">{title}{sub_html}</span>'
+            f'<span style="flex:0 0 auto;">{header_right}</span></div>')
+    else:
+        head = f'<div style="{_tstyle}margin-bottom:4px;flex:0 0 auto;">{title}{sub_html}</div>'
     return (
         f'<div class="tile" style="flex:{flex} 1 0;min-height:0;background:{SURFACE};border:1px solid {BORDER};'
         f'border-top:2px solid {accent};border-radius:6px;padding:6px 10px;display:flex;flex-direction:column;overflow:hidden;">'
-        f'<div style="color:{TEXT};font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.6px;'
-        f'margin-bottom:4px;flex:0 0 auto;">{title}{sub_html}</div>'
+        f'{head}'
         f'<div class="tile-body" style="flex:1 1 0;min-height:0;overflow:hidden;font-size:12.5px;color:{TEXT};line-height:1.4;">{body}</div>'
         f'</div>'
     )
@@ -286,7 +294,7 @@ def render_topbar(ctx):
         return (
             f'<div class="chip" style="text-align:center;padding:0 12px;border-left:1px solid {BORDER};">'
             f'<div style="color:{MUTED};font-size:8px;text-transform:uppercase;letter-spacing:.6px;">{label}</div>'
-            f'<div style="color:{vcolor};font-size:16px;font-weight:800;margin-top:1px;white-space:nowrap;">{value}</div>'
+            f'<div class="chip-val" style="color:{vcolor};font-size:16px;font-weight:800;margin-top:1px;white-space:nowrap;">{value}</div>'
             f'</div>'
         )
 
@@ -806,7 +814,14 @@ def render_trade_radar(ctx):
         body = f'<div style="height:100%;overflow-y:auto;">{body}</div>'
     else:
         title, sub = "Trade Radar", "top mutual-benefit swaps &middot; hover a badge for why"
-    return _tile(title, body, flex=0.9, sub=sub)
+    # Deep-link the header to the hosted pocket Trade Lab (same URL the digest's trade cards
+    # open) so a swap can be dragged out interactively straight from the dashboard.
+    tl_link = (
+        f'<a href="{sd.TRADE_LAB_URL}" target="_blank" rel="noopener" '
+        f'style="font-size:9px;font-weight:700;color:{ACCENT};text-decoration:none;text-transform:none;'
+        f'letter-spacing:0;border:1px solid {BORDER};border-radius:8px;padding:1px 7px;white-space:nowrap;">'
+        f'Trade Lab &#8599;</a>')
+    return _tile(title, body, flex=0.9, sub=sub, header_right=tl_link)
 
 
 # ── Column 3: Moves, FA Radar, Season ───────────────────────────────────────────
@@ -1006,7 +1021,8 @@ STYLE = """
     .colt  { flex:0 0 auto !important; width:100% !important; }
     .tile-body { font-size:14.5px !important; }
     .pulse-grid { grid-template-columns:repeat(2,1fr) !important; }
-    .chip { padding:0 6px !important; }
+    .chip { padding:0 4px !important; }
+    .chip-val { font-size:13px !important; }  /* shrink so all 8 chips fit one row on a Pixel 7a (~412px) */
     .topbar-chips { width:100% !important; }
   }
 """
