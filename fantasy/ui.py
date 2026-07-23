@@ -212,12 +212,28 @@ def fantasy_logo(url, size=26, team_name=""):
     )
 
 
+def _score_bg_hex(score):
+    """Badge BACKGROUND color for a 0-100 score (paired with white text on the pill)."""
+    s = int(score or 0)
+    if s >= 72:   return "#16a34a"
+    elif s >= 52: return "#2563eb"
+    elif s >= 32: return "#d97706"
+    else:         return "#dc2626"
+
+
+def _score_text_hex(score):
+    """Score color for use as TEXT on the dark surface (brighter palette variants, same
+    72/52/32 tiers as the badge) — e.g. the season|recent numbers in a breakdown header."""
+    s = int(score or 0)
+    if s >= 72:   return GREEN
+    elif s >= 52: return ACCENT
+    elif s >= 32: return YELLOW
+    else:         return RED
+
+
 def badge(score, small=False):
     s = int(score or 0)
-    if s >= 72:   bg, fg = "#16a34a", "#fff"
-    elif s >= 52: bg, fg = "#2563eb", "#fff"
-    elif s >= 32: bg, fg = "#d97706", "#fff"
-    else:          bg, fg = "#dc2626", "#fff"
+    bg, fg = _score_bg_hex(s), "#fff"
     pad, radius, fs = ("1px 6px", "10px", "9px") if small else ("2px 9px", "12px", "11px")
     return (f'<span style="background:{bg};color:{fg};padding:{pad};border-radius:{radius};'
             f'font-size:{fs};font-weight:800;">{s}</span>')

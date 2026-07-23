@@ -2345,10 +2345,12 @@ def build_glossary_section():
         _subhead("Any player"),
         _entry(f'Score badge (tap to expand){badge(72)}',
                "The colored pill is the player's 0–100 role score (green ≥ 72, blue ≥ 52, amber ≥ 32, red below). "
-               "In the browser-opened attachment it expands on tap into a full-width row below the player that "
-               "explains, in plain English, the 2-3 drivers behind the number (e.g. &ldquo;carried by "
-               "swing-and-miss and a low WHIP; held back by hard contact&rdquo;) plus the season-vs-recent "
-               "blend. If the player is hurt it ends with a 🩹 <b>Injury</b> line — which side of the IL "
+               "In the browser-opened attachment it expands on tap into a full-width row below the player. "
+               "It opens with the <b>season and recent scores</b> (each colored by tier) beside a 🔥/🥶 "
+               "form marker, then a one-line <b>scouting read</b> of the player's archetype (e.g. &ldquo;a "
+               "true three-outcome slugger&rdquo; / &ldquo;a front-line arm — misses bats and limits "
+               "damage&rdquo;), then the 2-3 drivers behind the number (e.g. &ldquo;carried by "
+               "swing-and-miss and a low WHIP; held back by hard contact&rdquo;). If the player is hurt it ends with a 🩹 <b>Injury</b> line — which side of the IL "
                "he's on (10 / 15 / 60-day, OUT, or day-to-day), the body part and specifics, and his "
                "expected return. The ▾ caret marks a tappable badge; ✕ (or tapping another badge) closes it."),
         _entry(f'Hot / cold{_mark("&#128293;", GREEN)}{_mark("&#10052;", ACCENT)}',
