@@ -134,11 +134,9 @@ def build_data(snap, my_team):
                                   snap.get("recent_pitching", []), snap.get("recent_hitting", []))
     best_recent_p, best_recent_h = idx["best_recent_p"], idx["best_recent_h"]
 
-    # Per-team category ranks → needs (bottom third) / surplus (top third).
+    # Per-team category ranks → needs/surplus derived via the shared overlay-aware helper
+    # (sd._team_trade_context, per team) inside the loop below.
     ranks, n = sd.team_category_ranks(roto)
-    third = max(1, round(n / 3.0)) if n else 1
-    needs_of   = lambda t: sorted(c for c, rk in ranks.get(t, {}).items() if rk >= n - third + 1)
-    surplus_of = lambda t: sorted(c for c, rk in ranks.get(t, {}).items() if rk <= third)
 
     # Team roster ordered by standings; keep the double-space snapshot keys for matching.
     team_keys = [_key(s.get("team_name")) for s in standings] or sorted(ranks.keys())
@@ -149,19 +147,18 @@ def build_data(snap, my_team):
         # Thin HITTER positions for this team → {pos: my_avg_score} (positional need).
         pos_data = sd.positional_breakdown(pitchers, hitters, tk, best_recent_p, best_recent_h)
         pos_data_by_team[tk] = pos_data   # reused by the Partner Fit board (per-POV engine run)
-        need_pos, surplus_pos, pos_rank = {}, [], {}
+        pos_rank = {}
         for p in pos_data:
             # League rank at this position/role (1 = best crew) → collapsed-section gauge.
             if p.get("rank") and p.get("n_teams"):
                 pos_rank[p["pos"]] = {"rank": p["rank"], "n": p["n_teams"]}
-            if p.get("ptype") != "hit":
-                continue
-            nt = p.get("n_teams") or n
-            pt = max(1, round(nt / 3.0))
-            if (p.get("rank") or nt) >= nt - pt + 1:
-                need_pos[p["pos"]] = round(p.get("my_avg") or 0, 1)
-            elif (p.get("rank") or nt) <= pt:
-                surplus_pos.append(p["pos"])            # deep hitter positions (demand-side discount)
+        # Need model — the SAME overlay-aware source find_trades + the pending verdict use, so the
+        # LIVE Trade Lab verdict grades against the exact needs the Partner-Fit board generated on
+        # (punt SVHD, target C/SS). Without this the board could headline a deal the builder then
+        # DECLINEs. need_pos → {pos: my_avg_score} for the JS upgrade gate; surplus_pos → list.
+        _needs, _surplus, _need_pos_t, _surplus_pos = sd._team_trade_context(tk, ranks, n, pos_data)
+        need_pos    = {p: round(v[1], 1) for p, v in _need_pos_t.items()}
+        surplus_pos = sorted(_surplus_pos)
         # Aggregate lineup-hitting score = Σ starter-avg × slots — ranked across teams
         # after the loop → the Hitters role-header "Xth-best hitters" gauge. Same my_avg
         # values shown per position, so a folded Hitters section summarizes its parts.
@@ -170,8 +167,8 @@ def build_data(snap, my_team):
         teams_meta[tk] = {
             "name":     _disp(tk),
             "logo":     sd.fantasy_logo(team_logos.get(tk, ""), 24, tk),
-            "needs":    needs_of(tk),
-            "surplus":  surplus_of(tk),
+            "needs":    sorted(_needs),
+            "surplus":  sorted(_surplus),
             "need_pos": need_pos,
             "surplus_pos": surplus_pos,
             "pos_rank": pos_rank,   # {pos: {rank, n}} → collapsed-section league-rank gauge
@@ -283,16 +280,19 @@ _FIT_TIER_ORDER = {"BEST": 0, "REACH": 1, "SLIM": 2, "ONEWAY": 3, "NOFIT": 4}
 _FIT_SCARCE_POS = {"C", "SS"}
 
 
-def _fit_deal_words(value_phrase, accept):
-    """Plain-English one-liner for a graded deal → (sentence, tier_key)."""
-    if accept == "realistic":
+def _fit_deal_words(value_phrase, accept, rival_gains=True):
+    """Plain-English one-liner for a graded deal → (sentence, tier_key). The deal is already
+    filtered to ACCEPT-for-me (good for my side), so BEST is reserved for a true win-win: the
+    rival ALSO clearly gains (rival_gains) at a realistic price. Otherwise it's a REACH — worth
+    floating, but the rival may resist."""
+    if accept == "realistic" and rival_gains:
         if value_phrase == "you pay up":
-            return ("You pay a hair, but a fair ask for the need.", "BEST")
-        return ("Fair swap — they'd likely accept.", "BEST")
-    # aggressive ask
+            return ("You pay a hair, but a fair ask for a need — they gain too.", "BEST")
+        return ("Fair swap — a win for both sides.", "BEST")
+    # good for me, but the rival wins little or nothing → they'll likely push back
     if value_phrase == "you win the value":
         return ("You come out ahead, but it's an aggressive ask — expect a counter.", "REACH")
-    return ("Even on paper, but you'd be prying their guy — expect resistance.", "REACH")
+    return ("Worth floating, but the value's thin for them — expect some back-and-forth.", "REACH")
 
 
 def _fit_get_tags(ins, my_needs):
@@ -331,7 +331,10 @@ def build_partner_fit(pitchers, hitters, roto, team_keys, ranks, n,
     try:
         sd._set_trade_caps(400, 6)   # facade-safe: lands in fantasy.trades where find_trades reads it
         for pov in team_keys:
-            my_needs, my_surplus = needs_of(pov), surplus_of(pov)
+            # Overlay-aware pov needs (punt SVHD, target C/SS) — the SAME model the engine + the
+            # live verdict use, so the board's diagnosis + tags can't drift from the builder.
+            my_needs, my_surplus, _pov_np, _ = sd._team_trade_context(
+                pov, ranks, n, pos_data_by_team.get(pov, []))
             deals = sd.find_trades_combined(pitchers, hitters, roto, pov, best_recent_p,
                                             best_recent_h, pos_data_by_team.get(pov, []),
                                             hit_pctile, pit_pctile, cards=400,
@@ -347,7 +350,10 @@ def build_partner_fit(pitchers, hitters, roto, team_keys, ranks, n,
                 r_needs, r_surplus = needs_of(rival), surplus_of(rival)
                 i_offer   = sorted(my_surplus & r_needs)    # my categorical reason for them
                 they_offer = sorted(r_surplus & my_needs)   # what they can spare me
-                cand = by_team.get(rival, [])
+                # Only deals that are ACCEPT for MY side can be a "target" — a deal that's good for
+                # them but not for me (I overpay / fill no need) is exactly what made the board
+                # headline a deal the builder then DECLINEd. Fall through to a diagnosis instead.
+                cand = [d for d in by_team.get(rival, []) if d.get("my_verdict") == "ACCEPT"]
 
                 def _score(d):
                     vp, ac, _ = sd._trade_tilt(d.get("net_val", 0), d.get("ins"), d.get("outs"),
@@ -362,14 +368,20 @@ def build_partner_fit(pitchers, hitters, roto, team_keys, ranks, n,
                 if best:
                     vp, ac, _ = sd._trade_tilt(best.get("net_val", 0), best.get("ins"), best.get("outs"),
                                                net_them=best.get("net_them"))
-                    words, tier = _fit_deal_words(vp, ac)
+                    # BEST is a true win-win: realistic price AND the rival CLEARLY gains (not just
+                    # breaks even). A good-for-me-only deal drops to REACH ("worth a shot").
+                    rival_gains = _n(best.get("net_them")) >= sd._TRADE_RIVAL_GAIN_MIN
+                    words, tier = _fit_deal_words(vp, ac, rival_gains)
                     get = [{"name": p.get("PlayerName", ""),
                             "tags": _fit_get_tags([p], my_needs)} for p in best["ins"]]
                     records.append({
                         "team": rival, "tier": tier,
                         "get": get, "give": [p.get("PlayerName", "") for p in best["outs"]],
                         "verdict": words,
-                        "whyOffer": [CAT_LABELS.get(c, c) for c in i_offer],
+                        # Name only the cats the players I'd ACTUALLY send cover for them (the deal's
+                        # own send_cats), not the roster-wide surplus∩needs intersection — so the
+                        # "you're deep in X (their holes)" prose can't overclaim.
+                        "whyOffer": [CAT_LABELS.get(c, c) for c in best.get("send_cats", [])],
                         "whyGet": _fit_get_tags(best["ins"], my_needs),
                     })
                 elif not i_offer and not they_offer:
