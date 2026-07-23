@@ -64,12 +64,15 @@ _TRADE_PER_TEAM_CAP = 2     # max cards per partner team (variety)
 # sees the default rank-derived behavior, so these never distort another manager's read.
 #   PUNT: roto cats to DROP from my need set, so the radar stops recommending help I don't want.
 #         (I punt saves — SVHD sits at rank ~10 but chasing closers is counterproductive.)
-#   TARGET: positions to treat as acquisition-worthy even when NOT a bottom-third deficit — a
-#         clear upgrade there still surfaces. C/SS = my weak hitter spots (SS is a real need,
-#         C sits just outside the cutoff); SP = rotation stability so I stream less, knowingly
-#         paying a little value for cats I already win (a solid SP helps K/QS/W where I'm deep).
+#   TARGET: HITTER positions to treat as acquisition-worthy even when NOT a bottom-third deficit
+#         — a clear upgrade there still surfaces. C/SS = my weak hitter spots (SS is a real need,
+#         C sits just outside the cutoff). NOTE: SP was intentionally REMOVED — a rotation-
+#         stability SP target knowingly pays value for cats I already win (K/QS/W), which the
+#         demand-side verdict (_need_mult skips the positional term for pitchers) can only read
+#         as DECLINE. That made the radar recommend deals the Trade Lab then declined; targets
+#         are now hitter-only so the overlay flows cleanly through net_me/net_them.
 _TEAM_PUNT_CATS  = {"Guerrero Warfare": {"SVHD"}}
-_TEAM_TARGET_POS = {"Guerrero Warfare": {"C", "SS", "SP"}}
+_TEAM_TARGET_POS = {"Guerrero Warfare": {"C", "SS"}}
 
 
 def _set_trade_caps(max_cards=None, per_team_cap=None):
@@ -98,6 +101,12 @@ _STAR_PREM_CAP      = 1.10  # ceiling so a franchise anchor can't demand an impo
 
 
 _TRADE_REALISTIC_MAX = 0.05 # rival "realistic" read: most value I may win and still call it realistic (aggressive)
+
+
+_TRADE_RIVAL_GAIN_MIN = 0.05  # prescriptive surfaces: min demand-side gain the RIVAL must net for
+                              #   a deal to be recommended — real managers say yes when they
+                              #   clearly GAIN, not merely break even. A generation gate only
+                              #   (the _trade_tilt display read is untouched). Tunable.
 
 
 _NEED_MULT_CAT      = 0.14  # per need-cat boost to a player's value for a team short there
@@ -360,6 +369,31 @@ def _pos_need_surplus(pos_data, n_teams_fallback):
     return need_pos, surplus_pos
 
 
+def _team_trade_context(team_key, ranks, n, pos_data):
+    """THE single source of a team's trade need-model: (needs, surplus, need_pos, surplus_pos)
+    with the personal-strategy overlay (_TEAM_PUNT_CATS / _TEAM_TARGET_POS) applied FOR THAT KEY.
+    Both the generator (find_trades) and every verdict path (_grade_pending_trades, Trade Lab
+    teams_meta) call this so the surfaces can't disagree on what I need — a deal built around a
+    target is graded against the same needs. A team with no overlay entry falls through to the
+    default rank-thirds, so another manager's read is never distorted. `pos_data` is that team's
+    positional_breakdown; `ranks`/`n` from team_category_ranks."""
+    third = max(1, round(n / 3.0))
+    cat_ranks = ranks.get(team_key, {})
+    needs   = {c for c, rk in cat_ranks.items() if rk >= n - third + 1}
+    surplus = {c for c, rk in cat_ranks.items() if rk <= third}
+    # PUNT: drop punted cats from my needs (I don't contest them, so stop chasing help there).
+    needs -= _TEAM_PUNT_CATS.get(team_key, set())
+    need_pos, surplus_pos = _pos_need_surplus(pos_data, n)
+    # TARGET: fold explicit HITTER target positions into need_pos even absent a rank deficit — an
+    # incomer still has to clear my starter avg there (upgrade-gated downstream), so this surfaces
+    # a real upgrade at a spot I care about without inventing a phantom need.
+    target_pos = _TEAM_TARGET_POS.get(team_key, set())
+    for d in pos_data:
+        if d.get("pos") in target_pos and d.get("pos") not in need_pos:
+            need_pos[d["pos"]] = ((d.get("rank") or n), (d.get("my_avg") or 0))
+    return needs, surplus, need_pos, surplus_pos
+
+
 def find_trades(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
                 pos_data, hit_pctile, pit_pctile, mode="favor",
                 pos_data_by_team=None, realistic_only=False):
@@ -392,31 +426,14 @@ def find_trades(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
     needs_of   = lambda team: {c for c, rk in ranks[team].items() if rk >= n - third + 1}
     surplus_of = lambda team: {c for c, rk in ranks[team].items() if rk <= third}
 
-    # Personal strategy overlay (my perspective only): drop punted cats from my needs so the
-    # radar stops chasing them, and note target positions to surface even absent a rank deficit.
-    punt_cats  = _TEAM_PUNT_CATS.get(my_key, set())
-    target_pos = _TEAM_TARGET_POS.get(my_key, set())
-
-    my_needs, my_surplus = (needs_of(my_key) - punt_cats), surplus_of(my_key)
-    if not my_needs and not target_pos:
+    # My need model — the SINGLE source shared with the pending verdict + Trade Lab teams_meta
+    # (overlay-aware): drops punted cats from my needs and folds explicit HITTER target positions
+    # (C/SS) into need_pos even absent a rank deficit (an incomer still has to clear my starter
+    # avg there — upgrade-gated in _fills_need_pos below). need_pos: {pos: (rank, my_avg)} for my
+    # thin/targeted hitter slots; surplus_pos: positions I'm deep in (safe to trade FROM).
+    my_needs, my_surplus, need_pos, surplus_pos = _team_trade_context(my_key, ranks, n, pos_data)
+    if not my_needs and not need_pos:
         return []
-
-    # Position groups I'm deep in (top-third rank) — safe to trade FROM without a hole.
-    # HITTER positions I'm thin at (bottom-third rank) → {pos: (rank, my_avg_score)}. The
-    # hitting game is filling roster holes across C/1B/2B/3B/SS/OF, so a hitter who
-    # UPGRADES a thin position is worth acquiring even when my category totals there
-    # aren't bottom-third — positional scarcity is its own need. (Pitching need is
-    # category-shaped — QS/SP vs SV+H/K balance — so it stays category-driven.)
-    need_pos, surplus_pos = _pos_need_surplus(pos_data, n)
-    # Fold in explicit TARGET positions (C/SS hitter spots, SP for rotation stability) even when
-    # NOT a bottom-third deficit — an incomer still has to clear my starter avg there (upgrade-
-    # gated in _fills_need_pos below), so this surfaces a real upgrade at a spot I care about
-    # without flagging phantom needs. SP joins need_pos as an honorary entry so its downstream
-    # (rank ranking, upgrade gate) works; _need_mult skips the positional term for pitchers, so
-    # the SP key never distorts a pitcher's demand-side value.
-    for d in pos_data:
-        if d.get("pos") in target_pos and d.get("pos") not in need_pos:
-            need_pos[d["pos"]] = ((d.get("rank") or n), (d.get("my_avg") or 0))
 
     def roster(source, team):
         return [r for r in source
@@ -435,15 +452,13 @@ def find_trades(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
                  if (r.get("FantasyTeam") or "").strip()}
 
     def _fills_need_pos(r):
-        """Need/target positions this player upgrades — a hitter at a thin (or explicitly
-        targeted) position of mine whose value clears my current average there (a genuine
-        upgrade, not a lateral move). SP is credited only as an explicit rotation-stability
-        TARGET (not a category need — my pitching cats are a surplus), same upgrade gate."""
+        """Need/target positions this player upgrades — a HITTER at a thin (or explicitly
+        targeted, C/SS) position of mine whose value clears my current average there (a genuine
+        upgrade, not a lateral move). Positional need is hitter-only — pitching need stays
+        category-shaped (K/QS/W vs SV+H balance), so an SP is never credited a positional need."""
         if r["_tptype"] == "hit":
             return {pos for pos in (r["_tgroups"] & set(need_pos))
                     if r["_tscore"] > need_pos[pos][1]}
-        if "SP" in need_pos and _is_sp(r) and r["_tscore"] > need_pos["SP"][1]:
-            return {"SP"}
         return set()
 
     trades = []
@@ -507,6 +522,32 @@ def find_trades(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
                     continue   # a package must address >= 2 distinct needs (cat or position)
                 if gate(oa["_tval"] + ob["_tval"], ia["_tval"] + ib["_tval"], mult=1.5):
                     packages.append(([oa, ob], [ia, ib]))
+        # 2-for-1: two of my surplus pieces for ONE rival need-filler — lets value ADD UP to land
+        # a scarce piece (a C/SS stud) without a single-piece overpay tripping the pay-up cap.
+        for oa, ob in itertools.combinations(out_pool, 2):
+            for i in in_pool:
+                if gate(oa["_tval"] + ob["_tval"], i["_tval"], mult=1.5):
+                    packages.append(([oa, ob], [i]))
+        # UPGRADE-SWAP: give my WEAKEST body at a target/need hitter position P (a surplus-only
+        # give pool can never offer it — P is a need, not a surplus) PLUS a rival-needed surplus
+        # sweetener, to GET a clear upgrade at P. The swap keeps my body count at P (shed 1 + add
+        # 1), so the depth floor holds and _non_redundant_get_pos still credits P as filled.
+        my_at_pos = {}
+        for r in my_players:
+            if r["_tptype"] != "hit":
+                continue
+            for P in (r["_tgroups"] & set(need_pos)):
+                my_at_pos.setdefault(P, []).append(r)
+        for P, mine in my_at_pos.items():
+            weak = min(mine, key=lambda r: r["_tscore"])           # my weakest body at P
+            ups  = [i for i in in_pool
+                    if P in set(i.get("_tfillpos", [])) and i["_tscore"] > weak["_tscore"]]
+            for i in ups:
+                for sweet in out_pool:                             # a rival-needed sweetener evens value
+                    if sweet is weak:
+                        continue
+                    if gate(weak["_tval"] + sweet["_tval"], i["_tval"], mult=1.5):
+                        packages.append(([weak, sweet], [i]))
 
         for outs, ins in packages:
             gcov = set().union(*[i["_tcats"] for i in ins]) & get_cats   # category needs met
@@ -561,13 +602,6 @@ def find_trades(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
                 net_them -= _TRADE_THIN_POS_PENALTY * len(thin_them)
                 _lbl = ", ".join(sorted(thin_them))
                 thin_note = f"leaves them without a backup at {_lbl}"
-            # Prescriptive surfaces (Trade Radar) only want deals the rival would actually
-            # accept — reuse _trade_tilt's own realistic/aggressive-ask read (net_them band +
-            # graduated star-reach check) as a hard generation-time gate, so an "aggressive
-            # ask" idea can never win a card slot. Left off for Partner Fit Board, which wants
-            # to see reach deals too (tiered separately as REACH/"worth a shot").
-            if realistic_only and _trade_tilt(net_val, ins, outs, net_them=net_them)[1] != "realistic":
-                continue
             # DIRECTIONAL timing: selling-high on the GIVE side and buying-low on the GET
             # side are the arbitrage (do more of it); giving away a riser or acquiring a
             # regression candidate is the reverse (penalize — these are traps).
@@ -576,6 +610,20 @@ def find_trades(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
             buy_out  = sum(1 for o in outs if o.get("_tbuy"))    # bad: don't sell my risers low
             sell_in  = sum(1 for i in ins  if i.get("_tsell"))   # bad: don't buy their regressors
             timing = sell_out + buy_in - buy_out - sell_in
+            # MY-SIDE VERDICT (the cohesion keystone): grade the deal from MY perspective with the
+            # EXACT _pending_verdict the Trade Lab / pending-offer surfaces show, keyed on net_me.
+            # Stored on the card so the Partner-Fit board can tier on it, AND used as a hard gate on
+            # the prescriptive surfaces (below) so the radar can only ever surface a deal the
+            # verdict itself would ACCEPT — the two surfaces can no longer disagree.
+            my_verdict = _pending_verdict(net_me, bool(gcov or gpos), timing, incoming=True)[0]
+            # Prescriptive surfaces (Trade Radar/dashboard) recommend only a genuine WIN-WIN:
+            # ACCEPT for me (not a pay-up COUNTER/DECLINE), the rival CLEARLY gains (net_them past
+            # a real-gain bar, not merely breaks even), and I'm not prying their star at par. Left
+            # off for the Partner-Fit board (realistic_only=False), which tiers reach deals too.
+            if realistic_only and (my_verdict != "ACCEPT"
+                                   or net_them < _TRADE_RIVAL_GAIN_MIN
+                                   or _deal_star_reach(ins, outs, net_val)):
+                continue
             # Season fit: deeper need cats/positions addressed (higher rank number) score more.
             # FAVOR mode tilts to me — their benefit down-weighted (0.3), reward my value edge
             # (+5·net_val). FAIR mode optimizes for a realistic, accepted deal — weight THEIR
@@ -591,7 +639,7 @@ def find_trades(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
                          + 4.0 * timing - 0.5 * (len(ins) - 1))
             trades.append({
                 "team": team, "outs": outs, "ins": ins, "net_val": net_val, "score": score,
-                "net_them": net_them, "net_me": net_me, "thin_note": thin_note,
+                "net_them": net_them, "net_me": net_me, "my_verdict": my_verdict, "thin_note": thin_note,
                 "my_give_val": my_give_val, "my_get_val": my_get_val,
                 "their_give_val": their_give_val, "their_get_val": their_get_val,
                 "lane": mode, "sell_out": sell_out, "buy_in": buy_in,
@@ -982,15 +1030,11 @@ def _grade_pending_trades(pending, pitchers, hitters, roto, my_team,
     needs_of   = lambda tk: {c for c, rk in ranks.get(tk, {}).items() if rk >= n - third + 1}
     surplus_of = lambda tk: {c for c, rk in ranks.get(tk, {}).items() if rk <= third}
     my_key   = " ".join(my_team.split())
-    my_needs, my_surplus = needs_of(my_key), surplus_of(my_key)   # my demand-side context
-    _nt    = lambda p: (p.get("n_teams") or n or 1)
-    _third = lambda p: max(1, round(_nt(p) / 3.0))
-    need_pos = {p["pos"]: ((p.get("rank") or _nt(p)), (p.get("my_avg") or 0))
-                for p in pos_data if p.get("ptype") == "hit"
-                and (p.get("rank") or _nt(p)) >= _nt(p) - _third(p) + 1}
-    my_need_pos    = set(need_pos.keys())
-    my_surplus_pos = {p["pos"] for p in pos_data if p.get("ptype") == "hit"
-                      and (p.get("rank") or _nt(p)) <= _third(p)}
+    # My need model — the SAME overlay-aware source find_trades uses, so a pending offer is graded
+    # against the exact needs the radar/Trade Lab do (punt SVHD, target C/SS). needs_of/surplus_of
+    # stay for the partner's own (un-overlaid) needs below.
+    my_needs, my_surplus, need_pos, my_surplus_pos = _team_trade_context(my_key, ranks, n, pos_data)
+    my_need_pos = set(need_pos.keys())
     my_pos_count = _team_position_counts(hitters, my_key)   # redundancy + depth guard: bodies per position
 
     def _resolve(entry):
