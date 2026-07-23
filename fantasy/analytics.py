@@ -24,6 +24,9 @@ _badge_name_key = _name_key
 
 _DL_STATUSES = {"TEN_DAY_DL", "FIFTEEN_DAY_DL", "SIXTY_DAY_DL", "IL", "OUT"}
 
+# Recent-form emoji for the tap-to-expand score-breakdown "N-day form" line.
+_FORM_EMOJI = {"hot": "\U0001F525", "cold": "\U0001F976", "steady": "➖"}
+
 
 def _on_il(r):
     """True if the player occupies one of the league's dedicated IL roster slots.
@@ -440,25 +443,150 @@ def _pitcher_badge_context(row):
     return _badge_ctx_wrap([line])
 
 
+def _archetype_form_tail(season, tag, noun, hot, cold_lead):
+    """Shared form/value tail for the archetype one-liner. Words only — the hot/cold
+    emoji lives on the dedicated 'N-day form' line, so it isn't doubled here. A cold
+    read still credits a genuinely good player ('...but still a solid bat')."""
+    if tag == "hot":
+        return hot
+    if tag == "cold":
+        tier = "elite" if season >= 85 else ("solid" if season >= 65 else None)
+        art  = "an" if tier == "elite" else "a"
+        return f"{cold_lead} but still {art} {tier} {noun}" if tier else cold_lead
+    if tag == "steady":
+        return "steady of late"
+    return ""   # no recent-form read (e.g. RP)
+
+
+def _hitter_archetype(r, hit_pctile, season, tag):
+    """Punchy one-line scouting read of a hitter's profile for the score-pill lead-in:
+    a category-breadth / power / speed archetype label + a form-aware value tail.
+    Reuses the season cat-percentiles (R/HR/RBI/SB/OPS) + raw power/speed shape."""
+    pc = ({c: _cat_pctile(hit_pctile, c, _cat_value(r, c)) for c in _FA_HIT_CATS}
+          if hit_pctile else {})
+    n_strong = sum(1 for c in _FA_HIT_CATS if pc.get(c, 0.0) >= 0.70)
+    iso, avg  = _n(r.get("ISO")), _n(r.get("AVG"))
+    hrp, k_ct = _n(r.get("HR_Probability")), _n(r.get("K"))
+    # Roto "speed" is SB, not raw sprint — a fast runner who doesn't steal helps no cat.
+    power_hi = pc.get("HR", 0.0) >= 0.70 or iso >= 0.189 or hrp >= 0.15
+    speed_hi = pc.get("SB", 0.0) >= 0.80 or _n(r.get("SB")) >= 15
+
+    if power_hi and k_ct >= 115 and not speed_hi:   # TTO leads breadth — a distinctive read
+        desc = "A true three-outcome slugger — big power, big whiff"
+    elif n_strong >= 4:
+        desc = f"Does a bit of everything ({n_strong}/5 cats)"
+    elif power_hi and speed_hi:
+        desc = "A power-speed threat"
+    elif power_hi:
+        desc = "A power-first bat"
+    elif speed_hi:
+        desc = "A speed merchant — steals carry the value"
+    elif pc.get("OPS", 0.0) >= 0.70:
+        desc = "An on-base producer"
+    elif avg >= 0.285:
+        desc = "A high-average, contact-first bat"
+    elif n_strong <= 1:
+        desc = "A one-dimensional, streaky bat"
+    else:
+        desc = "A solid everyday contributor"
+
+    tail = _archetype_form_tail(season, tag, "bat",
+                                hot="red-hot right now", cold_lead="ice-cold lately")
+    return f"{desc}, {tail}." if tail else f"{desc}."
+
+
+def _pitcher_archetype(r, role, season, tag):
+    """Punchy one-line scouting read of a pitcher's profile for the score-pill lead-in.
+    Raw-field based (ERA/WHIP/K%/SVHD) so it needs no percentile pool. Adds a
+    'watch the baserunners' caveat when a bat-missing arm carries a high WHIP."""
+    era, whip = _n(r.get("ERA")), _n(r.get("WHIP"))
+    kpct, kip = _n(r.get("Kpct_P")), _n(r.get("K/IP"))
+    svhd = _n(r.get("ESPN_SVHD")) or _n(r.get("SVHD"))
+    caveat = ""
+    # K% is sometimes absent (NaN→0) on otherwise-elite arms — fall back to K/IP so a
+    # missing rate can't demote an ace to "mid-rotation".
+    k_strong = kpct >= 0.23  or kip >= 1.00
+    k_elite  = kpct >= 0.244 or kip >= 1.05
+    low_k    = (0 < kpct < 0.20) or (0 < kip < 0.82)
+
+    if role == "SP":
+        # Front-line = strong ratios + bat-missing; elite WHIP+K still qualifies an arm whose
+        # ERA is inflated by bad luck (e.g. 3.67 ERA behind a 1.06 WHIP and 28% K).
+        if whip <= 1.20 and k_strong and (era <= 3.60 or whip <= 1.10):
+            desc = "A front-line arm — misses bats and limits damage"
+        elif k_elite and (whip >= 1.30 or era >= 4.0):
+            desc = "A bat-misser with traffic — Ks, but hittable"
+        elif whip <= 1.15 and low_k:
+            desc = "A control artist — pounds the zone, low on Ks"
+        elif era <= 3.20 and whip <= 1.10:
+            desc = "A polished run-preventer — elite ratios, quieter Ks"
+        elif era >= 4.80 or whip >= 1.36:
+            desc = "Getting hit hard lately"
+        elif era <= 4.04:
+            desc = "A steady mid-rotation arm"
+        else:
+            desc = "A back-end streamer"
+        hot, cold_lead = "dealing lately", "scuffling lately"
+    else:  # RP
+        if svhd >= 10 and era <= 3.0 and whip <= 1.15:
+            desc = "A lockdown reliever — SV+H volume with clean ratios"
+        elif (kpct >= 0.26 or kip >= 1.12) and whip >= 1.30:
+            desc = "A strikeout arm with control wobbles"
+        elif era <= 3.0 and whip <= 1.15:
+            desc = "A ratio helper, light on saves/holds"
+        elif kpct >= 0.26 or kip >= 1.12:
+            desc = "A strikeout reliever"
+        elif era >= 4.46 or whip >= 1.36:
+            desc = "A live arm with shaky control"
+        else:
+            desc = "A middle-relief arm"
+        hot, cold_lead = "throwing fire lately", "scuffling lately"
+
+    if k_strong and whip >= 1.40 and not any(w in desc for w in ("traffic", "hit hard", "shaky", "wobbles")):
+        caveat = f"watch the baserunners (WHIP {whip:.2f})"
+
+    tail = _archetype_form_tail(season, tag, "arm", hot=hot, cold_lead=cold_lead)
+    out = desc
+    if tail:
+        out += f", {tail}"
+    if caveat:
+        out += f"; {caveat}"
+    return out + "."
+
+
+def _archetype_line(desc):
+    """The archetype sentence as its own italic line between the score header and the
+    mechanical 'Carried by...' clause."""
+    return (f'<div style="margin-top:4px;font-style:italic;color:{MUTED};">{desc}</div>'
+            if desc else "")
+
+
 def _hitter_score_breakdown(r, idx_recent=None, hit_pctile=None):
     """Prose breakdown of a hitter's Score for the tap-to-expand panel."""
     comps, mult = hitter_score(r, _parts=True)
     if not comps:
         return ""
     season = hitter_score(r)
-    html = f'<b style="color:{TEXT};">Hitter score {season}.</b> {_score_narrative(_hit_clauses(r, comps))}'
+    # Recent-form lookup drives both the dual-score header and the "N-day form" line.
+    rec = idx_recent.get(r.get("PlayerName", "")) if idx_recent else None
+    rs  = hitter_score(rec) if rec else 0
+    win = tag = None
+    if rs > 0:
+        ds  = int(_n(rec.get("Dataset")) or 0)
+        win = f"{ds}-day" if ds in (7, 15, 30) else "7-day"
+        tag = "hot" if rs > season else ("cold" if rs < season else "steady")
+    sc = f'<span style="color:{_score_text_hex(season)};font-weight:800;">{season}</span>'
+    if rs > 0:
+        rc = f'<span style="color:{_score_text_hex(rs)};font-weight:800;">{rs}</span>'
+        head = f"Hitter score (season | {win}): {sc} | {rc} {_FORM_EMOJI[tag]}"
+    else:
+        head = f"Hitter score {sc}"
+    narr = _score_narrative(_hit_clauses(r, comps))
     if mult < 0.995:
-        html += f' Trimmed to {round(mult * 100)}% for thin playing time (few at-bats vs a regular).'
-    if idx_recent:
-        rec = idx_recent.get(r.get("PlayerName", ""))
-        if rec:
-            rs = hitter_score(rec)
-            if rs > 0:
-                ds  = int(_n(rec.get("Dataset")) or 0)
-                win = f"{ds}-day" if ds in (7, 15, 30) else "7-day"
-                tag = "hot" if rs > season else ("cold" if rs < season else "steady")
-                html += (f' {win} form {rs} ({tag}) → shown blends '
-                         f'{round((1 - _BLEND_W) * 100)}% season / {round(_BLEND_W * 100)}% recent.')
+        narr += f' Trimmed to {round(mult * 100)}% for thin playing time (few at-bats vs a regular).'
+    html = (f'<b style="color:{TEXT};">{head}</b>'
+            + _archetype_line(_hitter_archetype(r, hit_pctile, season, tag))
+            + f'<div style="margin-top:4px;">{narr}</div>')
     hrp = _n(r.get("HR_Probability"))
     if hrp > 0:
         drivers = _hrp_driver_str(r)
@@ -481,19 +609,26 @@ def _pitcher_score_breakdown(r, idx_recent=None):
         season, role, clauses = rp_score(r), "RP", _rp_clauses(r, comps)
     if not comps:
         return ""
-    html = f'<b style="color:{TEXT};">{role} score {season}.</b> {_score_narrative(clauses)}'
+    # SP blends recent form; RP is unblended (no recent line, header stays single-score).
+    rec = idx_recent.get(r.get("PlayerName", "")) if (role == "SP" and idx_recent) else None
+    rs  = pitcher_score(rec) if rec else 0
+    win = tag = None
+    if rs > 0:
+        ds  = int(_n(rec.get("Dataset")) or 0)
+        win = f"{ds}-day" if ds in (7, 15, 30) else "15-day"
+        tag = "hot" if rs > season else ("cold" if rs < season else "steady")
+    sc = f'<span style="color:{_score_text_hex(season)};font-weight:800;">{season}</span>'
+    if rs > 0:
+        rc = f'<span style="color:{_score_text_hex(rs)};font-weight:800;">{rs}</span>'
+        head = f"{role} score (season | {win}): {sc} | {rc} {_FORM_EMOJI[tag]}"
+    else:
+        head = f"{role} score {sc}"
+    narr = _score_narrative(clauses)
     if mult < 0.995:
-        html += f' Trimmed to {round(mult * 100)}% for small innings sample.'
-    if role == "SP" and idx_recent:
-        rec = idx_recent.get(r.get("PlayerName", ""))
-        if rec:
-            rs = pitcher_score(rec)
-            if rs > 0:
-                ds  = int(_n(rec.get("Dataset")) or 0)
-                win = f"{ds}-day" if ds in (7, 15, 30) else "15-day"
-                tag = "hot" if rs > season else ("cold" if rs < season else "steady")
-                html += (f' {win} form {rs} ({tag}) → shown blends '
-                         f'{round((1 - _BLEND_W) * 100)}% season / {round(_BLEND_W * 100)}% recent.')
+        narr += f' Trimmed to {round(mult * 100)}% for small innings sample.'
+    html = (f'<b style="color:{TEXT};">{head}</b>'
+            + _archetype_line(_pitcher_archetype(r, role, season, tag))
+            + f'<div style="margin-top:4px;">{narr}</div>')
     html += _pitcher_badge_context(r)
     html += _injury_context(r)
     return html
