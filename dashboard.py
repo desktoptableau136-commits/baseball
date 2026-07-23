@@ -23,7 +23,7 @@ from pathlib import Path
 
 import send_digest as sd
 from send_digest import (
-    SURFACE, SURFACE2, BORDER, TEXT, MUTED, ACCENT, GREEN, RED, YELLOW, ORANGE, CYAN,
+    SURFACE, SURFACE2, BORDER, TEXT, MUTED, ACCENT, GREEN, RED, YELLOW, ORANGE, CYAN, PINK,
     YEAR, MY_TEAM, _n, _is_sp, _fmt_ip, _starts_this_week,
     _project, _cat_win_prob, _CAT_DEC, _CAT_LABELS_MAP, _LOWER_BETTER,
     _CLOSE_THRESH, _TOSSUP_LO, _TOSSUP_HI,
@@ -685,7 +685,9 @@ def render_trade_radar(ctx):
     trades = ctx.get("trades") or []
 
     def pl(p, is_get):
-        chips = ""
+        # Same tactical skill badges as the digest trade cards + Trade Lab (PWR/SB or QS/K+/⚠),
+        # then the dashboard's own side-aware $/▼ + position chips.
+        chips = sd._trade_skill_badges(p, ctx.get("hit_pctile"))
         if p.get("_tsell"):
             tip = ("results ahead of his Statcast expected — regression risk, you'd be buying high"
                    if is_get else "results ahead of his Statcast expected — sell him high")
@@ -696,7 +698,7 @@ def render_trade_radar(ctx):
             chips += f' <span title="{tip}" style="color:{GREEN};font-weight:700;font-size:11px;cursor:help;">$</span>'
         if is_get and p.get("_tfillpos"):
             _pp = ",".join(p["_tfillpos"])
-            chips += f' <span title="upgrades your thin {_pp} — a position you rank near the bottom of the league" style="color:{CYAN};font-size:11px;cursor:help;">({_pp})</span>'
+            chips += f' <span title="upgrades your thin {_pp} — a position you rank near the bottom of the league" style="color:{PINK};font-size:11px;cursor:help;">({_pp})</span>'
         return (f'<div style="font-size:12px;line-height:1.5;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'
                 f'{sd.team_logo(p.get("Team"), 12)}<span style="color:{TEXT};">{p.get("PlayerName")}</span> '
                 f'{_score_pill_tip(p)}{chips}</div>')

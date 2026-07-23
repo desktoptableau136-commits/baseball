@@ -217,6 +217,11 @@ def k5_badge(k, row=None):
     tail = f" &mdash; {stat}" if stat else ""
     return _hit_badge("5K+", YELLOW, f"Projected {k} strikeouts (&ge; 5){tail}")
 
+# Season starter-skill badges (`sp_skill_badges` / `_sp_skill_context` / `_sp_qs_season`)
+# moved DOWN to fantasy/scoring.py (the pure badges + consts) and fantasy/analytics.py (the
+# `_sp_skill_context` "why", which needs `_badge_ctx_wrap`) so the trade engine + trade
+# renderers can reuse them; re-exported here via the facade. See the season-badge note there.
+
 # ── Blowup-risk (low-floor) flag for starters ────────────────────────────────────
 # A DISPLAY-ONLY, skill-based read of how prone a starter is to a disaster outing
 # (the ER/WHIP-wrecking 5+ ER start you can't take back once it's slotted). It is
@@ -240,37 +245,10 @@ def k5_badge(k, row=None):
 # over-fire "sell". De-bias against the league median gap → the flag means luckier/unluckier
 # than TYPICAL. Set live from the snapshot (like _LG / _SCORE_CALIB); 0.0 cold-start default.
 
-def hitter_badges(row, hit_pctile=None, cap=None):
-    """Concatenated tactical badge HTML for a hitter row (priority PWR→SB→BUY/SELL; `cap=None`
-    shows every applicable badge). `hit_pctile` is the league SB percentile pool
-    (build_cat_percentiles) — when None, SB is skipped."""
-    badges = []
-
-    # PWR — power/HR threat (modeled per-game HR probability). Highest priority.
-    hrp = _n(row.get("HR_Probability"))
-    if hrp >= _PWR_HRP_MIN:
-        badges.append(_hit_badge("PWR", PURPLE, _hrp_driver_str(row) or f"HR prob {hrp*100:.0f}%"))
-
-    # SB — genuine base-stealer (scarce, streamable). Percentile of actual SB, speed-corroborated.
-    if hit_pctile is not None:
-        sb = _n(row.get("SB"))
-        spd = _n(row.get("SprintSpeed"))
-        if sb > 0 and _cat_pctile(hit_pctile, "SB", sb) >= _SB_PCTILE_MIN and (spd <= 0 or spd >= _SB_SPEED_MIN):
-            _t = f"SB {sb:.0f}" + (f" · Sprint {spd:.1f} ft/s" if spd > 0 else "")
-            badges.append(_hit_badge("SB", SILVER, _t))
-
-    # BUY-LOW / SELL-HIGH — Statcast expected vs actual (skill-vs-luck read). Mutually exclusive.
-    avg, iso, xba, xslg = _n(row.get("AVG")), _n(row.get("ISO")), _n(row.get("xBA")), _n(row.get("xSLG"))
-    if avg > 0 and iso > 0 and xba > 0 and xslg > 0:
-        slg = iso + avg
-        d_ba, d_slg = xba - avg, xslg - slg
-        _rt = f"xBA {xba:.3f} vs AVG {avg:.3f} · xSLG {xslg:.3f} vs SLG {slg:.3f}"
-        if d_ba >= _XREG_BA and d_slg >= _XREG_SLG:
-            badges.append(_hit_badge("$", GREEN, _rt))
-        elif -d_ba >= _XREG_BA and -d_slg >= _XREG_SLG:
-            badges.append(_hit_badge("&#9660;", RED, _rt))
-
-    return "".join(badges[:cap])
+# `hitter_badges` moved DOWN to fantasy/analytics.py (it only needs analytics-level deps —
+# `_hrp_driver_str`/`_cat_pctile` — so the trade engine + trade renderers can reuse it);
+# re-exported here via the facade. A `regression=False` flag was added for the trade cards
+# (which render their own side-aware $/▼ from `_tsell`/`_tbuy`, so they skip the generic one).
 
 def fa_relievers(pitchers, claimed=None):
     claimed = claimed or set()
@@ -2394,6 +2372,14 @@ def build_glossary_section():
                "that day. <b>Hover</b> (or tap the Score pill) for the projected line that earned each one — the "
                "5K+ tooltip also names the K-skill behind it (whiff rate, whiff percentile, or K%). The QS% "
                "column shows season quality-start probability separately."),
+        _entry(f'QS / K+ season skill (trade cards){_hit_badge("QS", CYAN)}{_hit_badge("K+", YELLOW)}',
+               "On <b>Trade Radar</b>, <b>Pending Trades</b>, and the <b>Trade Lab</b>, these mark a starter's "
+               "<b>durable season skill</b> — not a single projected start: cyan <b>QS</b> = posts quality starts "
+               "at an elite season clip (top-fifth matchup-neutral season QS%); yellow <b>K+</b> = an "
+               "elite-strikeout arm (top-fifth season K rate). The season counterpart to the per-start QS / 5K+ "
+               "above — same glyphs, but a player <i>trait</i> you weigh when trading, so they're kept off the "
+               "streaming lists (My Upcoming Starts / FA SP) where the per-start chips live. <b>Hover</b> (or tap "
+               "the Score pill) for the numbers."),
         _entry(f'⚠ low floor{_hit_badge("&#9888;", ORANGE)}',
                "Warns a starter is <b>blowup-prone</b> — a skill profile at risk of the disaster outing (5+ ER) "
                "that wrecks your ERA/WHIP and can't be undone once it's in your lineup. Blends baserunner traffic "

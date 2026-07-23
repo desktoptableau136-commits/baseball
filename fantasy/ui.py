@@ -31,8 +31,9 @@ RED      = "#ef4444"
 YELLOW   = "#f59e0b"
 ORANGE   = "#ea580c"   # starter low-floor ⚠ badge (burnt orange) — deliberately distinct from the amber YELLOW 5K+ chip
 PURPLE   = "#a855f7"   # hitter PWR badge (translucent) — distinct from green/yellow/red
-CYAN     = "#22d3ee"   # pitcher QS badge (translucent) + Trade Radar position chip — QS + two-start can co-occur, so 2 moved to blue
+CYAN     = "#22d3ee"   # pitcher QS badge (translucent) — QS + two-start can co-occur, so 2 moved to blue
 SILVER   = "#c8d0da"   # hitter SB "Quicksilver" speed badge (metallic, distinct from TEXT/MUTED)
+PINK     = "#ec4899"   # Trade Radar "upgrades your thin {pos}" chip — its own hue (moved off CYAN, which now means only the QS season-skill badge on a trade card; pink collides with nothing else on the card)
 
 TH_S = f"padding:8px 10px;background:{SURFACE};color:{MUTED};font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.7px;border-bottom:2px solid {BORDER};white-space:nowrap;"
 TD_S = f"padding:7px 10px;border-bottom:1px solid {BORDER};color:{TEXT};font-size:13px;vertical-align:middle;"

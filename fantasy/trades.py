@@ -765,10 +765,24 @@ def _trade_score_reveal(score, breakdown_html, uid):
     return cell, div
 
 
+def _trade_skill_badges(r, hit_pctile=None):
+    """The Trade Lab's durable tactical skill badges, echoed onto a trade-card line so every
+    trade surface speaks the same badge language: PWR/SB for hitters, QS/K+ (season skill) +
+    ⚠ (blowup floor) for starters. Deliberately WITHOUT the $/▼ buy-low/sell-high chip — the
+    card renders its own side-aware directional version from _tsell/_tbuy just below, so
+    folding in the generic one would double it. RP carry no season-skill badge (SP-only)."""
+    if r.get("_tptype") == "hit":
+        return hitter_badges(r, hit_pctile, regression=False)
+    if _is_sp(r):
+        return sp_skill_badges(r) + blowup_badge(r)
+    return ""
+
+
 def _trade_player_line(r, hi_cats, hi_color, side, show_pos=False,
                        best_recent_p=None, best_recent_h=None, hit_pctile=None):
     """One player row inside a trade card: MLB logo + name + score badge + cat chips
-    (+ a CYAN position chip for a thin slot the incoming player upgrades, + the CANONICAL
+    (+ a PINK position chip for a thin slot the incoming player upgrades &mdash; PINK is its
+    own hue so it can't read as the cyan QS season-skill badge on an incoming SP, + the CANONICAL
     buy-low/sell-high chip — same glyph-only `$`/`▼` (green/red) as everywhere else in the
     digest, so the visual language stays consistent). `side` ('give'/'get') only tunes the
     hover tooltip; the whole-trade framing lives in the footer's sell-high/buy-low tag.
@@ -777,10 +791,11 @@ def _trade_player_line(r, hi_cats, hi_color, side, show_pos=False,
     logo  = team_logo(r.get("Team"), 14)
     nm    = str(r.get("PlayerName") or "")
     chips = _il_badge(r)   # injury chip first (most salient) — explains the _tval discount
+    chips += _trade_skill_badges(r, hit_pctile)   # PWR/SB or QS/K+/⚠ — the Trade Lab's tactical language
     chips += "".join(_hit_badge(_CAT_DISPLAY.get(c, c), hi_color, f"strong in {c}")
                      for c in sorted(r["_tcats"] & hi_cats))
     if show_pos:
-        chips += "".join(_hit_badge(p, CYAN, f"upgrades your thin {p}")
+        chips += "".join(_hit_badge(p, PINK, f"upgrades your thin {p}")
                          for p in r.get("_tfillpos", []))
     if r.get("_tsell"):
         tip = ("results ahead of his Statcast expected — sell him high"
@@ -795,7 +810,7 @@ def _trade_player_line(r, hi_cats, hi_color, side, show_pos=False,
     if r.get("_tptype") == "hit":
         bd = _hitter_score_breakdown(r, best_recent_h, hit_pctile)
     else:
-        bd = _pitcher_score_breakdown(r, best_recent_p)
+        bd = _pitcher_score_breakdown(r, best_recent_p) + _sp_skill_context(r)   # + QS/K+ "why"
     uid = _bd_uid("trade", nm) if bd else None
     score_html, reveal = _trade_score_reveal(int(round(r["_tscore"])), bd, uid)
     return (f'<div style="margin:3px 0;font-size:12px;color:{TEXT};white-space:nowrap;">'
