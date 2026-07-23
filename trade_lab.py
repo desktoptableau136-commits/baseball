@@ -380,18 +380,18 @@ def build_partner_fit(pitchers, hitters, roto, team_keys, ranks, n,
                         "verdict": words,
                         # Name only the cats the players I'd ACTUALLY send cover for them (the deal's
                         # own send_cats), not the roster-wide surplus∩needs intersection — so the
-                        # "you're deep in X (their holes)" prose can't overclaim.
+                        # "you're deep in X (their needs)" prose can't overclaim.
                         "whyOffer": [CAT_LABELS.get(c, c) for c in best.get("send_cats", [])],
                         "whyGet": _fit_get_tags(best["ins"], my_needs),
                     })
                 elif not i_offer and not they_offer:
                     records.append({"team": rival, "tier": "NOFIT",
-                        "why": "Category twins — you share the same strengths and the same holes. "
+                        "why": "Category twins — you share the same strengths and the same needs. "
                                "Nothing to arbitrage."})
                 elif not i_offer:
                     records.append({"team": rival, "tier": "ONEWAY",
                         "why": "They have pieces you'd want, but they're strong everywhere you are — "
-                               "you can't fill a hole of theirs, so you'd overpay."})
+                               "you can't fill a need of theirs, so you'd overpay."})
                 else:
                     records.append({"team": rival, "tier": "SLIM",
                         "why": "Some overlap on paper, but no clean, near-even deal came together. "
@@ -439,7 +439,7 @@ def build_html(data):
   <details id="fitboard" open>
     <summary class="fbsum">
       <div class="fbhead"><span class="fbtitle">Who should you be trading with?</span><span class="fbtoggle">Targets</span></div>
-      <div class="fbsub" id="fbholes"></div>
+      <div class="fbsub" id="fbneeds"></div>
     </summary>
     <div class="fblegend">
       <span><b style="color:{GREEN}">BEST TARGET</b> &mdash; realistic deal, lands a need</span>
@@ -1562,9 +1562,9 @@ function fitCard(r) {{
     var why = '';
     if ((r.whyOffer && r.whyOffer.length) || (r.whyGet && r.whyGet.length)) {{
       var off = (r.whyOffer && r.whyOffer.length) ? r.whyOffer.join('/') : 'what they lack';
-      var got = (r.whyGet && r.whyGet.length) ? r.whyGet.join('/') : 'a hole of yours';
+      var got = (r.whyGet && r.whyGet.length) ? r.whyGet.join('/') : 'a need of yours';
       why = '<div class="fbwhy"><span class="wl">Why it works:</span> you\'re deep in ' + off
-          + ' (their holes); they can spare the ' + got + ' you need.</div>';
+          + ' (their needs); they can spare the ' + got + ' you need.</div>';
     }}
     return '<div class="fbcard">' + head + deal + verdict + why + '</div>';
   }}
@@ -1576,12 +1576,12 @@ function fitCard(r) {{
 function renderFitBoard() {{
   var myTk = document.getElementById('selL').value;
   var meta = DATA.teamsMeta[myTk] || {{ needs:[], need_pos:{{}}, name:myTk }};
-  var hEl = document.getElementById('fbholes');
+  var hEl = document.getElementById('fbneeds');
   if (hEl) {{
-    var holes = (meta.needs || []).map(function(c) {{ return DATA.catLabels[c] || c; }});
+    var needs = (meta.needs || []).map(function(c) {{ return DATA.catLabels[c] || c; }});
     var pos = Object.keys(meta.need_pos || {{}});
     var bits = [];
-    if (holes.length) bits.push('holes <b class="w">' + holes.join(', ') + '</b>');
+    if (needs.length) bits.push('needs <b class="w">' + needs.join(', ') + '</b>');
     if (pos.length)   bits.push('thin at <b class="w">' + pos.join(', ') + '</b>');
     hEl.innerHTML = (meta.name || myTk) + (bits.length ? ' &middot; ' + bits.join(' &middot; ') : '');
   }}

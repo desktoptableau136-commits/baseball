@@ -324,7 +324,7 @@ def _score_narrative(clauses):
     if s_txt and w_txt:
         return f"Carried by {' and '.join(s_txt)}; held back by {', '.join(w_txt)}."
     if s_txt:
-        return f"Carried by {' and '.join(s_txt)}; no glaring holes."
+        return f"Carried by {' and '.join(s_txt)}; no glaring weaknesses."
     if w_txt:
         return f"Held back by {', '.join(w_txt)}."
     return "Balanced across the board — no standout strength or weakness."
