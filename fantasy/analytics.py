@@ -11,6 +11,7 @@ byte-identical; those lower names are NOT re-exported from here. send_digest re-
 this module's own names via `from fantasy.analytics import *`.
 """
 import math
+from datetime import datetime
 
 from name_utils import _name_key
 from fantasy.ui import *        # noqa: F401,F403 -- palette + primitives used by moved bodies
@@ -33,6 +34,60 @@ def _on_il(r):
     if isinstance(v, str):
         return v.strip().lower() == "true"
     return bool(v)
+
+
+# Plain-English injury read for the tap-to-expand score panel: which IL tier the player is on
+# and how long/bad the absence is. ESPN exposes only its status vocabulary (no body-part free
+# text), so "how bad" maps to the DL tier. The severity ordering mirrors trades._IL_TVAL_MULT
+# so the panel prose and the trade-value discount tell one story. {status: prose}.
+_INJURY_CTX = {
+    "SIXTY_DAY_DL":   "on the <b>60-day IL</b> &mdash; a long-term absence (likely out for months); trade value is deeply discounted.",
+    "OUT":            "<b>ruled OUT</b> &mdash; not available to play; trade value is deeply discounted.",
+    "FIFTEEN_DAY_DL": "on the <b>15-day IL</b> &mdash; expected to miss a couple of weeks; trade value lightly discounted.",
+    "TEN_DAY_DL":     "on the <b>10-day IL</b> &mdash; a short-term absence, likely back within a week or two; trade value lightly discounted.",
+    "IL":             "on the <b>IL</b> &mdash; currently unavailable; trade value discounted.",
+    "DAY_TO_DAY":     "<b>day-to-day</b> &mdash; a minor, nagging injury; likely still plays, barely discounted.",
+}
+
+
+def _injury_detail_str(r):
+    """The body-part / detail / expected-return specifics (from ESPN's public injuries API, stored
+    on the row by fetch_data.attach_injury_notes) as a joined muted string, or "" when absent. Same
+    'BodyPart — Detail · exp. return Mon D' shape the digest's Roster Alerts uses, so the two agree."""
+    parts = []
+    bp  = str(r.get("InjuryBodyPart") or "").strip()
+    det = str(r.get("InjuryDetail") or "").strip()
+    if bp:
+        parts.append(f"{bp}{' &mdash; ' + det if det else ''}")
+    rd = str(r.get("InjuryReturnDate") or "").strip()
+    if rd:
+        try:
+            dt = datetime.strptime(rd[:10], "%Y-%m-%d")
+            parts.append(f"exp. return {dt.strftime('%b')} {dt.day}")
+        except Exception:
+            pass
+    return "; ".join(parts)
+
+
+def _injury_context(r):
+    """Injury line for the tap-to-expand score panel — names WHICH side of the IL a player is
+    on and HOW bad/long the absence is (plus the body part + expected return when the snapshot
+    carries them), so a manager weighing any move (especially a trade) sees why he's unavailable
+    and why his trade value took a hit. Appears on EVERY surface the score breakdown feeds. Reads
+    ESPN_Status first (rostered rows), then FreeAgentInjuryStatus (FA); an IL-slot player with a
+    stale/blank status still gets a generic IL note via the _on_il fallback. "" for a healthy,
+    active player."""
+    status = (str(r.get("ESPN_Status") or "").strip().upper()
+              or str(r.get("FreeAgentInjuryStatus") or "").strip().upper())
+    txt = _INJURY_CTX.get(status)
+    if txt is None and _on_il(r):
+        txt = "on the <b>IL</b> &mdash; currently unavailable; trade value discounted."
+    if not txt:
+        return ""
+    detail = _injury_detail_str(r)
+    detail_html = (f' <span style="color:{MUTED};">({detail})</span>' if detail else '')
+    return (f'<div style="margin-top:6px;color:{YELLOW};">'
+            f'&#129657; Injury: <span style="color:{TEXT};">{txt}</span>{detail_html}</div>')
 
 
 def team_category_ranks(roto_rows):
@@ -411,6 +466,7 @@ def _hitter_score_breakdown(r, idx_recent=None, hit_pctile=None):
         line += f' ({drivers})' if drivers else ''
         html += f'<div style="margin-top:6px;color:{MUTED};">{line}</div>'
     html += _hit_badge_context(r, hit_pctile)
+    html += _injury_context(r)
     return html
 
 
@@ -439,6 +495,7 @@ def _pitcher_score_breakdown(r, idx_recent=None):
                 html += (f' {win} form {rs} ({tag}) → shown blends '
                          f'{round((1 - _BLEND_W) * 100)}% season / {round(_BLEND_W * 100)}% recent.')
     html += _pitcher_badge_context(r)
+    html += _injury_context(r)
     return html
 
 

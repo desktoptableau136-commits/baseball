@@ -2258,6 +2258,54 @@ def get_all_prev_matchups(league) -> dict:
 
 # â”€â”€ MAIN â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
+def fetch_injury_notes():
+    """MLB injury body-part / detail / expected-return from ESPN's PUBLIC sports API (no auth) --
+    a SEPARATE endpoint from the fantasy injuryStatus enum (ESPN_Status), which carries only the
+    DL tier. Keyed by _name_key so it joins the accent/suffix-insensitive way the rest of the
+    pipeline does. Each value = {body_part, detail, return_date}. Broad try/except -> {} so a
+    fetch hiccup never breaks the run (rows just carry no injury detail). Mirrors the live copy in
+    send_digest.fetch_injury_notes, but stored on rows here so EVERY snapshot reader (digest score
+    dropdowns AND the browser-only Trade Lab) gets the detail without a network call of its own."""
+    try:
+        url = "https://site.api.espn.com/apis/site/v2/sports/baseball/mlb/injuries"
+        resp = requests.get(url, timeout=8)
+        data = resp.json()
+        notes = {}
+        for team_block in data.get("injuries", []):
+            for inj in team_block.get("injuries", []):
+                name = (inj.get("athlete") or {}).get("displayName", "")
+                if not name:
+                    continue
+                key = _name_key(name)
+                if not key or key in notes:
+                    continue
+                details = inj.get("details") or {}
+                notes[key] = {
+                    "body_part":   details.get("type", "") or "",
+                    "detail":      details.get("detail", "") or "",
+                    "return_date": details.get("returnDate", "") or "",
+                }
+        return notes
+    except Exception:
+        return {}
+
+
+def attach_injury_notes(rows, notes):
+    """Broadcast injury body-part/detail/return-date onto every player row whose name matches an
+    ESPN injuries-API entry (by _name_key). Sparse by nature -- only injured players match, so
+    healthy rows simply carry no keys. Read by analytics._injury_context to enrich the score-pill
+    dropdown with which side of the IL a player is on and how bad the injury is."""
+    if not notes:
+        return
+    for r in rows:
+        note = notes.get(_name_key(r.get("PlayerName", "")))
+        if not note:
+            continue
+        r["InjuryBodyPart"]   = note["body_part"]
+        r["InjuryDetail"]     = note["detail"]
+        r["InjuryReturnDate"] = note["return_date"]
+
+
 def main():
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -2356,6 +2404,13 @@ def main():
     pending_trades = get_pending_trades(league, my_team)
     _n_in = sum(1 for t in pending_trades if t.get("incoming"))
     print(f"       {len(pending_trades)} pending trade(s) ({_n_in} incoming)")
+
+    print("       Fetching MLB injury notes (body part / detail / return date)...")
+    _inj_notes = fetch_injury_notes()
+    attach_injury_notes(pitchers, _inj_notes)
+    attach_injury_notes(hitters, _inj_notes)
+    _n_inj = sum(1 for r in pitchers + hitters if r.get("InjuryBodyPart"))
+    print(f"       {len(_inj_notes)} injured MLB players; detail attached to {_n_inj} rows")
 
     # Total roster cap = max total players (active + IL) on any team. The fullest team is at the cap.
     # send_digest uses: open_spots = league_total_roster_max - my_total → free pickup if > 0.

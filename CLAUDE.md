@@ -192,7 +192,9 @@ The single source for every snapshot reader — `build_email`, `dashboard.build_
 
 **Pitchers:** `PlayerName`, `FantasyTeam`, `Position`, `Dataset` (7/15/30/2026), `IP`, `K`, `ERA`, `WHIP`, `GS`, `SVHD`, `K/IP`, `Kpct_P`, `IP_per_G`, `PSP_Date`, `PSP_HomeVAway`, `PSP_Projected`, `PSP_Dates` (list), `PSP_HomeVAways`, `Team_OPS_Value`, `Team_K_Value`, `BarrelPctAllowed`, `HardHitPctAllowed`, `AvgEVAllowed`, `xERA`, `xwOBA_against`, `WhiffPctile`, `WhiffPct` (raw rate, display-only), `ESPN_SV`, `ESPN_K`, `ESPN_W`, `ESPN_IP`, `ESPN_GS`, `ESPN_GP`, `ESPN_SVHD`, `ESPN_Status`, `ESPN_OnIL`, `FreeAgentInjuryStatus`, `FA_Matched`, `Source` (`"FP"` = from the FantasyPros scrape, `"ESPN"` = an off-FP row seeded from ESPN's breakdown — see the off-FP seeding gotcha)
 
-**Hitters:** `PlayerName`, `FantasyTeam`, `Position`, `Dataset`, `HR`, `RBI`, `R`, `SB`, `AVG`, `OPS`, `wRCplus`, `xwOBA`, `xBA`, `xSLG`, `SprintSpeed`, `ISO`, `Barrel_Pct`, `HardHit_Pct`, `HR_Probability`, `ESPN_Status`, `ESPN_OnIL`, `FreeAgentInjuryStatus`, `FA_Matched`, `Source` (`"FP"` = from the FantasyPros scrape, `"ESPN"` = an off-FP row seeded from ESPN's breakdown — see the off-FP seeding gotcha)
+**Hitters:** `PlayerName`, `FantasyTeam`, `Position`, `Dataset`, `HR`, `RBI`, `R`, `SB`, `AVG`, `OPS`, `wRCplus`, `xwOBA`, `xBA`, `xSLG`, `SprintSpeed`, `ISO`, `Barrel_Pct`, `HardHit_Pct`, `HR_Probability`, `ESPN_Status`, `ESPN_OnIL`, `FreeAgentInjuryStatus`, `FA_Matched`, `Source`
+
+**Injury detail (both pitchers & hitters, SPARSE — injured players only):** `InjuryBodyPart`, `InjuryDetail`, `InjuryReturnDate` — from ESPN's public MLB injuries API via `fetch_data.attach_injury_notes` (a separate endpoint from the `ESPN_Status` DL-tier enum). Feed `analytics._injury_context`'s score-pill dropdown line. NOT in `snapshot_schema._ROW_FIELDS` (only injured rows carry them). See `docs/fetch_pipeline.md`. (`"FP"` = from the FantasyPros scrape, `"ESPN"` = an off-FP row seeded from ESPN's breakdown — see the off-FP seeding gotcha)
 
 **Roto:** `Team`, `Week`, `Roto_Score`, `{CAT}_Points` for each of 12 categories
 
