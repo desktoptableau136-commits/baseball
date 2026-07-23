@@ -233,10 +233,10 @@ Five bands separated by `band_divider()` rules. The Triage divider renders only 
 BG="#080e1c"  SURFACE="#101827"  SURFACE2="#0d1424"  BORDER="#1e2d45"
 TEXT="#e2e8f0"  MUTED="#64748b"  ACCENT="#3b82f6"
 GREEN="#22c55e"  RED="#ef4444"  YELLOW="#f59e0b"  ORANGE="#ea580c"  PURPLE="#a855f7"
-CYAN="#22d3ee"  SILVER="#c8d0da"
+CYAN="#22d3ee"  SILVER="#c8d0da"  PINK="#ec4899"
 ```
 
-`PURPLE` is the hitter **PWR** badge (translucent). `CYAN` is the pitcher **QS** badge. The pitcher two-start badge is `ACCENT` (blue) — a solid-fill chip labelled just **2** (also the dashboard `×2` markers), white text on blue; it moved off cyan so cyan could go to QS (QS + two-start CAN co-occur on the same pitcher row, so they need distinct hues). `ORANGE` (burnt orange `#ea580c`) is the starter low-floor **⚠** badge (glyph-only, translucent) — a SEPARATE constant from the amber `YELLOW` 5K+ chip **on purpose**: on a pitcher row ⚠ and 5K+ can co-occur, and same-hue amber made them read alike. `GREEN`/`RED` also carry the hitter buy-low **$** / sell-high **▼** chips. `SILVER` is the hitter **SB** ("Quicksilver") badge. My team name is always `font-weight:800;color:{ACCENT}` with a ← arrow.
+`PURPLE` is the hitter **PWR** badge (translucent). `CYAN` is the pitcher **QS** badge. The pitcher two-start badge is `ACCENT` (blue) — a solid-fill chip labelled just **2** (also the dashboard `×2` markers), white text on blue; it moved off cyan so cyan could go to QS (QS + two-start CAN co-occur on the same pitcher row, so they need distinct hues). `ORANGE` (burnt orange `#ea580c`) is the starter low-floor **⚠** badge (glyph-only, translucent) — a SEPARATE constant from the amber `YELLOW` 5K+ chip **on purpose**: on a pitcher row ⚠ and 5K+ can co-occur, and same-hue amber made them read alike. `GREEN`/`RED` also carry the hitter buy-low **$** / sell-high **▼** chips. `SILVER` is the hitter **SB** ("Quicksilver") badge. `PINK` (`#ec4899`) is the Trade Radar / Pending Trades / dashboard **"upgrades your thin {pos}"** chip — its own hue so it can't be mistaken for the cyan **QS** season-skill badge on an incoming SP (both can land on the same card). My team name is always `font-weight:800;color:{ACCENT}` with a ← arrow.
 
 ## Automation
 

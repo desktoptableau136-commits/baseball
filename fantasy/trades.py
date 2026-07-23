@@ -781,7 +781,8 @@ def _trade_skill_badges(r, hit_pctile=None):
 def _trade_player_line(r, hi_cats, hi_color, side, show_pos=False,
                        best_recent_p=None, best_recent_h=None, hit_pctile=None):
     """One player row inside a trade card: MLB logo + name + score badge + cat chips
-    (+ a CYAN position chip for a thin slot the incoming player upgrades, + the CANONICAL
+    (+ a PINK position chip for a thin slot the incoming player upgrades &mdash; PINK is its
+    own hue so it can't read as the cyan QS season-skill badge on an incoming SP, + the CANONICAL
     buy-low/sell-high chip — same glyph-only `$`/`▼` (green/red) as everywhere else in the
     digest, so the visual language stays consistent). `side` ('give'/'get') only tunes the
     hover tooltip; the whole-trade framing lives in the footer's sell-high/buy-low tag.
@@ -794,7 +795,7 @@ def _trade_player_line(r, hi_cats, hi_color, side, show_pos=False,
     chips += "".join(_hit_badge(_CAT_DISPLAY.get(c, c), hi_color, f"strong in {c}")
                      for c in sorted(r["_tcats"] & hi_cats))
     if show_pos:
-        chips += "".join(_hit_badge(p, CYAN, f"upgrades your thin {p}")
+        chips += "".join(_hit_badge(p, PINK, f"upgrades your thin {p}")
                          for p in r.get("_tfillpos", []))
     if r.get("_tsell"):
         tip = ("results ahead of his Statcast expected — sell him high"
