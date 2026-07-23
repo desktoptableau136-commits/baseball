@@ -684,6 +684,41 @@ def pitcher_regression_badge(row):
     return _hit_badge("&#9660;", RED, gap + " &mdash; ERA below expected, regression risk (sell-high)")
 
 
+# ── Season starter-skill badges (the SEASON analog of the per-start QS / 5K+ chips) ──
+# qs_badge/k5_badge (send_digest) describe ONE projected outing (streaming surfaces); these
+# read a starter's DURABLE season skill — quality-start reliability + strikeout rate — so
+# they belong on trade surfaces (Trade Lab + Trade Radar / Pending Trades / dashboard tile).
+# Kept OFF the digest's My Upcoming Starts / FA SP, where the per-start chips already live,
+# so the two QS meanings never collide. Thresholds grounded in the qualified-SP distribution
+# (~top fifth each); QS is matchup-neutralized so it reads season skill, not this week's opp.
+_QS_SEASON_MIN   = 55     # season QS% for the 'reliable QS arm' badge (~top fifth of qualified SP)
+_K_SEASON_MIN    = 0.26   # season K rate for the 'strikeout arm' badge (~top fifth of qualified SP)
+_SP_SKILL_MIN_IP = 30     # IP floor so a small-sample hot start can't false-fire either badge
+
+
+def _sp_qs_season(row):
+    """Season QS% with the next-opponent term stripped -> pure, matchup-neutral season skill,
+    or None when the row isn't a qualified starter."""
+    if not _is_sp(row) or _n(row.get("IP")) < _SP_SKILL_MIN_IP:
+        return None
+    return qs_probability({**row, "Team_OPS_Value": -1})   # -1 skips qs_probability's opp-OPS term
+
+
+def sp_skill_badges(row, cap=None):
+    """Durable season-skill badges for a STARTER: 'QS' (cyan) when he posts quality starts at
+    an elite season clip, 'K+' (yellow) when he's an elite-strikeout arm. Season analog of the
+    per-start qs_badge/k5_badge; shown on the trade surfaces (see the note above)."""
+    badges = []
+    qsp = _sp_qs_season(row)
+    if qsp is not None and qsp >= _QS_SEASON_MIN:
+        badges.append(_hit_badge("QS", CYAN, f"Reliable quality starts &mdash; {qsp}% season QS rate (elite)"))
+    if _is_sp(row) and _n(row.get("IP")) >= _SP_SKILL_MIN_IP:
+        kpct = _n(row.get("Kpct_P"))
+        if kpct >= _K_SEASON_MIN:
+            badges.append(_hit_badge("K+", YELLOW, f"Strikeout arm &mdash; {kpct*100:.0f}% K rate (top tier)"))
+    return "".join(badges[:cap])
+
+
 _ERA_REG_PRIOR_IP = 40.0  # ER-projection ERA-regression strength (see _proj_line_vals)
 
 

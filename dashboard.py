@@ -685,7 +685,9 @@ def render_trade_radar(ctx):
     trades = ctx.get("trades") or []
 
     def pl(p, is_get):
-        chips = ""
+        # Same tactical skill badges as the digest trade cards + Trade Lab (PWR/SB or QS/K+/⚠),
+        # then the dashboard's own side-aware $/▼ + position chips.
+        chips = sd._trade_skill_badges(p, ctx.get("hit_pctile"))
         if p.get("_tsell"):
             tip = ("results ahead of his Statcast expected — regression risk, you'd be buying high"
                    if is_get else "results ahead of his Statcast expected — sell him high")

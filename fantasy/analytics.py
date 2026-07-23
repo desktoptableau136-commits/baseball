@@ -308,6 +308,62 @@ def _hit_badge_context(row, hit_pctile=None, cap=None):
     return _badge_ctx_wrap(lines[:cap])
 
 
+def hitter_badges(row, hit_pctile=None, cap=None, regression=True):
+    """Concatenated tactical badge HTML for a hitter row (priority PWR->SB->BUY/SELL; `cap=None`
+    shows every applicable badge). `hit_pctile` is the league SB percentile pool
+    (build_cat_percentiles) — when None, SB is skipped. `regression=False` drops the $/▼
+    buy-low/sell-high chip — used by the trade cards, which render their own side-aware
+    directional version from `_tsell`/`_tbuy` and would otherwise show it twice."""
+    badges = []
+
+    # PWR — power/HR threat (modeled per-game HR probability). Highest priority.
+    hrp = _n(row.get("HR_Probability"))
+    if hrp >= _PWR_HRP_MIN:
+        badges.append(_hit_badge("PWR", PURPLE, _hrp_driver_str(row) or f"HR prob {hrp*100:.0f}%"))
+
+    # SB — genuine base-stealer (scarce, streamable). Percentile of actual SB, speed-corroborated.
+    if hit_pctile is not None:
+        sb = _n(row.get("SB"))
+        spd = _n(row.get("SprintSpeed"))
+        if sb > 0 and _cat_pctile(hit_pctile, "SB", sb) >= _SB_PCTILE_MIN and (spd <= 0 or spd >= _SB_SPEED_MIN):
+            _t = f"SB {sb:.0f}" + (f" · Sprint {spd:.1f} ft/s" if spd > 0 else "")
+            badges.append(_hit_badge("SB", SILVER, _t))
+
+    # BUY-LOW / SELL-HIGH — Statcast expected vs actual (skill-vs-luck read). Mutually exclusive.
+    if regression:
+        avg, iso, xba, xslg = _n(row.get("AVG")), _n(row.get("ISO")), _n(row.get("xBA")), _n(row.get("xSLG"))
+        if avg > 0 and iso > 0 and xba > 0 and xslg > 0:
+            slg = iso + avg
+            d_ba, d_slg = xba - avg, xslg - slg
+            _rt = f"xBA {xba:.3f} vs AVG {avg:.3f} · xSLG {xslg:.3f} vs SLG {slg:.3f}"
+            if d_ba >= _XREG_BA and d_slg >= _XREG_SLG:
+                badges.append(_hit_badge("$", GREEN, _rt))
+            elif -d_ba >= _XREG_BA and -d_slg >= _XREG_SLG:
+                badges.append(_hit_badge("&#9660;", RED, _rt))
+
+    return "".join(badges[:cap])
+
+
+def _sp_skill_context(row):
+    """Tap-to-expand 'why' for the season QS / K+ badges (`sp_skill_badges`, in scoring) —
+    mirrors `_sp_badge_context` so a trade surface's score panel explains the chips shown.
+    Empty when neither fires."""
+    lines = []
+    qsp = _sp_qs_season(row)
+    if qsp is not None and qsp >= _QS_SEASON_MIN:
+        lines.append(f'{_hit_badge("QS", CYAN)} reliable quality starts &mdash; {qsp}% season QS rate '
+                     f'(elite; league avg ~38%). A durable skill read, not this week&rsquo;s matchup.')
+    if _is_sp(row) and _n(row.get("IP")) >= _SP_SKILL_MIN_IP:
+        kpct = _n(row.get("Kpct_P"))
+        if kpct >= _K_SEASON_MIN:
+            whiff, wpct = _n(row.get("WhiffPct")), _n(row.get("WhiffPctile"))
+            extra = (f", {whiff:.0f}% whiff" if whiff > 0
+                     else (f", {wpct:.0f}th-pctile whiff" if wpct > 0 else ""))
+            lines.append(f'{_hit_badge("K+", YELLOW)} strikeout arm &mdash; {kpct*100:.0f}% season K rate '
+                         f'(top tier{extra}).')
+    return _badge_ctx_wrap(lines)
+
+
 def _hitter_score_breakdown(r, idx_recent=None, hit_pctile=None):
     """Prose breakdown of a hitter's Score for the tap-to-expand panel."""
     comps, mult = hitter_score(r, _parts=True)
