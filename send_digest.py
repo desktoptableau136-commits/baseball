@@ -2348,7 +2348,9 @@ def build_glossary_section():
                "In the browser-opened attachment it expands on tap into a full-width row below the player that "
                "explains, in plain English, the 2-3 drivers behind the number (e.g. &ldquo;carried by "
                "swing-and-miss and a low WHIP; held back by hard contact&rdquo;) plus the season-vs-recent "
-               "blend. The ▾ caret marks a tappable badge; ✕ (or tapping another badge) closes it."),
+               "blend. If the player is hurt it ends with a 🩹 <b>Injury</b> line — which side of the IL "
+               "he's on (10 / 15 / 60-day, OUT, or day-to-day), the body part and specifics, and his "
+               "expected return. The ▾ caret marks a tappable badge; ✕ (or tapping another badge) closes it."),
         _entry(f'Hot / cold{_mark("&#128293;", GREEN)}{_mark("&#10052;", ACCENT)}',
                "In the Hot/Cold columns, 🔥 (or ↑) marks a player running <b>hot</b> vs his season baseline "
                "over the recent window (7-day OPS for hitters, 15-day ERA for pitchers); ❄ (or ↓) marks "
