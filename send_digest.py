@@ -217,6 +217,56 @@ def k5_badge(k, row=None):
     tail = f" &mdash; {stat}" if stat else ""
     return _hit_badge("5K+", YELLOW, f"Projected {k} strikeouts (&ge; 5){tail}")
 
+# ── Season starter-skill badges (the SEASON analog of the per-start QS / 5K+ chips) ──
+# qs_badge/k5_badge describe ONE projected outing (streaming surfaces); these read a
+# starter's DURABLE season skill — quality-start reliability + strikeout rate — so they
+# belong on trade cards. Trade-Lab-only: deliberately kept OFF My Upcoming Starts / FA SP,
+# where the per-start chips already live, so the two QS meanings never collide. Thresholds
+# grounded in the qualified-SP distribution (~top fifth each); QS is matchup-neutralized so
+# it reads season skill, not this week's opponent.
+_QS_SEASON_MIN   = 55     # season QS% for the 'reliable QS arm' badge (~top fifth of qualified SP)
+_K_SEASON_MIN    = 0.26   # season K rate for the 'strikeout arm' badge (~top fifth of qualified SP)
+_SP_SKILL_MIN_IP = 30     # IP floor so a small-sample hot start can't false-fire either badge
+
+def _sp_qs_season(row):
+    """Season QS% with the next-opponent term stripped → pure, matchup-neutral season skill,
+    or None when the row isn't a qualified starter."""
+    if not _is_sp(row) or _n(row.get("IP")) < _SP_SKILL_MIN_IP:
+        return None
+    return qs_probability({**row, "Team_OPS_Value": -1})   # -1 skips qs_probability's opp-OPS term
+
+def sp_skill_badges(row, cap=None):
+    """Durable season-skill badges for a STARTER: 'QS' (cyan) when he posts quality starts at
+    an elite season clip, 'K+' (yellow) when he's an elite-strikeout arm. Season analog of the
+    per-start qs_badge/k5_badge; Trade-Lab-only (see the note above)."""
+    badges = []
+    qsp = _sp_qs_season(row)
+    if qsp is not None and qsp >= _QS_SEASON_MIN:
+        badges.append(_hit_badge("QS", CYAN, f"Reliable quality starts &mdash; {qsp}% season QS rate (elite)"))
+    if _is_sp(row) and _n(row.get("IP")) >= _SP_SKILL_MIN_IP:
+        kpct = _n(row.get("Kpct_P"))
+        if kpct >= _K_SEASON_MIN:
+            badges.append(_hit_badge("K+", YELLOW, f"Strikeout arm &mdash; {kpct*100:.0f}% K rate (top tier)"))
+    return "".join(badges[:cap])
+
+def _sp_skill_context(row):
+    """Tap-to-expand 'why' for the season QS / K+ badges — mirrors _sp_badge_context so the
+    Trade Lab score panel explains the chips shown. Empty when neither fires."""
+    lines = []
+    qsp = _sp_qs_season(row)
+    if qsp is not None and qsp >= _QS_SEASON_MIN:
+        lines.append(f'{_hit_badge("QS", CYAN)} reliable quality starts &mdash; {qsp}% season QS rate '
+                     f'(elite; league avg ~38%). A durable skill read, not this week&rsquo;s matchup.')
+    if _is_sp(row) and _n(row.get("IP")) >= _SP_SKILL_MIN_IP:
+        kpct = _n(row.get("Kpct_P"))
+        if kpct >= _K_SEASON_MIN:
+            whiff, wpct = _n(row.get("WhiffPct")), _n(row.get("WhiffPctile"))
+            extra = (f", {whiff:.0f}% whiff" if whiff > 0
+                     else (f", {wpct:.0f}th-pctile whiff" if wpct > 0 else ""))
+            lines.append(f'{_hit_badge("K+", YELLOW)} strikeout arm &mdash; {kpct*100:.0f}% season K rate '
+                         f'(top tier{extra}).')
+    return _badge_ctx_wrap(lines)
+
 # ── Blowup-risk (low-floor) flag for starters ────────────────────────────────────
 # A DISPLAY-ONLY, skill-based read of how prone a starter is to a disaster outing
 # (the ER/WHIP-wrecking 5+ ER start you can't take back once it's slotted). It is

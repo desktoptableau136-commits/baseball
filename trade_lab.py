@@ -239,8 +239,9 @@ def _serialize(r, role, best_recent_h, best_recent_p, hit_pctile):
         badges    = sd.hitter_badges(r, hit_pctile)
         breakdown = sd._hitter_score_breakdown(r, best_recent_h, hit_pctile)
     elif role == "sp":
-        badges    = sd.blowup_badge(r) + sd.pitcher_regression_badge(r)
-        breakdown = sd._pitcher_score_breakdown(r, best_recent_p)
+        # Season skill (QS / K+) first, then the risk flags (blowup ⚠ / regression $ ▼).
+        badges    = sd.sp_skill_badges(r) + sd.blowup_badge(r) + sd.pitcher_regression_badge(r)
+        breakdown = sd._pitcher_score_breakdown(r, best_recent_p) + sd._sp_skill_context(r)
     else:
         badges    = sd.pitcher_regression_badge(r)
         breakdown = sd._pitcher_score_breakdown(r, best_recent_p)
