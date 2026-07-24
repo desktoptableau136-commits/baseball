@@ -4826,7 +4826,10 @@ def build_email(snap, override_team=None):
     # Pending trade offers (graded once above; the section renders the full cards).
     pending_section = build_pending_trades_section(
         graded_pending, best_recent_p, best_recent_h, hit_pctile, team_logos=team_logos)
-    body_parts += [
+    # Top matchup sections stay always-visible (the daily-glance summary the "Jump to"
+    # pills sit above); the four labelled bands below become collapsible <details> that
+    # default to collapsed and open when their matching nav pill is clicked.
+    top_sections = [
         build_prev_matchup_recap(prev_matchup, team_logos=team_logos) if is_monday and prev_matchup.get("week") != (matchup or {}).get("week") else "",  # 2a MONDAY RECAP
         week_overview,                                                                    # 2  WEEK INTELLIGENCE
         build_category_pulse(matchup, weekly_avgs=weekly_avgs, days_elapsed=days_elapsed, remaining_proj=pit_proj, is_sunday=is_sunday, weekly_std=weekly_std, matchup_days=matchup_period_days, game_days_elapsed=game_days_elapsed, matchup_game_days=matchup_game_days), # 3
@@ -4838,7 +4841,8 @@ def build_email(snap, override_team=None):
                               weekly_avgs=weekly_avgs, days_elapsed=days_elapsed,
                               remaining_proj=pit_proj, matchup_days=matchup_period_days,
                               game_days_elapsed=game_days_elapsed, matchup_game_days=matchup_game_days),  # 5
-        band_divider("MY ROSTER", anchor="band-myroster"),                                # MY TEAM band header
+    ]
+    myroster_band = "\n".join(p for p in [
         alert_section,                                                                    # 1  ALERTS (top of My Roster)
         bench_watch,                                                                      # 1b Lineup Watch (matchup-to-date bench leakage / blowups / idle hitters)
         pos_section,                                                                      # 10 Positional Breakdown (moved to top of My Roster)
@@ -4846,7 +4850,8 @@ def build_email(snap, override_team=None):
         my_rp_section,                                                                    # 7
         build_pitcher_hot_cold_section(pitchers, my_team, rec_p, best_recent_p),         # 8
         build_hot_cold_section(hitters, recent_hitting, my_team, best_recent_h, hit_pctile),  # 9
-        band_divider("TRANSACTIONS", anchor="band-fa"),                                   # ACTION band header (FA pickups + Trade Radar)
+    ] if p)
+    transactions_band = "\n".join(p for p in [
         _matchup_closing_note(today_str == week_end_str),                                 # end-of-matchup: pickups can't swing today's closing matchup
         pending_section,                                                                  # 10b Pending Trades (real offers — Accept/Counter/Decline)
         fa_sp_section,                                                                    # 11
@@ -4854,15 +4859,20 @@ def build_email(snap, override_team=None):
         fa_hit_section,                                                                   # 13
         build_trade_radar(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
                           pos_data, hit_pctile, pit_pctile, team_logos=team_logos),       # 13b Trade Radar
-        band_divider("SEASON", anchor="band-season"),                                     # SEASON CONTEXT band header
+    ] if p)
+    season_band = "\n".join(p for p in [
         cat_section,                                                                      # 14
         luck_section,                                                                     # 15
         build_season_trajectory(weekly_results, standings, my_team=my_team),              # 16 Season Trajectory (W/L/T by week + streak)
         '<div style="margin-top:28px;"></div>',                                            # breathing room before Season Roto Rankings
         build_season_roto_rankings(roto, my_team=my_team, team_logos=team_logos,
                                    season_totals=snap.get("season_cat_totals")),          # 17 Season Roto Rankings (all matchups aggregated)
-        band_divider("REFERENCE", anchor="band-glossary"),                                # REFERENCE band header
-        build_glossary_section(),                                                         # 16 Glossary & Methodology
+    ] if p)
+    body_parts += top_sections + [
+        collapsible_band("MY ROSTER",   "band-myroster", myroster_band),                  # MY TEAM band (collapsible)
+        collapsible_band("TRANSACTIONS", "band-fa",      transactions_band),              # ACTION band (FA pickups + Trade Radar)
+        collapsible_band("SEASON",      "band-season",   season_band),                    # SEASON CONTEXT band
+        collapsible_band("REFERENCE",   "band-glossary", build_glossary_section()),       # REFERENCE band (Glossary & Methodology)
     ]
     body = "\n".join(p for p in body_parts if p)
 
@@ -4899,6 +4909,12 @@ def build_email(snap, override_team=None):
     tr.scorebd-row:target {{ display:table-row !important; scroll-margin-top:40vh; }}
     div.scorebd-div:target {{ display:block !important; scroll-margin-top:40vh; }}
     a.bdlink {{ outline:none; }}
+    /* Collapsible bands (My Roster / Transactions / Season / Reference): hide the native
+       disclosure triangle and flip our own caret when open. Nav pills open them via JS. */
+    details.band-collapse > summary {{ list-style:none; }}
+    details.band-collapse > summary::-webkit-details-marker {{ display:none; }}
+    details.band-collapse[open] > summary .band-caret {{ transform:rotate(180deg); }}
+    details.band-collapse {{ scroll-margin-top:16px; }}
     @media only screen and (max-width:600px) {{
       .ew {{ width:100% !important; padding:8px !important; }}
       table th, table td {{ padding:5px 4px !important; }}
@@ -4932,6 +4948,7 @@ def build_email(snap, override_team=None):
   </div>
 </div>
 {_BD_TOGGLE_SCRIPT}
+{_BAND_TOGGLE_SCRIPT}
 </body>
 </html>"""
 

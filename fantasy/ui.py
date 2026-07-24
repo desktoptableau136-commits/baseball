@@ -355,6 +355,56 @@ def band_divider(label, color=None, anchor=None):
     )
 
 
+def collapsible_band(label, anchor, content_html, color=None, open=False):
+    """A digest band rendered as a native <details> collapsible. The <summary> reuses the
+    band_divider look (two horizontal rules + centered uppercase label) plus a disclosure
+    caret. Collapsed by default (open=False) so the digest opens compact; the header
+    'Jump to' nav pills open AND scroll to the matching band via _BAND_TOGGLE_SCRIPT.
+    The `id` lives on the <details> so a nav `#{anchor}` link both targets it and lets the
+    script flip it open. Interactivity needs a browser — this renders in the opened
+    attachment; Gmail's inline body is the separate Briefing, so collapsed bands never hide
+    content there. When there is no content the band collapses to nothing (returns "")."""
+    if not content_html:
+        return ""
+    c = color or MUTED
+    open_attr = " open" if open else ""
+    summary = (
+        f'<summary class="band-summary" style="list-style:none;cursor:pointer;'
+        f'display:flex;align-items:center;margin:32px 0 22px;outline:none;">'
+        f'<div style="flex:1;height:1px;background:{BORDER};"></div>'
+        f'<span style="padding:0 14px;color:{c};font-size:10px;font-weight:700;'
+        f'letter-spacing:2px;text-transform:uppercase;white-space:nowrap;">{label}'
+        f'<span class="band-caret" style="color:{MUTED};font-size:9px;font-weight:700;'
+        f'margin-left:9px;display:inline-block;">&#9662;</span></span>'
+        f'<div style="flex:1;height:1px;background:{BORDER};"></div>'
+        f'</summary>'
+    )
+    return (
+        f'<details id="{anchor}" class="band-collapse"{open_attr}>'
+        f'{summary}'
+        f'<div>{content_html}</div>'
+        f'</details>'
+    )
+
+
+# Opens (and smooth-scrolls to) a collapsible band when its "Jump to" nav pill is clicked.
+# Sits alongside _BD_TOGGLE_SCRIPT; the two never collide — that one only acts on `bdlink`
+# anchors / ids ending in `x`, this one only on `#band-` hrefs targeting a <details>.
+_BAND_TOGGLE_SCRIPT = """<script>
+document.addEventListener('click', function(e){
+  var a = e.target.closest ? e.target.closest('a') : null;
+  if(!a) return;
+  var h = a.getAttribute('href') || '';
+  if(h.indexOf('#band-') !== 0) return;
+  var el = document.getElementById(h.slice(1));
+  if(!el || el.tagName.toLowerCase() !== 'details') return;
+  e.preventDefault();
+  el.open = true;
+  if(el.scrollIntoView) el.scrollIntoView({behavior:'smooth', block:'start'});
+});
+</script>"""
+
+
 def nav_bar():
     """'Jump to' pill nav, rendered in the top-right of the header (not the body, so it
     doesn't push Week at a Glance down). Anchor links behave like tabs without JS/CSS
