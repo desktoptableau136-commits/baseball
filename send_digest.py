@@ -1164,19 +1164,39 @@ def build_cat_percentiles(rows, cats):
             out[c] = vals
     return out
 
-def _cats_cell(row, pctile, cats, need_cats):
-    """<td> of category chips a FA helps; need-cats highlighted (ACCENT), others MUTED."""
+def _swing_cat_chip(cat, before, after):
+    """Highlighted swing-cat marker for the Cats cell: '↑{cat}' in colored bold text (GREEN
+    when the add would put you over 50%, else ACCENT) — no fill or border, so it sits at the
+    same visual weight as the neutral silver strengths beside it, distinguished only by color
+    and the ↑. The full before→after odds live in the score-dropdown line (_winprob_context)
+    and the hover title — the visible row stays numbers-free."""
+    lbl = _CAT_DISPLAY.get(cat, cat)
+    col = GREEN if after >= 50 else ACCENT
+    return (f'<span title="Streaming him lifts your {lbl} win odds {before}% to {after}% this matchup" '
+            f'style="display:inline-block;font-size:11px;font-weight:700;color:{col};'
+            f'vertical-align:middle;">&#8593;{lbl}</span>')
+
+def _cats_cell(row, pctile, cats, need_cats, swing=None, td_style=None):
+    """<td> of category chips a FA helps. Season-strength cats render neutral (SILVER); when
+    a `swing` tuple (cat, before, after) is present that category leads as a highlighted
+    _swing_cat_chip (the one contested cat his pickup most moves) — deduped against the
+    strength list, and shown even when it isn't itself a season strength. Full odds live in
+    the score-dropdown breakdown (_winprob_context). `td_style` overrides the cell style so
+    the compacted FA-SP table can pass its tighter `_tdc`."""
+    tds = td_style or TDC
     strong = player_cat_strengths(row, pctile, cats, need_cats)
-    if not strong:
-        return f'<td style="{TDC}color:{MUTED};">—</td>'
+    swing_cat = swing[0] if swing else None
     chips = []
+    if swing:
+        chips.append(_swing_cat_chip(swing[0], swing[1], swing[2]))
     for c in strong:
-        hot = c in need_cats
-        col = ACCENT if hot else MUTED
-        wt  = "700" if hot else "600"
-        chips.append(f'<span style="color:{col};font-weight:{wt};font-size:11px;">{_CAT_DISPLAY.get(c, c)}</span>')
+        if c == swing_cat:
+            continue
+        chips.append(f'<span style="color:{SILVER};font-weight:600;font-size:11px;">{_CAT_DISPLAY.get(c, c)}</span>')
+    if not chips:
+        return f'<td style="{tds}color:{MUTED};">—</td>'
     inner = '<span style="color:#334155;"> · </span>'.join(chips)
-    return f'<td style="{TDC}white-space:nowrap;">{inner}</td>'
+    return f'<td style="{tds}white-space:nowrap;">{inner}</td>'
 
 # ── TRADE RADAR ───────────────────────────────────────────────────────────────
 # Cross-team trade finder tilted to MY advantage. The rival accepts because the deal
@@ -1396,17 +1416,19 @@ def pickup_win_delta(cand_row, ctx, remaining_frac, today_str, week_end_str,
             best = (cat, b, a, a - b)
     return best[:3] if best else None
 
-def _winprob_chip(wd):
-    """Render the marginal-win% pickup chip from a pickup_win_delta tuple. '' when None."""
+def _winprob_context(wd):
+    """Score-dropdown breakdown line explaining the pickup win-% swing surfaced in the Cats
+    cell (see _swing_cat_chip). '' when there's no swing. Styled to match the other
+    tap-to-expand context blocks (_badge_ctx_wrap)."""
     if not wd:
         return ""
     cat, b, a = wd
     lbl = _CAT_LABELS_MAP.get(cat, cat)
     col = GREEN if a >= 50 else ACCENT
-    return (f'<span title="Streaming him lifts your {lbl} win odds {b}% to {a}% this matchup" '
-            f'style="display:inline-block;font-size:9px;font-weight:700;color:{col};'
-            f'background:rgba(59,130,246,0.12);border-radius:3px;padding:1px 5px;'
-            f'margin-left:6px;vertical-align:middle;">{lbl} {b}→{a}%</span>')
+    return (f'<div style="margin-top:6px;color:{MUTED};">'
+            f'<span style="color:{col};font-weight:700;">&#9889; Pickup win-% swing:</span> '
+            f'streaming him lifts your <b style="color:{TEXT};">{lbl}</b> win odds '
+            f'{b}% &#8594; {a}% this matchup.</div>')
 
 def classify_categories(matchup, weekly_avgs=None, days_elapsed=None, remaining_proj=None, matchup_days=7,
                         game_days_elapsed=None, matchup_game_days=None):
@@ -2419,12 +2441,14 @@ def build_glossary_section():
                "The <b>%</b> in each card corner is your odds of winning that category (normal model of the final "
                "margin), colored to the projected outcome. On a toss-up — odds near even, or a projected tie — a "
                "<b>⚡</b> replaces the number instead."),
-        _entry(f'Pickup win-% swing{_winprob_chip(("K", 46, 58))}',
+        _entry(f'Pickup win-% swing&nbsp;{_swing_cat_chip("K", 46, 58)}',
                "On any <b>FA Pickup</b> (starter, reliever, or hitter) — the one contested category his remaining "
-               "production this matchup would most improve, shown as <b>before→after</b> win odds (e.g. "
-               "<b>K 46→58%</b>, <b>SVHD 40→55%</b>, <b>R 44→61%</b>). Uses the same calibrated win-probability model "
-               "as the Category Pulse cards; only shown when he'd move a category you're not already winning "
-               "comfortably. Green when the add would put you over 50%."),
+               "production this matchup would most improve, highlighted in that player's <b>Cats</b> column with an "
+               "<b>↑</b> (green when the add would put you over 50%, else blue; the other Cats entries are neutral "
+               "silver season strengths). Tap the <b>Score</b> pill to reveal the full <b>before→after</b> win odds "
+               "(e.g. <i>lifts your K win odds 46% → 58% this matchup</i>). Uses the same calibrated win-probability "
+               "model as the Category Pulse cards; only shown when he'd move a category you're not already winning "
+               "comfortably."),
 
         _subhead("Pending trades"),
         _entry(f'Verdict{_verdict_pill("ACCEPT", GREEN)}&nbsp;{_verdict_pill("COUNTER", YELLOW)}&nbsp;{_verdict_pill("DECLINE", RED)}',
@@ -4095,7 +4119,7 @@ def build_email(snap, override_team=None):
             )
             rows += (
                 f'<tr style="background:{SURFACE};">'
-                f'<td colspan="8" style="padding:5px 10px;'
+                f'<td colspan="9" style="padding:5px 10px;'
                 f'border-top:1px solid {BORDER};border-bottom:1px solid {BORDER};">'
                 f'<span style="color:{ACCENT};font-size:11px;font-weight:700;'
                 f'text-transform:uppercase;letter-spacing:.5px;">{day_label}</span>'
@@ -4147,8 +4171,9 @@ def build_email(snap, override_team=None):
                 # Two-start flag always shows — a 2-start FA is a top streaming target
                 _n_starts_fa = _starts_this_week(r, today_str, week_end_str)
                 two_start_html = two_start_badge(f"{_n_starts_fa} starts this matchup week") if _n_starts_fa >= 2 else ""
-                # Marginal-win% chip — the category his remaining starts most move for me.
-                _wd_chip = _winprob_chip(pickup_win_delta(r, winprob_ctx, winprob_rf, today_str, week_end_str))
+                # Marginal-win% swing — the category his remaining starts most move for me;
+                # highlighted in the Cats cell, explained in the score dropdown.
+                _wd = pickup_win_delta(r, winprob_ctx, winprob_rf, today_str, week_end_str)
 
                 _kpct_val = _n(r.get("Kpct_P"))
                 _kpct_top = _kpct_val > 0 and _kpct_val in _top3_kpct_fa
@@ -4159,13 +4184,14 @@ def build_email(snap, override_team=None):
                 )
                 proj_line_str = _proj_line_html(r)
                 _fasp_bd = (_pitcher_score_breakdown(r, best_recent_p)
-                            + _sp_badge_context(r, qs_fires, k_fires, _n_starts_fa, p15r.get("ERA")))
+                            + _sp_badge_context(r, qs_fires, k_fires, _n_starts_fa, p15r.get("ERA"))
+                            + _winprob_context(_wd))
                 _cell, _bdrow = score_reveal(
                     r["_score"], _fasp_bd,
-                    _bd_uid("fasp", r.get("PlayerName", "")), 8)
+                    _bd_uid("fasp", r.get("PlayerName", "")), 9)
                 rows += (
                     f'<tr style="{bg}">'
-                    f'<td style="{name_border}{_tds}font-weight:600;">{team_logo(r.get("Team"))}{r.get("PlayerName","")}{inj_tag(r)}{two_start_html}{pickup_badge}{_wd_chip}</td>'
+                    f'<td style="{name_border}{_tds}font-weight:600;">{team_logo(r.get("Team"))}{r.get("PlayerName","")}{inj_tag(r)}{two_start_html}{pickup_badge}</td>'
                     f'<td style="{_tdc}">{proj_line_str}</td>'
                     f'<td style="{_tdc}">{opp_logo(ha)}{ha}'
                     f'{"&nbsp;<span style=\"color:#888;font-size:11px\">(proj.)</span>" if r.get("PSP_Projected") else ""}'
@@ -4174,6 +4200,7 @@ def build_email(snap, override_team=None):
                     f'<td style="{_tdc}">{v(r.get("ERA"), 2)}</td>'
                     + hot_cold_cell(r.get("ERA"), p15r.get("ERA"), lower_better=True, dec=2, no_data_title="No 15-day stats — player may not have pitched recently", td_style=_tdc) +
                     f'<td style="{_tdc}">{kpct_cell}{_whiff_sub(r)}</td>'
+                    f'{_cats_cell(r, pit_pctile, _FA_SP_CATS, need_cats, swing=_wd, td_style=_tdc)}'
                     f'<td style="{_tdc}">{_cell}</td>'
                     f'</tr>'
                     f'{_bdrow}'
@@ -4189,6 +4216,7 @@ def build_email(snap, override_team=None):
             f'<th style="{_th}text-align:center;">ERA</th>'
             f'<th style="{_th}text-align:center;">L15 ERA</th>'
             f'<th style="{_th}text-align:center;">K%</th>'
+            f'<th style="{_th}text-align:center;">Cats</th>'
             f'<th style="{_th}text-align:center;">Score</th>'
             f'</tr></thead><tbody>{rows}</tbody></table>'
             f'</div>'
@@ -4196,7 +4224,7 @@ def build_email(snap, override_team=None):
     else:
         table = f'<p style="color:{MUTED};font-style:italic;margin-bottom:24px;">No FA starters (score {_FA_SP_MIN_SCORE}+) with upcoming starts.</p>'
 
-    fa_sp_section = section_head("FA Pickup — Starting Pitchers", f"Free agents with upcoming starts · score {_FA_SP_MIN_SCORE}+ only · sorted by SP score") + table
+    fa_sp_section = section_head("FA Pickup — Starting Pitchers", f"Free agents with upcoming starts · score {_FA_SP_MIN_SCORE}+ only · Cats = his season strengths, with the ↑ category his pickup most swings this matchup · sorted by SP score") + table
 
     # ── FA: Relief Pitchers ────────────────────────────────────────────────────
     if fa_rp:
@@ -4216,19 +4244,20 @@ def build_email(snap, override_team=None):
                 f'border-radius:3px;padding:1px 4px;margin-left:5px;vertical-align:middle;">'
                 f'{ds_label}</span>'
             ) if ds_label and no_espn else ""
+            _wd_rp = pickup_win_delta(r, winprob_ctx, winprob_rf, today_str, week_end_str, ptype="rp", weeks_played=winprob_weeks)
             _cell, _bdrow = score_reveal(
-                r["_rp_score"], _pitcher_score_breakdown(r),
+                r["_rp_score"], _pitcher_score_breakdown(r) + _winprob_context(_wd_rp),
                 _bd_uid("farp", r.get("PlayerName", "")), 9)
             return (
                 f'<tr style="{bg}">'
-                f'<td style="{TD_S}font-weight:600;">{team_logo(r.get("Team"))}{r.get("PlayerName","")}{inj_tag(r)}{ds_badge}{pitcher_regression_badge(r)}{_winprob_chip(pickup_win_delta(r, winprob_ctx, winprob_rf, today_str, week_end_str, ptype="rp", weeks_played=winprob_weeks))}</td>'
+                f'<td style="{TD_S}font-weight:600;">{team_logo(r.get("Team"))}{r.get("PlayerName","")}{inj_tag(r)}{ds_badge}{pitcher_regression_badge(r)}</td>'
                 f'<td style="{TDC}color:{MUTED};">{r.get("Position","")}</td>'
                 f'<td style="{TDC}">{v(svhd, 0)}</td>'
                 f'<td style="{TDC}">{v(k, 0)}</td>'
                 f'<td style="{TDC}">{v(w, 0)}</td>'
                 f'<td style="{TDC}">{f"{era:.2f}" if era > 0 else "—"}</td>'
                 f'<td style="{TDC}">{f"{whip:.2f}" if whip > 0 else "—"}</td>'
-                f'{_cats_cell(r, rp_pctile, _FA_RP_CATS, need_cats)}'
+                f'{_cats_cell(r, rp_pctile, _FA_RP_CATS, need_cats, swing=_wd_rp)}'
                 f'<td style="{TDC}">{_cell}</td>'
                 f'</tr>'
                 f'{_bdrow}'
@@ -4252,7 +4281,7 @@ def build_email(snap, override_team=None):
     else:
         rp_table = f'<p style="color:{MUTED};font-style:italic;margin-bottom:24px;">No FA relievers found.</p>'
 
-    fa_rp_section = section_head("FA Pickup — Relief Pitchers", "Top 3 available RP · ranked by SV+H, K, W, ERA, WHIP · Cats = categories he'd boost (your contested ones highlighted)") + rp_table
+    fa_rp_section = section_head("FA Pickup — Relief Pitchers", "Top 3 available RP · ranked by SV+H, K, W, ERA, WHIP · Cats = his season strengths, with the ↑ category his pickup most swings this matchup") + rp_table
 
     # Save-Role Watch: emerging FA closers to add + your RP whose save role is slipping
     _sr_emerging, _sr_fading = save_role_watch(pitchers, my_team, claimed)
@@ -4291,12 +4320,13 @@ def build_email(snap, override_team=None):
         for i, r in enumerate(fa_hit):
             bg = f"background:{SURFACE2};" if i % 2 else ""
             rh = rec_h.get(r.get("PlayerName", ""), {})
+            _wd_hit = pickup_win_delta(r, winprob_ctx, winprob_rf, today_str, week_end_str, ptype="hit", weeks_played=winprob_weeks)
             _cell, _bdrow = score_reveal(
-                r["_score"], _hitter_score_breakdown(r, best_recent_h, hit_pctile),
+                r["_score"], _hitter_score_breakdown(r, best_recent_h, hit_pctile) + _winprob_context(_wd_hit),
                 _bd_uid("fahit", r.get("PlayerName", "")), 11)
             rows += (
                 f'<tr style="{bg}">'
-                f'<td style="{TD_S}font-weight:600;">{team_logo(r.get("Team"))}{r.get("PlayerName","")}{inj_tag(r)}{hitter_badges(r, hit_pctile)}{_winprob_chip(pickup_win_delta(r, winprob_ctx, winprob_rf, today_str, week_end_str, ptype="hit", weeks_played=winprob_weeks))}</td>'
+                f'<td style="{TD_S}font-weight:600;">{team_logo(r.get("Team"))}{r.get("PlayerName","")}{inj_tag(r)}{hitter_badges(r, hit_pctile)}</td>'
                 f'<td style="{TDC}color:{MUTED};">{r.get("Position","")}</td>'
                 f'<td style="{TDC}">{v(r.get("R"), 0)}</td>'
                 f'<td style="{TDC}">{v(r.get("HR"), 0)}</td>'
@@ -4305,7 +4335,7 @@ def build_email(snap, override_team=None):
                 f'<td style="{TDC}">{v(r.get("OPS"), 3)}</td>'
                 + hot_cold_cell(r.get("OPS"), rh.get("OPS"), dec=3, no_data_title="No 7-day stats — player may not have played recently") +
                 f'<td style="{TDC}">{_hrp_cell(r)}</td>'
-                f'{_cats_cell(r, hit_pctile, _FA_HIT_CATS, need_cats)}'
+                f'{_cats_cell(r, hit_pctile, _FA_HIT_CATS, need_cats, swing=_wd_hit)}'
                 f'<td style="{TDC}">{_cell}</td>'
                 f'</tr>'
                 f'{_bdrow}'
@@ -4330,7 +4360,7 @@ def build_email(snap, override_team=None):
     else:
         table = f'<p style="color:{MUTED};font-style:italic;margin-bottom:24px;">No FA hitters found.</p>'
 
-    fa_hit_section = section_head("FA Pickup — Hitters", "Top available hitters · HR% = modeled per-game HR probability · Cats = categories he'd boost (your contested ones highlighted) · sorted by composite score") + table
+    fa_hit_section = section_head("FA Pickup — Hitters", "Top available hitters · HR% = modeled per-game HR probability · Cats = his season strengths, with the ↑ category his pickup most swings this matchup · sorted by composite score") + table
 
     # ── Category Rankings ──────────────────────────────────────────────────────
     CAT_LABELS = [
