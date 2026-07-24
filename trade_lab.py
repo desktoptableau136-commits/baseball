@@ -301,6 +301,16 @@ def _fit_deal_words(value_phrase, accept, rival_gains=True):
     return ("Worth floating, but the value's thin for them — expect some back-and-forth.", "REACH")
 
 
+def _and_join(xs):
+    """Human list join: [] -> '', [C] -> 'C', [C,SS] -> 'C and SS', [C,SS,1B] -> 'C, SS and 1B'."""
+    xs = list(xs)
+    if len(xs) <= 1:
+        return xs[0] if xs else ""
+    if len(xs) == 2:
+        return f"{xs[0]} and {xs[1]}"
+    return ", ".join(xs[:-1]) + f" and {xs[-1]}"
+
+
 def _fit_get_tags(ins, my_needs):
     """Short need tags an incoming player fills: thin positions (C/SS/...) + my need cats."""
     tags = []
@@ -434,13 +444,23 @@ def build_megadeal_board(pitchers, hitters, roto, team_keys, ranks, n,
         for d in deals:
             get = [{"name": p.get("PlayerName", ""), "tags": _fit_get_tags([p], my_needs)}
                    for p in d["ins"]]
-            # "Why it's a blockbuster" spark — sells the excitement: how many depth pieces roll up
-            # into how many difference-makers, how many needs it fixes at once, and that they win too.
-            n_out, n_in = len(d["outs"]), len(d["ins"])
-            n_needs = len(d.get("get_cats", [])) + len(d.get("get_pos", []))
-            spark = (f"Rolls {n_out} depth pieces into {n_in} difference-maker"
-                     f"{'s' if n_in != 1 else ''} — fixes "
-                     f"{n_needs} need{'s' if n_needs != 1 else ''} in one move, and they still win too.")
+            # "Why it's a blockbuster" spark — names BOTH sides' prize: the slots/cats I upgrade
+            # (positions read as the headline; category needs are the fallback) AND the cats my depth
+            # pieces pay them in (send_cats = their weak spots), so the line explains why they'd bite
+            # instead of repeating a generic win-win tag.
+            n_out = len(d["outs"])
+            pos_up = d.get("get_pos", [])
+            # get_cats/send_cats are sorted most-needed-first; cap at 3 so the headline stays punchy.
+            cat_up = [CAT_LABELS.get(c, c) for c in d.get("get_cats", [])][:3]
+            send = [CAT_LABELS.get(c, c) for c in d.get("send_cats", [])][:3]
+            if pos_up:
+                prize = "a real upgrade at " + _and_join(pos_up)
+            elif cat_up:
+                prize = "a jolt of " + _and_join(cat_up)
+            else:
+                prize = "real difference-makers"
+            tail = f" — you pay them in {_and_join(send)}, right where they're thin." if send else "."
+            spark = f"Cash in {n_out} depth piece{'s' if n_out != 1 else ''} for {prize}{tail}"
             recs.append({
                 "team": d["team"], "tier": "MEGA",
                 "get": get, "give": [p.get("PlayerName", "") for p in d["outs"]],
@@ -722,7 +742,6 @@ details#vdetail[open] > summary::before {{ content:'\\25BC'; }}
 .fbdeal b {{ font-weight:700; }}
 .fbgive {{ color:{MUTED}; font-size:12.5px; margin-top:2px; }}
 .fbgv {{ font-size:8.5px; font-weight:800; letter-spacing:.4px; color:{RED}; background:rgba(239,68,68,.11); border-radius:4px; padding:1px 5px; margin-right:5px; vertical-align:middle; text-transform:uppercase; }}
-.fbntag {{ font-size:8.5px; font-weight:800; color:#22d3ee; background:rgba(34,211,238,.12); border:1px solid rgba(34,211,238,.4); border-radius:4px; padding:0 4px; vertical-align:middle; margin-left:2px; }}
 .fbverdict {{ font-size:12px; font-weight:700; margin-top:8px; }}
 .fbwhy {{ font-size:11.5px; color:{TEXT}; margin-top:6px; line-height:1.5; }}
 .fbwhy .wl {{ color:{MUTED}; font-weight:700; }}
@@ -1492,13 +1511,18 @@ function recompute() {{
                && label === 'ACCEPT' && pfTier === 'yes';
   var megaBanner = '';
   if (isMega) {{
-    var nNeed = needFilled.length + posList.length;
-    var needTxt = nNeed > 0 ? ('fixes ' + nNeed + ' need' + (nNeed !== 1 ? 's' : '') + ' in one move')
-                            : 'a clean multi-player win-win';
-    megaBanner = '<div class="megaline">&#128171; <b>Blockbuster!</b> Roll '
-               + lKeys.length + ' depth pieces into ' + rKeys.length
-               + ' difference-maker' + (rKeys.length !== 1 ? 's' : '')
-               + ' &mdash; ' + needTxt + ', and they still win too.</div>';
+    // Mirror the strip spark: name my prize (positions headline, cats fallback) AND the cats my
+    // depth pieces pay them in (partnerGets = their weak spots), so it explains why they'd bite.
+    var mPrize = posList.length
+               ? 'a real upgrade at ' + andJoin(posList)
+               : (needFilled.length
+                  ? 'a jolt of ' + andJoin(needFilled.slice(0,3).map(function(c){{ return DATA.catLabels[c]||c; }}))
+                  : 'real difference-makers');
+    var mSend = andJoin(partnerGets.slice(0,3).map(function(c){{ return DATA.catLabels[c]||c; }}));
+    var mTail = mSend ? ' &mdash; you pay them in ' + mSend + ', right where they\'re thin.' : '.';
+    megaBanner = '<div class="megaline">&#128171; <b>Blockbuster!</b> Cash in '
+               + lKeys.length + ' depth piece' + (lKeys.length !== 1 ? 's' : '') + ' for '
+               + mPrize + mTail + '</div>';
   }}
   document.getElementById('mid').classList.toggle('midmega', isMega);
   vBox.innerHTML = '<span class="vpill" style="background:'+color+'">'+label+'</span>'
@@ -1625,7 +1649,8 @@ var FIT_TIER = {{ BEST:['{GREEN}','BEST TARGET'], REACH:['{YELLOW}','WORTH A SHO
                   SLIM:['{MUTED}','SLIM'], ONEWAY:['#ea580c','ONE-WAY'], NOFIT:['{RED}','NO DEAL'] }};
 
 function escAttr(s) {{ return String(s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }}
-function fitTag(t) {{ return '<span class="fbntag">' + t + '</span>'; }}
+// Human list join, mirror of the server's _and_join: [] -> '', [C] -> 'C', [C,SS] -> 'C and SS'.
+function andJoin(xs) {{ xs = xs || []; if (xs.length <= 1) return xs[0] || ''; if (xs.length === 2) return xs[0] + ' and ' + xs[1]; return xs.slice(0,-1).join(', ') + ' and ' + xs[xs.length-1]; }}
 
 function fitCard(r) {{
   var t = FIT_TIER[r.tier] || FIT_TIER.SLIM, col = t[0], lbl = t[1];
@@ -1637,9 +1662,7 @@ function fitCard(r) {{
     var getNames  = (r.get || []).map(function(g) {{ return g.name; }}).join(',');
     head += '<span class="fbbuild" data-partner="' + escAttr(r.team) + '" data-give="' + escAttr(giveNames)
           + '" data-get="' + escAttr(getNames) + '" onclick="loadDeal(this)">Build this &#9654;</span></div>';
-    var getParts = (r.get || []).map(function(g) {{
-      return '<b>' + g.name + '</b> ' + (g.tags || []).slice(0,2).map(fitTag).join(' ');
-    }}).join('  ');
+    var getParts = (r.get || []).map(function(g) {{ return '<b>' + g.name + '</b>'; }}).join(' + ');
     var deal = '<div class="fbdeal"><span class="fbget">Get</span> ' + getParts
              + '<div class="fbgive"><span class="fbgv">for</span> ' + (r.give || []).join(' + ') + '</div></div>';
     var vcol = (r.tier === 'BEST' || r.tier === 'MEGA') ? '{GREEN}' : '{YELLOW}';
