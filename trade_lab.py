@@ -604,6 +604,9 @@ body {{ margin:0; background:{BG}; color:{TEXT}; font-family:-apple-system,Segoe
 #verdict {{ text-align:center; margin-bottom:10px; }}
 .vpill {{ display:inline-block; font-weight:800; font-size:14px; padding:4px 14px; border-radius:12px; color:#0b1220; }}
 .vwhy {{ color:{MUTED}; font-size:12px; margin-top:6px; }}
+#mid.midmega {{ border-color:{PURPLE}; box-shadow:0 0 0 1px {PURPLE}, 0 0 22px rgba(168,85,247,0.28); background-image:linear-gradient(180deg,rgba(168,85,247,0.08),rgba(168,85,247,0)); }}
+.megaline {{ margin-top:9px; font-size:11.5px; line-height:1.45; color:{TEXT}; background:rgba(168,85,247,0.12); border:1px solid {PURPLE}; border-radius:7px; padding:7px 9px; text-align:left; }}
+.megaline b {{ color:{PURPLE}; letter-spacing:.3px; }}
 .counteradd {{ color:{ACCENT}; cursor:pointer; font-weight:800; }}
 .counteradd:hover {{ text-decoration:underline; }}
 .ledger {{ display:grid; grid-template-columns:1fr 1fr; gap:8px; }}
@@ -1349,6 +1352,7 @@ function recompute() {{
     vBox.innerHTML = '<span class="vpill" style="background:{BORDER};color:{MUTED}">SELECT PLAYERS</span>';
     reads.innerHTML = '';
     ['giveSub','getSub','fairbar','dealsum','vdetailBody'].forEach(function(idv){{ var e=document.getElementById(idv); if(e) e.innerHTML=''; }});
+    document.getElementById('mid').classList.remove('midmega');
     setDealBar(0, 0, 0, '', '');
     return;
   }}
@@ -1480,8 +1484,25 @@ function recompute() {{
     why = "good for you, but " + pfReason;
   }}
 
+  // Blockbuster detection — mirrors the engine's mega shapes (give >= get, give side >= 3, one
+  // side >= 3) AND the win-win bar (I'd ACCEPT + they'd do it). When the manually-built deal is a
+  // genuine multi-player consolidation win-win, celebrate it: a purple banner + a purple glow on
+  // the whole builder panel, so building a blockbuster feels like the headline it is.
+  var isMega = lKeys.length >= 3 && lKeys.length >= rKeys.length
+               && label === 'ACCEPT' && pfTier === 'yes';
+  var megaBanner = '';
+  if (isMega) {{
+    var nNeed = needFilled.length + posList.length;
+    var needTxt = nNeed > 0 ? ('fixes ' + nNeed + ' need' + (nNeed !== 1 ? 's' : '') + ' in one move')
+                            : 'a clean multi-player win-win';
+    megaBanner = '<div class="megaline">&#128171; <b>Blockbuster!</b> Roll '
+               + lKeys.length + ' depth pieces into ' + rKeys.length
+               + ' difference-maker' + (rKeys.length !== 1 ? 's' : '')
+               + ' &mdash; ' + needTxt + ', and they still win too.</div>';
+  }}
+  document.getElementById('mid').classList.toggle('midmega', isMega);
   vBox.innerHTML = '<span class="vpill" style="background:'+color+'">'+label+'</span>'
-    + '<div class="vwhy">'+why+'</div>';
+    + '<div class="vwhy">'+why+'</div>' + megaBanner;
   setDealBar(lKeys.length, rKeys.length, netVal, label, color);
 
   // MY-side acceptance — the mirror of "Would they do it?". A star surrender at par is the read
