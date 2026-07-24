@@ -236,7 +236,7 @@ Go to **Settings → Secrets and variables → Actions** to view or update:
 
 ## What's in the Digest
 
-The digest is organized into labeled **bands**, with a **Jump to** nav in the header (My Roster · Transactions · Season · Glossary) that anchors to each band.
+The digest is organized into labeled **bands**, with a **Jump to** nav in the header (My Roster · Transactions · Season · Glossary). The matchup overview at the top is always visible; the four labeled bands below are **collapsible and start collapsed** — clicking a Jump-to pill opens its band and scrolls to it (so you land on a short, skimmable page and expand only what you want).
 
 **Header** — date · team name + logo · KPI row · Jump-to nav pills
 KPI row: **Record** · **Current Matchup** (W-L-T + win%) · **Roster** (whole-team hot/cold count — hitters *and* pitchers) · **Starts This Matchup**
