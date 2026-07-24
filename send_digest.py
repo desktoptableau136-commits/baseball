@@ -2188,8 +2188,11 @@ def build_glossary_section():
         _entry(f'Score badge (tap to expand){badge(72)}',
                "The colored pill is the player's 0–100 role score (green ≥ 72, blue ≥ 52, amber ≥ 32, red below). "
                "In the browser-opened attachment it expands on tap into a full-width row below the player. "
-               "It opens with the <b>season and recent scores</b> (each colored by tier) beside a 🔥/🥶 "
-               "form marker, then a one-line <b>scouting read</b> of the player's archetype (e.g. &ldquo;a "
+               "It opens with the <b>season and recent (last-30) scores</b> (each colored by tier) beside a 🔥/🥶 "
+               "form marker — relievers included, their recent score built from last-30 <i>rates</i> so it's "
+               "comparable to the season number — then a compact <b>Last 30 days</b> line naming the window "
+               "stats behind it (e.g. &ldquo;0.00 ERA · 19% K · 0.32 WHIP&rdquo; / &ldquo;1.028 OPS · .275 AVG "
+               "· 8 HR&rdquo;), then a one-line <b>scouting read</b> of the player's archetype (e.g. &ldquo;a "
                "true three-outcome slugger&rdquo; / &ldquo;a front-line arm — misses bats and limits "
                "damage&rdquo;), then the 2-3 drivers behind the number (e.g. &ldquo;carried by "
                "swing-and-miss and a low WHIP; held back by hard contact&rdquo;). If the player is hurt it ends with a 🩹 <b>Injury</b> line — which side of the IL "
@@ -3845,7 +3848,7 @@ def build_email(snap, override_team=None):
                 f'{ds_label}</span>'
             ) if ds_label and no_espn else ""
             _cell, _bdrow = score_reveal(
-                r[score_key], _pitcher_score_breakdown(r),
+                r[score_key], _pitcher_score_breakdown(r, best_recent_p),
                 _bd_uid("myrp", r.get("PlayerName", "")), 8)
             return (
                 f'<tr style="{bg}">'
@@ -4066,7 +4069,7 @@ def build_email(snap, override_team=None):
             ) if ds_label and no_espn else ""
             _wd_rp = pickup_win_delta(r, winprob_ctx, winprob_rf, today_str, week_end_str, ptype="rp", weeks_played=winprob_weeks)
             _cell, _bdrow = score_reveal(
-                r["_rp_score"], _pitcher_score_breakdown(r) + _winprob_context(_wd_rp),
+                r["_rp_score"], _pitcher_score_breakdown(r, best_recent_p) + _winprob_context(_wd_rp),
                 _bd_uid("farp", r.get("PlayerName", "")), 9)
             return (
                 f'<tr style="{bg}">'
