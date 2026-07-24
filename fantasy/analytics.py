@@ -658,6 +658,9 @@ _FA_HIT_CATS = ["R", "HR", "RBI", "SB", "OPS"]
 _FA_RP_CATS  = ["SVHD", "K", "W", "ERA", "WHIP"]
 
 
+_FA_SP_CATS  = ["K", "W", "ERA", "WHIP"]  # season strengths for the FA-SP Cats cell; reuses the pit_pctile pool (no QS pool)
+
+
 def _cat_value(row, cat):
     """Raw per-player value for a roto category (RP counting stats prefer ESPN season)."""
     if cat == "SVHD":
