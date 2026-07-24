@@ -726,186 +726,6 @@ _CAT_DEC = {
     "OPS": 3, "ERA": 2, "WHIP": 2,
 }
 
-def build_matchup_section(matchup, logos=None, my_team=MY_TEAM,
-                          weekly_avgs=None, days_elapsed=None, remaining_proj=None,
-                          matchup_days=7, game_days_elapsed=None, matchup_game_days=None):
-    if not matchup or not matchup.get("categories"):
-        return ""
-
-    logos   = logos or {}
-    wins    = matchup["wins"]
-    losses  = matchup["losses"]
-    ties    = matchup["ties"]
-    opp     = matchup.get("opp_team", "Opponent")
-    week    = matchup.get("week", "")
-
-    # Projection setup (mirrors build_category_pulse)
-    my_team_key  = " ".join(matchup.get("my_team",  "").split())
-    opp_team_key = " ".join(matchup.get("opp_team", "").split())
-    if game_days_elapsed is not None and matchup_game_days:
-        elapsed_frac = min(1.0, max(0.0, game_days_elapsed / matchup_game_days))
-    else:
-        elapsed_frac = min(1.0, max(0.0, (days_elapsed or 0) / matchup_days))
-    my_avgs  = (weekly_avgs or {}).get(my_team_key,  {})
-    opp_avgs = (weekly_avgs or {}).get(opp_team_key, {})
-    has_proj = bool(my_avgs and opp_avgs)
-
-    score_str = f"{wins}-{losses}-{ties}"
-    if wins > losses:
-        score_color, status = GREEN, "Winning"
-    elif losses > wins:
-        score_color, status = RED, "Losing"
-    else:
-        score_color, status = TEXT, "Tied"
-
-    opp_short = opp[:16] + ("…" if len(opp) > 16 else "")
-
-    def _norm(n): return " ".join(n.split())
-    my_logo_html  = fantasy_logo(logos.get(_norm(my_team), ""), 36, my_team)
-    opp_logo_html = fantasy_logo(logos.get(_norm(opp), ""), 36, opp)
-
-    # Pre-compute projections for all categories
-    proj_map = {}
-    for c in matchup["categories"]:
-        cat  = c["cat"]
-        my_v = c["my_val"]
-        ov   = c["opp_val"]
-        rp   = (remaining_proj or {}).get(cat)
-        if rp is not None:
-            proj_map[cat] = {"pm": my_v + rp["my"], "po": ov + rp["opp"]}
-        elif has_proj and cat in my_avgs and cat in opp_avgs:
-            proj_map[cat] = {
-                "pm": _project(my_v, my_avgs[cat], elapsed_frac, cat),
-                "po": _project(ov,   opp_avgs[cat], elapsed_frac, cat),
-            }
-
-    # Projected record
-    proj_w = proj_l = proj_t = 0
-    for c in matchup["categories"]:
-        cat = c["cat"]
-        p   = proj_map.get(cat)
-        if p is None:
-            continue
-        dec = _CAT_DEC.get(cat, 0)
-        pm_r = round(p["pm"], dec)
-        po_r = round(p["po"], dec)
-        lower = cat in _LOWER_BETTER
-        if pm_r == po_r:
-            proj_t += 1
-        elif (pm_r < po_r) == lower:
-            proj_w += 1
-        else:
-            proj_l += 1
-
-    if proj_map:
-        pw_col = f"{score_color}99"
-        proj_record_html = (
-            f'<div style="font-size:10px;font-weight:400;color:{MUTED};margin-top:3px;">'
-            f'proj <span style="color:{pw_col};font-weight:600;">'
-            f'{proj_w}-{proj_l}'
-            + (f'-{proj_t}' if proj_t else '')
-            + f'</span></div>'
-        )
-    else:
-        proj_record_html = ""
-
-    score_banner = (
-        f'<table style="width:100%;border-collapse:collapse;background:{SURFACE};'
-        f'border-radius:6px;margin-bottom:12px;">'
-        f'<tr>'
-        f'<td style="width:42%;padding:12px 16px;font-size:13px;font-weight:800;color:{ACCENT};text-align:center;">'
-        f'{my_logo_html}{my_team} &#8592;</td>'
-        f'<td style="width:16%;text-align:center;padding:12px 8px;">'
-        f'<div style="font-size:10px;color:{MUTED};text-transform:uppercase;letter-spacing:.5px;">{status}</div>'
-        f'<div style="font-size:18px;font-weight:900;color:{score_color};">{score_str}</div>'
-        f'{proj_record_html}'
-        f'</td>'
-        f'<td style="width:42%;padding:12px 16px;font-size:13px;font-weight:700;color:{TEXT};text-align:center;">'
-        f'{opp_logo_html}{opp_short}</td>'
-        f'</tr></table>'
-    )
-
-    rows = ""
-    for i, c in enumerate(matchup["categories"]):
-        cat   = c["cat"]
-        my_v  = c["my_val"]
-        opp_v = c["opp_val"]
-        res   = c["result"]
-        dec   = _CAT_DEC.get(cat, 0)
-        label = _CAT_LABELS_MAP.get(cat, cat)
-
-        my_color  = GREEN if res == "W" else (RED   if res == "L" else MUTED)
-        opp_color = RED   if res == "W" else (GREEN if res == "L" else MUTED)
-
-        p = proj_map.get(cat)
-
-        # Projected outcome for this category (my perspective). This colors the proj
-        # values by the PROJECTED status — not the current one — so a category I'm
-        # currently losing but projected to win shows a red current value with a green
-        # projection. Also drives the flip arrow.
-        proj_res = None
-        if p is not None:
-            pm_r, po_r = round(p["pm"], dec), round(p["po"], dec)
-            lower = cat in _LOWER_BETTER
-            proj_res = "T" if pm_r == po_r else ("W" if (pm_r < po_r) == lower else "L")
-        my_proj_c  = GREEN if proj_res == "W" else (RED   if proj_res == "L" else MUTED)
-        opp_proj_c = RED   if proj_res == "W" else (GREEN if proj_res == "L" else MUTED)
-
-        # Flip arrow (▲ to a win, ▼ to a loss, ◆ to a tie) when the projected result
-        # differs from the current one. Shown on my side's projection.
-        flip_arrow = ""
-        if proj_res is not None and proj_res != res:
-            if proj_res == "W":
-                flip_arrow = f'&nbsp;<span style="color:{GREEN};">&#9650;</span>'
-            elif proj_res == "L":
-                flip_arrow = f'&nbsp;<span style="color:{RED};">&#9660;</span>'
-            else:
-                flip_arrow = f'&nbsp;<span style="color:{TEXT};">&#9670;</span>'
-
-        def _proj_span(val, color, arrow=""):
-            if val is None:
-                return ""
-            return (f'<div style="font-size:9px;font-weight:400;color:{MUTED};margin-top:2px;">'
-                    f'proj <span style="color:{color};font-weight:600;">{val:.{dec}f}</span>{arrow}</div>')
-
-        cat_label = f'<span style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:{MUTED};">{label}</span>'
-        arrow_l = f'<span style="color:{ACCENT};">&#9664;</span>' if res == "W" else ''
-        arrow_r = f'<span style="color:{YELLOW};">&#9654;</span>' if res == "L" else ''
-        mid = (
-            f'<table style="width:100%;border-collapse:collapse;"><tr>'
-            f'<td style="width:22%;text-align:right;padding:0 4px 0 0;">{arrow_l}</td>'
-            f'<td style="width:56%;text-align:center;padding:0;">{cat_label}</td>'
-            f'<td style="width:22%;text-align:left;padding:0 0 0 4px;">{arrow_r}</td>'
-            f'</tr></table>'
-        )
-        mid_color = MUTED
-
-        bg = f"background:{SURFACE2};" if i % 2 else ""
-        rows += (
-            f'<tr style="{bg}">'
-            f'<td style="{TDC}font-weight:700;color:{my_color};font-size:14px;">'
-            f'{my_v:.{dec}f}{_proj_span(p["pm"] if p else None, my_proj_c, flip_arrow)}</td>'
-            f'<td style="{TDC}color:{mid_color};">{mid}</td>'
-            f'<td style="{TDC}font-weight:700;color:{opp_color};font-size:14px;">'
-            f'{opp_v:.{dec}f}{_proj_span(p["po"] if p else None, opp_proj_c)}</td>'
-            f'</tr>'
-        )
-
-    table = (
-        f'<table style="width:100%;border-collapse:collapse;margin-bottom:24px;font-size:13px;">'
-        f'<thead><tr>'
-        f'<th style="{TH_S}width:42%;text-align:center;">{my_team}</th>'
-        f'<th style="{TH_S}width:16%;text-align:center;"></th>'
-        f'<th style="{TH_S}width:42%;text-align:center;">{opp_short}</th>'
-        f'</tr></thead><tbody>{rows}</tbody></table>'
-    )
-
-    return (
-        section_head(f"Matchup {week}", f"vs. {opp} · current standings") +
-        score_banner +
-        table
-    )
-
 # ── ROSTER HOT/COLD ──────────────────────────────────────────────────────────
 
 def build_hot_cold_section(hitters, recent_hitting, my_team, best_recent_h=None, hit_pctile=None):
@@ -3617,8 +3437,8 @@ def build_email(snap, override_team=None):
     pit_proj = compute_pit_proj(pitchers, my_team, matchup.get("opp_team", "") if matchup else "",
                                 today_str, week_end_str)
     # Fold in schedule-aware hitter counting-cat projections (R/HR/RBI/SB/B_SO). Same
-    # remaining_proj shape, so classify_categories / build_category_pulse / build_matchup_section
-    # all pick it up. Empty on old snapshots -> hitter cats keep the league-fraction path.
+    # remaining_proj shape, so classify_categories / build_category_pulse
+    # both pick it up. Empty on old snapshots -> hitter cats keep the league-fraction path.
     pit_proj.update(compute_hit_proj(weekly_avgs, my_team,
                                      matchup.get("opp_team", "") if matchup else "",
                                      snap.get("team_hit_sched_frac")))
@@ -4835,12 +4655,8 @@ def build_email(snap, override_team=None):
         build_category_pulse(matchup, weekly_avgs=weekly_avgs, days_elapsed=days_elapsed, remaining_proj=pit_proj, is_sunday=is_sunday, weekly_std=weekly_std, matchup_days=matchup_period_days, game_days_elapsed=game_days_elapsed, matchup_game_days=matchup_game_days), # 3
         opp_preview_section,                                                              # 3b OPPONENT SCOUTING (below Category Pulse)
         todays_games_section,                                                             # 3c TODAY'S MLB GAMES (matchup overlap — what to tune into)
-        week_cat_section,                                                                 # 4  (before matchup panel)
+        week_cat_section,                                                                 # 4  category rankings
         week_roto_rankings_section,                                                       # 4b league-wide roto (hidden Monday before stats accumulate)
-        build_matchup_section(matchup, logos=team_logos, my_team=my_team,
-                              weekly_avgs=weekly_avgs, days_elapsed=days_elapsed,
-                              remaining_proj=pit_proj, matchup_days=matchup_period_days,
-                              game_days_elapsed=game_days_elapsed, matchup_game_days=matchup_game_days),  # 5
     ]
     myroster_band = "\n".join(p for p in [
         alert_section,                                                                    # 1  ALERTS (top of My Roster)

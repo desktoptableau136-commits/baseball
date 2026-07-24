@@ -249,7 +249,6 @@ KPI row: **Record** · **Current Matchup** (W-L-T + win%) · **Roster** (whole-t
 4b. **Today's MLB Games** — real games today ranked by how much they overlap your matchup (weighted toward your roster; counts hitters, confirmed starters, and relievers), with first-pitch time, where to watch (national + local TV), the pitching matchup, per-side player counts, and each player's tactical badges. Your favorite team's games (Atlanta) are pinned first *(what to tune into; renders only when a game overlaps your matchup)*
 5. **Current Matchup** — this matchup's category rankings grid *(hidden Monday before stats accumulate)*
 5b. **Matchup N Roto Rankings** — live all-12-team roto table for the current matchup *(hidden Monday before stats accumulate)*
-6. **Matchup N** — score banner + category-by-category table
 
 **⚑ MY ROSTER**
 7. **Roster Alerts** — *(only if you have injured players)*
