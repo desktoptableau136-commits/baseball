@@ -28,7 +28,7 @@ from pathlib import Path
 
 import send_digest as sd
 from send_digest import (
-    BG, SURFACE, SURFACE2, BORDER, TEXT, MUTED, ACCENT, GREEN, RED, YELLOW,
+    BG, SURFACE, SURFACE2, BORDER, TEXT, MUTED, ACCENT, GREEN, RED, YELLOW, PURPLE,
     YEAR, MY_TEAM, _n, _is_sp,
 )
 
@@ -203,6 +203,11 @@ def build_data(snap, my_team):
     partner_fit = build_partner_fit(pitchers, hitters, roto, team_keys, ranks, n,
                                     best_recent_p, best_recent_h, hit_pctile, pit_pctile,
                                     pos_data_by_team)
+    # Consolidation megadeals (give depth, get fewer-but-better) — a separate strip ABOVE the
+    # per-rival board. Win-win only; keyed by POV like partner_fit so the LEFT dropdown stays live.
+    mega_deals = build_megadeal_board(pitchers, hitters, roto, team_keys, ranks, n,
+                                      best_recent_p, best_recent_h, hit_pctile, pit_pctile,
+                                      pos_data_by_team)
 
     my_key = _key(my_team)
     if my_key not in players:
@@ -212,6 +217,7 @@ def build_data(snap, my_team):
         "teamsMeta": teams_meta,
         "players":   players,
         "partnerFit": partner_fit,
+        "megaDeals": mega_deals,
         "myTeam":    my_key,
         "catLabels": CAT_LABELS,
         "lowerBetter": sorted(sd._LOWER_BETTER),
@@ -404,6 +410,50 @@ def build_partner_fit(pitchers, hitters, roto, team_keys, ranks, n,
     return out
 
 
+def build_megadeal_board(pitchers, hitters, roto, team_keys, ranks, n,
+                         best_recent_p, best_recent_h, hit_pctile, pit_pctile, pos_data_by_team):
+    """{pov_key: [up to 2 consolidation-megadeal records]} — the Trade Lab's megadeal strip.
+
+    A megadeal (N-for-M, |give| >= |get|, one side >= 3) is the multi-player win-win a manager
+    builds by hand: give roster depth, get fewer-but-better need-fillers (a scarce C/SS upgrade).
+    The base engine can't form these (2-per-side cap, raw-value gate), so this runs the dedicated
+    sd.find_megadeals path — WIN-WIN only — from EVERY team's POV (so the strip stays correct when
+    the LEFT dropdown switches). Each record mirrors the Partner-Fit ACTIONABLE shape (tier MEGA)
+    so the client renders it with the SAME fitCard markup + "Build this" (loadDeal already handles
+    N players)."""
+    out = {}
+    for pov in team_keys:
+        # Overlay-aware pov needs (punt SVHD, target C/SS) — the SAME model the engine uses — so the
+        # get-tags/why prose can't drift from what find_megadeals actually built the deal around.
+        my_needs, _my_surplus, _np, _ = sd._team_trade_context(
+            pov, ranks, n, pos_data_by_team.get(pov, []))
+        deals = sd.find_megadeals(pitchers, hitters, roto, pov, best_recent_p, best_recent_h,
+                                  pos_data_by_team.get(pov, []), hit_pctile, pit_pctile,
+                                  limit=2, pos_data_by_team=pos_data_by_team)
+        recs = []
+        for d in deals:
+            get = [{"name": p.get("PlayerName", ""), "tags": _fit_get_tags([p], my_needs)}
+                   for p in d["ins"]]
+            # "Why it's a blockbuster" spark — sells the excitement: how many depth pieces roll up
+            # into how many difference-makers, how many needs it fixes at once, and that they win too.
+            n_out, n_in = len(d["outs"]), len(d["ins"])
+            n_needs = len(d.get("get_cats", [])) + len(d.get("get_pos", []))
+            spark = (f"Rolls {n_out} depth pieces into {n_in} difference-maker"
+                     f"{'s' if n_in != 1 else ''} — fixes "
+                     f"{n_needs} need{'s' if n_needs != 1 else ''} in one move, and they still win too.")
+            recs.append({
+                "team": d["team"], "tier": "MEGA",
+                "get": get, "give": [p.get("PlayerName", "") for p in d["outs"]],
+                "verdict": "Blockbuster win-win — you give depth, get fewer-but-better.",
+                "spark": spark,
+                # Cats the players I'd ACTUALLY send cover for them (the deal's own send_cats).
+                "whyOffer": [CAT_LABELS.get(c, c) for c in d.get("send_cats", [])],
+                "whyGet": _fit_get_tags(d["ins"], my_needs),
+            })
+        out[pov] = recs
+    return out
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # RENDER — static shell + embedded JSON + the selection/verdict JavaScript.
 # ══════════════════════════════════════════════════════════════════════════════
@@ -411,9 +461,10 @@ def build_partner_fit(pitchers, hitters, roto, team_keys, ranks, n,
 def build_html(data):
     blob = json.dumps(data).replace("</", "<\\/")   # </script> safety
     css = _CSS.format(BG=BG, SURFACE=SURFACE, SURFACE2=SURFACE2, BORDER=BORDER,
-                      TEXT=TEXT, MUTED=MUTED, ACCENT=ACCENT, GREEN=GREEN, RED=RED, YELLOW=YELLOW)
+                      TEXT=TEXT, MUTED=MUTED, ACCENT=ACCENT, GREEN=GREEN, RED=RED, YELLOW=YELLOW,
+                      PURPLE=PURPLE)
     js = _JS.format(GREEN=GREEN, RED=RED, YELLOW=YELLOW, ACCENT=ACCENT,
-                    MUTED=MUTED, TEXT=TEXT, BORDER=BORDER, SURFACE2=SURFACE2)
+                    MUTED=MUTED, TEXT=TEXT, BORDER=BORDER, SURFACE2=SURFACE2, PURPLE=PURPLE)
     my_name = _disp(data["myTeam"])
     fresh_label, fresh_color = _freshness(data.get("refreshed", ""))
     refresh_btn = ('<button id="refreshBtn" class="refreshbtn" onclick="doRefresh()">'
@@ -445,6 +496,11 @@ def build_html(data):
       <span><b style="color:{GREEN}">BEST TARGET</b> &mdash; realistic deal, lands a need</span>
       <span><b style="color:{YELLOW}">WORTH A SHOT</b> &mdash; good deal, aggressive ask</span>
       <span><b style="color:{MUTED}">SLIM / ONE-WAY / NO DEAL</b> &mdash; why not</span>
+    </div>
+    <div id="megawrap" style="display:none;">
+      <div class="megahdr">&#128171; Blockbuster deals
+        <span class="megasub">give roster depth, get fewer-but-better &mdash; the multi-player win-win</span></div>
+      <div class="megalist" id="megalist"></div>
     </div>
     <div class="fblist" id="fblist"></div>
   </details>
@@ -548,6 +604,9 @@ body {{ margin:0; background:{BG}; color:{TEXT}; font-family:-apple-system,Segoe
 #verdict {{ text-align:center; margin-bottom:10px; }}
 .vpill {{ display:inline-block; font-weight:800; font-size:14px; padding:4px 14px; border-radius:12px; color:#0b1220; }}
 .vwhy {{ color:{MUTED}; font-size:12px; margin-top:6px; }}
+#mid.midmega {{ border-color:{PURPLE}; box-shadow:0 0 0 1px {PURPLE}, 0 0 22px rgba(168,85,247,0.28); background-image:linear-gradient(180deg,rgba(168,85,247,0.08),rgba(168,85,247,0)); }}
+.megaline {{ margin-top:9px; font-size:11.5px; line-height:1.45; color:{TEXT}; background:rgba(168,85,247,0.12); border:1px solid {PURPLE}; border-radius:7px; padding:7px 9px; text-align:left; }}
+.megaline b {{ color:{PURPLE}; letter-spacing:.3px; }}
 .counteradd {{ color:{ACCENT}; cursor:pointer; font-weight:800; }}
 .counteradd:hover {{ text-decoration:underline; }}
 .ledger {{ display:grid; grid-template-columns:1fr 1fr; gap:8px; }}
@@ -644,8 +703,15 @@ details#vdetail[open] > summary::before {{ content:'\\25BC'; }}
 .fbsub .w {{ color:{YELLOW}; font-weight:700; }}
 .fblegend {{ display:flex; gap:16px; flex-wrap:wrap; font-size:11px; color:{MUTED}; padding:11px 16px; border-bottom:1px solid {BORDER}; }}
 .fblist {{ display:grid; grid-template-columns:1fr 1fr; gap:10px; padding:14px 16px; }}
+.megahdr {{ font-size:12.5px; font-weight:800; color:{PURPLE}; padding:12px 16px 0; letter-spacing:.2px; }}
+.megasub {{ font-weight:600; color:{MUTED}; font-size:11px; margin-left:6px; letter-spacing:0; }}
+.megalist {{ display:grid; grid-template-columns:1fr 1fr; gap:10px; padding:8px 16px 4px; }}
+#megawrap {{ border-bottom:1px solid {BORDER}; }}
 .fbcard {{ background:{SURFACE}; border:1px solid {BORDER}; border-radius:10px; padding:11px 13px; }}
 .fbcard.dim {{ background:{SURFACE2}; opacity:.85; }}
+.fbcard.fbmega {{ border-color:{PURPLE}; background-image:linear-gradient(180deg,rgba(168,85,247,0.07),rgba(168,85,247,0)); }}
+.fbspark {{ font-size:10.5px; color:{PURPLE}; font-weight:600; margin-top:6px; line-height:1.4;
+            background:rgba(168,85,247,0.10); border:1px solid {PURPLE}; border-radius:6px; padding:5px 8px; }}
 .fbchead {{ display:flex; align-items:center; gap:9px; margin-bottom:7px; }}
 .fbvchip {{ font-size:9px; font-weight:800; letter-spacing:.6px; border:1px solid; border-radius:5px; padding:2px 6px; white-space:nowrap; background:rgba(255,255,255,.02); }}
 .fbteam {{ font-weight:800; font-size:14px; flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }}
@@ -1286,6 +1352,7 @@ function recompute() {{
     vBox.innerHTML = '<span class="vpill" style="background:{BORDER};color:{MUTED}">SELECT PLAYERS</span>';
     reads.innerHTML = '';
     ['giveSub','getSub','fairbar','dealsum','vdetailBody'].forEach(function(idv){{ var e=document.getElementById(idv); if(e) e.innerHTML=''; }});
+    document.getElementById('mid').classList.remove('midmega');
     setDealBar(0, 0, 0, '', '');
     return;
   }}
@@ -1417,8 +1484,25 @@ function recompute() {{
     why = "good for you, but " + pfReason;
   }}
 
+  // Blockbuster detection — mirrors the engine's mega shapes (give >= get, give side >= 3, one
+  // side >= 3) AND the win-win bar (I'd ACCEPT + they'd do it). When the manually-built deal is a
+  // genuine multi-player consolidation win-win, celebrate it: a purple banner + a purple glow on
+  // the whole builder panel, so building a blockbuster feels like the headline it is.
+  var isMega = lKeys.length >= 3 && lKeys.length >= rKeys.length
+               && label === 'ACCEPT' && pfTier === 'yes';
+  var megaBanner = '';
+  if (isMega) {{
+    var nNeed = needFilled.length + posList.length;
+    var needTxt = nNeed > 0 ? ('fixes ' + nNeed + ' need' + (nNeed !== 1 ? 's' : '') + ' in one move')
+                            : 'a clean multi-player win-win';
+    megaBanner = '<div class="megaline">&#128171; <b>Blockbuster!</b> Roll '
+               + lKeys.length + ' depth pieces into ' + rKeys.length
+               + ' difference-maker' + (rKeys.length !== 1 ? 's' : '')
+               + ' &mdash; ' + needTxt + ', and they still win too.</div>';
+  }}
+  document.getElementById('mid').classList.toggle('midmega', isMega);
   vBox.innerHTML = '<span class="vpill" style="background:'+color+'">'+label+'</span>'
-    + '<div class="vwhy">'+why+'</div>';
+    + '<div class="vwhy">'+why+'</div>' + megaBanner;
   setDealBar(lKeys.length, rKeys.length, netVal, label, color);
 
   // MY-side acceptance — the mirror of "Would they do it?". A star surrender at par is the read
@@ -1537,6 +1621,7 @@ function clearAll() {{
 // Renders DATA.partnerFit[leftTeam] — one engine-graded deal per rival, tiered by
 // how landable it is. "Build this" drops the deal into the builder below.
 var FIT_TIER = {{ BEST:['{GREEN}','BEST TARGET'], REACH:['{YELLOW}','WORTH A SHOT'],
+                  MEGA:['{PURPLE}','&#128171; BLOCKBUSTER'],
                   SLIM:['{MUTED}','SLIM'], ONEWAY:['#ea580c','ONE-WAY'], NOFIT:['{RED}','NO DEAL'] }};
 
 function escAttr(s) {{ return String(s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }}
@@ -1547,7 +1632,7 @@ function fitCard(r) {{
   var meta = DATA.teamsMeta[r.team] || {{ name:r.team }};
   var head = '<div class="fbchead"><span class="fbvchip" style="color:' + col + ';border-color:' + col + '">'
            + lbl + '</span><span class="fbteam">' + meta.name + '</span>';
-  if (r.tier === 'BEST' || r.tier === 'REACH') {{
+  if (r.tier === 'BEST' || r.tier === 'REACH' || r.tier === 'MEGA') {{
     var giveNames = (r.give || []).join(',');
     var getNames  = (r.get || []).map(function(g) {{ return g.name; }}).join(',');
     head += '<span class="fbbuild" data-partner="' + escAttr(r.team) + '" data-give="' + escAttr(giveNames)
@@ -1557,7 +1642,7 @@ function fitCard(r) {{
     }}).join('  ');
     var deal = '<div class="fbdeal"><span class="fbget">Get</span> ' + getParts
              + '<div class="fbgive"><span class="fbgv">for</span> ' + (r.give || []).join(' + ') + '</div></div>';
-    var vcol = r.tier === 'BEST' ? '{GREEN}' : '{YELLOW}';
+    var vcol = (r.tier === 'BEST' || r.tier === 'MEGA') ? '{GREEN}' : '{YELLOW}';
     var verdict = '<div class="fbverdict" style="color:' + vcol + '">' + r.verdict + '</div>';
     var why = '';
     if ((r.whyOffer && r.whyOffer.length) || (r.whyGet && r.whyGet.length)) {{
@@ -1566,7 +1651,11 @@ function fitCard(r) {{
       why = '<div class="fbwhy"><span class="wl">Why it works:</span> you\'re deep in ' + off
           + ' (their needs); they can spare the ' + got + ' you need.</div>';
     }}
-    return '<div class="fbcard">' + head + deal + verdict + why + '</div>';
+    // Blockbuster spark — the extra "why it's exciting" line, only on MEGA cards.
+    var spark = (r.tier === 'MEGA' && r.spark)
+              ? '<div class="fbspark">&#128171; ' + r.spark + '</div>' : '';
+    return '<div class="fbcard' + (r.tier === 'MEGA' ? ' fbmega' : '') + '">'
+         + head + deal + verdict + spark + why + '</div>';
   }}
   head += '</div>';
   return '<div class="fbcard dim">' + head
@@ -1588,6 +1677,11 @@ function renderFitBoard() {{
   var recs = (DATA.partnerFit || {{}})[myTk] || [];
   var list = document.getElementById('fblist');
   if (list) list.innerHTML = recs.map(fitCard).join('') || '<div class="empty">No rivals.</div>';
+  // Consolidation megadeal strip (above the per-rival board) — shown only when a win-win exists.
+  var megas = (DATA.megaDeals || {{}})[myTk] || [];
+  var ml = document.getElementById('megalist'), mw = document.getElementById('megawrap');
+  if (ml) ml.innerHTML = megas.map(fitCard).join('');
+  if (mw) mw.style.display = megas.length ? '' : 'none';
 }}
 
 function loadDeal(el) {{

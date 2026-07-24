@@ -2492,7 +2492,10 @@ def build_glossary_section():
                "timing (Statcast expected vs actual): move a bat whose surface stats are about to regress, "
                "acquire one due to rebound. Chips: blue = category gained, cyan = thin position upgraded, and "
                "the same <b>$</b> (buy-low) / <b>▼</b> (sell-high) glyphs used everywhere else in the digest — "
-               "the footer tag tells you which way the timing helps you."),
+               "the footer tag tells you which way the timing helps you. A purple <b>💫 Blockbuster</b> card "
+               "(when one exists) is the headline: a multi-player <b>consolidation</b> win-win — give several "
+               "depth pieces, get fewer-but-better need-fillers — that the standard ≤2-per-side deals can't "
+               "form. It's kept to <b>genuine two-sided wins only</b>, so some days there isn't one."),
         _entry("Luck (standings)", "Roto rank minus record rank. Positive = your W-L is better than your "
                "category performance suggests (running lucky); negative = unlucky."),
         _entry("Season Trajectory", "Every team's matchup result (W/L/T) across the whole season, "

@@ -90,6 +90,23 @@ def _set_trade_caps(max_cards=None, per_team_cap=None):
 _TRADE_POOL_WIDTH   = 4     # top-N of each side fed into the 2-for-2 combinations
 
 
+# --- Consolidation megadeals (Trade Lab strip + the digest Trade Radar's single +1 slot) ---
+# The base engine caps every package at 2 players/side and grades on RAW _tval, so a consolidation
+# deal (give several depth pieces, get fewer-but-better need-fillers) always reads as a raw overpay
+# and never generates -- yet it's exactly the win-win a manager builds by hand (give 4, get 3:
+# upgrade C, add SS, consolidate SP depth). The mega path adds N-for-M shapes with |give| >= |get|
+# (at least one side >= 3) and a RELAXED raw pay-up band, then relies on the SAME win-win gate the
+# prescriptive surfaces use (my_verdict ACCEPT + rival clearly gains + not prying their star) so
+# only genuine two-sided wins survive.
+_MEGA_GIVE_WIDTH = 8     # wider GIVE pool so several genuine pieces can bundle to BALANCE a multi-star get
+                         # side (the give-pool lever, below); get pool stays _TRADE_POOL_WIDTH
+_MEGA_MAX_GIVE   = 4     # up to 4 players on the give side
+_MEGA_MAX_GET    = 4     # up to 4 on the get side; shapes require |give| >= |get| (consolidation OR even)
+_MEGA_MAX_PAYUP  = 0.90  # raw give-get pay-up allowed (vs fair's 0.35) -- consolidation inherently overpays on raw value
+_MEGA_SIZE_BONUS = 0.9   # per-player REWARD in the mega score -- blockbusters should FAVOR the bigger deal
+                         # (4-for-4 / 4-for-3) over a lean 3-for-2, all else close; win-win gates still floor quality
+
+
 _POS_DEPTH_SLACK    = 1     # bodies beyond POS_STARTERS I can still use (bench/flex) before a position reads "stacked"
 
 
@@ -394,9 +411,119 @@ def _team_trade_context(team_key, ranks, n, pos_data):
     return needs, surplus, need_pos, surplus_pos
 
 
+def _grade_package(outs, ins, ctx):
+    """Grade ONE candidate package (any N-for-M) → a full trade dict, or None when a HARD gate
+    rejects it: no mutual benefit (no cat/pos need filled or nothing they want), either team dropped
+    below startable hitter depth, or the deal requires surrendering my best-role star at par.
+    Extracted verbatim from find_trades' package loop so find_trades AND the megadeal path share ONE
+    grader. Applies the hard gates + the full value/verdict/timing/ranking math; the SOFT filter
+    (realistic_only / mega win-win) is applied by the caller on the returned dict, so a caller can
+    tune landability without re-deriving any of the value math. `ctx` bundles the per-run + per-rival
+    context find_trades already had in scope."""
+    ranks = ctx["ranks"]; my_key = ctx["my_key"]; team = ctx["team"]; mode = ctx["mode"]
+    my_needs = ctx["my_needs"]; my_surplus = ctx["my_surplus"]
+    need_pos = ctx["need_pos"]; surplus_pos = ctx["surplus_pos"]
+    t_needs = ctx["t_needs"]; t_surplus = ctx["t_surplus"]
+    t_need_pos = ctx["t_need_pos"]; t_surplus_pos = ctx["t_surplus_pos"]
+    get_cats = ctx["get_cats"]; send_cats = ctx["send_cats"]
+    my_pos_count = ctx["my_pos_count"]; t_pos_count = ctx["t_pos_count"]
+
+    gcov = set().union(*[i["_tcats"] for i in ins]) & get_cats   # category needs met
+    gpos = _non_redundant_get_pos(set().union(*[set(i["_tfillpos"]) for i in ins]),
+                                  outs, ins, my_pos_count)         # positional holes filled (redundancy-guarded)
+    scov = set().union(*[o["_tcats"] for o in outs]) & send_cats
+    if (not gcov and not gpos) or not scov:
+        return None
+    # DEPTH FLOOR (both parties, hard veto): a deal may not drop either team below
+    # startable bodies at a hitter position without a same-position body coming back.
+    # Catches the 'their only catcher for 2 of my OF' asymmetry the _tval math misses
+    # (catcher category value ~0, so 2 OF out-value the lone C and it reads "realistic").
+    if _leaves_position_short(t_pos_count, ins, outs):    # rival gives ins, receives outs
+        return None
+    if _leaves_position_short(my_pos_count, outs, ins):   # I give outs, receive ins
+        return None
+    net_val  = sum(i["_tval"] for i in ins) - sum(o["_tval"] for o in outs)  # my base value edge (+ = I win)
+    # A radar idea is something *I* would send — never suggest one that requires me to
+    # surrender my best-role star at par (same graduated reluctance _deal_star_reach
+    # checks on the rival's side). There's no "counter" on an outgoing offer, so instead
+    # of flagging it, just don't propose it.
+    if _deal_star_surrender(ins, outs, net_val):
+        return None
+    # Demand-side net from the RIVAL's POV (+ = they win by THEIR needs): what they
+    # receive (my outs) valued by their needs (category AND positional — same
+    # convention as the my-side calc below), minus what they surrender (the ins).
+    # Drives the "realistic vs aggressive ask" read so it's roster-aware, not just
+    # base-value. Matches the Trade Lab JS mirror (`netThem`/`partnerMeta`) exactly.
+    their_get_val = sum(o["_tval"] * _need_mult(o, t_needs, t_surplus, t_need_pos, t_surplus_pos) for o in outs)
+    their_give_val = sum(i["_tval"] * _need_mult(i, t_needs, t_surplus, t_need_pos, t_surplus_pos) for i in ins)
+    net_them = their_get_val - their_give_val
+    # Demand-side net from MY POV (+ = I win by MY needs) — feeds the quiet value-matrix
+    # (Base / You / Them give-get-net) on the card, not a verdict; there's nothing to
+    # "accept" on a deal I'm the one proposing.
+    my_get_val = sum(i["_tval"] * _need_mult(i, my_needs, my_surplus, need_pos, surplus_pos) for i in ins)
+    my_give_val = sum(o["_tval"] * _need_mult(o, my_needs, my_surplus, need_pos, surplus_pos) for o in outs)
+    net_me = my_get_val - my_give_val
+    # HONEST READ: a surviving deal that leaves the rival at exactly the floor at a
+    # single-slot position (they give their starting C/1B/2B/3B/SS with no backup) is
+    # thin, not clean. Each such slot penalizes net_them so _trade_tilt flips the read
+    # to "aggressive ask", and names the hole for the card footer. Read layer only.
+    thin_them = set()
+    for P in {g for i in ins for g in i.get("_tgroups", set())}:
+        if POS_STARTERS.get(P) != 1:                      # single-slot hitter positions only
+            continue
+        leaving  = sum(1 for i in ins  if P in i.get("_tgroups", set()))
+        arriving = sum(1 for o in outs if P in o.get("_tgroups", set()))
+        if t_pos_count.get(P, 0) - leaving + arriving == POS_STARTERS[P]:
+            thin_them.add(P)
+    thin_note = ""
+    if thin_them:
+        net_them -= _TRADE_THIN_POS_PENALTY * len(thin_them)
+        _lbl = ", ".join(sorted(thin_them))
+        thin_note = f"leaves them without a backup at {_lbl}"
+    # DIRECTIONAL timing: selling-high on the GIVE side and buying-low on the GET
+    # side are the arbitrage (do more of it); giving away a riser or acquiring a
+    # regression candidate is the reverse (penalize — these are traps).
+    sell_out = sum(1 for o in outs if o.get("_tsell"))   # good: move my regressors
+    buy_in   = sum(1 for i in ins  if i.get("_tbuy"))    # good: acquire their risers
+    buy_out  = sum(1 for o in outs if o.get("_tbuy"))    # bad: don't sell my risers low
+    sell_in  = sum(1 for i in ins  if i.get("_tsell"))   # bad: don't buy their regressors
+    timing = sell_out + buy_in - buy_out - sell_in
+    # MY-SIDE VERDICT (the cohesion keystone): grade the deal from MY perspective with the
+    # EXACT _pending_verdict the Trade Lab / pending-offer surfaces show, keyed on net_me.
+    # Stored on the card so the Partner-Fit board can tier on it, AND used as a hard gate on
+    # the prescriptive surfaces (below) so the radar can only ever surface a deal the
+    # verdict itself would ACCEPT — the two surfaces can no longer disagree.
+    my_verdict = _pending_verdict(net_me, bool(gcov or gpos), timing, incoming=True)[0]
+    # Season fit: deeper need cats/positions addressed (higher rank number) score more.
+    # FAVOR mode tilts to me — their benefit down-weighted (0.3), reward my value edge
+    # (+5·net_val). FAIR mode optimizes for a realistic, accepted deal — weight THEIR
+    # benefit higher (0.5, acceptance likelihood) and, instead of rewarding an edge,
+    # PENALIZE paying up (−4·overpay) so the closest-to-even need-fills rank first.
+    my_gain    = sum(ranks[my_key][c] for c in gcov) + sum(need_pos[p][0] for p in gpos)
+    their_gain = sum(ranks[team][c]   for c in scov)
+    if mode == "fair":
+        score = (my_gain + 0.5 * their_gain + 4.0 * timing
+                 - 4.0 * max(0.0, -net_val) - 0.5 * (len(ins) - 1))
+    else:
+        score = (my_gain + 0.3 * their_gain + 5.0 * net_val
+                 + 4.0 * timing - 0.5 * (len(ins) - 1))
+    return {
+        "team": team, "outs": outs, "ins": ins, "net_val": net_val, "score": score,
+        "net_them": net_them, "net_me": net_me, "my_verdict": my_verdict, "thin_note": thin_note,
+        "my_give_val": my_give_val, "my_get_val": my_get_val,
+        "their_give_val": their_give_val, "their_get_val": their_get_val,
+        "lane": mode, "sell_out": sell_out, "buy_in": buy_in,
+        # Secondary key = the cat/pos name so equal-rank ties resolve deterministically
+        # (a bare set order flips run-to-run; render_diff needs a stable render).
+        "get_cats":  sorted(gcov, key=lambda c: (-ranks[my_key][c], c)),
+        "get_pos":   sorted(gpos, key=lambda p: (-need_pos[p][0], p)),
+        "send_cats": sorted(scov, key=lambda c: (-ranks[team][c], c)),
+    }
+
+
 def find_trades(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
                 pos_data, hit_pctile, pit_pctile, mode="favor",
-                pos_data_by_team=None, realistic_only=False):
+                pos_data_by_team=None, realistic_only=False, mega=False, mega_only=False):
     """Ranked list of mutually-beneficial trades between my_team and each rival.
     Perspective-driven via my_team (works under --team for free). See CLAUDE.md.
 
@@ -417,7 +544,12 @@ def find_trades(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
     -side net or the graduated star-reach check) before it can win a slot — used by the
     prescriptive Trade Radar surfaces (digest, dashboard) so they never suggest a deal the
     rival would balk at. Left False for Partner Fit Board, which intentionally shows a
-    REACH/"worth a shot" tier too."""
+    REACH/"worth a shot" tier too.
+    `mega`: ALSO generate consolidation megadeals (N-for-M, |give| >= |get|, at least one side
+    >= 3) using a wider give pool + a relaxed raw pay-up band; these are always filtered to a
+    genuine WIN-WIN (ACCEPT for me + rival clearly gains + not prying their star) and ranked
+    breadth-first, then tagged `mega=True`. `mega_only`: skip the base <=2-per-side shapes and
+    return ONLY megadeals (what find_megadeals uses). Prefer the find_megadeals wrapper."""
     ranks, n = team_category_ranks(roto)
     my_key = " ".join(my_team.split())
     if n < 2 or my_key not in ranks:
@@ -509,144 +641,126 @@ def find_trades(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
 
         gate = _fair if mode == "fair" else _favor_me
         packages = []
-        for o in out_pool:                                   # 1-for-1
-            for i in in_pool:
-                if gate(o["_tval"], i["_tval"]):
-                    packages.append(([o], [i]))
-        for oa, ob in itertools.combinations(out_pool, 2):   # 2-for-2
-            for ia, ib in itertools.combinations(in_pool, 2):
-                pos_ben  = _non_redundant_get_pos(set(ia["_tfillpos"]) | set(ib["_tfillpos"]),
-                                                  [oa, ob], [ia, ib], my_pos_count)
-                benefits = (((ia["_tcats"] | ib["_tcats"]) & get_cats) | pos_ben)
-                if len(benefits) < 2:
-                    continue   # a package must address >= 2 distinct needs (cat or position)
-                if gate(oa["_tval"] + ob["_tval"], ia["_tval"] + ib["_tval"], mult=1.5):
-                    packages.append(([oa, ob], [ia, ib]))
-        # 2-for-1: two of my surplus pieces for ONE rival need-filler — lets value ADD UP to land
-        # a scarce piece (a C/SS stud) without a single-piece overpay tripping the pay-up cap.
-        for oa, ob in itertools.combinations(out_pool, 2):
-            for i in in_pool:
-                if gate(oa["_tval"] + ob["_tval"], i["_tval"], mult=1.5):
-                    packages.append(([oa, ob], [i]))
-        # UPGRADE-SWAP: give my WEAKEST body at a target/need hitter position P (a surplus-only
-        # give pool can never offer it — P is a need, not a surplus) PLUS a rival-needed surplus
-        # sweetener, to GET a clear upgrade at P. The swap keeps my body count at P (shed 1 + add
-        # 1), so the depth floor holds and _non_redundant_get_pos still credits P as filled.
-        my_at_pos = {}
-        for r in my_players:
-            if r["_tptype"] != "hit":
-                continue
-            for P in (r["_tgroups"] & set(need_pos)):
-                my_at_pos.setdefault(P, []).append(r)
-        for P, mine in my_at_pos.items():
-            weak = min(mine, key=lambda r: r["_tscore"])           # my weakest body at P
-            ups  = [i for i in in_pool
-                    if P in set(i.get("_tfillpos", [])) and i["_tscore"] > weak["_tscore"]]
-            for i in ups:
-                for sweet in out_pool:                             # a rival-needed sweetener evens value
-                    if sweet is weak:
-                        continue
-                    if gate(weak["_tval"] + sweet["_tval"], i["_tval"], mult=1.5):
-                        packages.append(([weak, sweet], [i]))
-
-        for outs, ins in packages:
-            gcov = set().union(*[i["_tcats"] for i in ins]) & get_cats   # category needs met
-            gpos = _non_redundant_get_pos(set().union(*[set(i["_tfillpos"]) for i in ins]),
-                                          outs, ins, my_pos_count)         # positional holes filled (redundancy-guarded)
-            scov = set().union(*[o["_tcats"] for o in outs]) & send_cats
-            if (not gcov and not gpos) or not scov:
-                continue
-            # DEPTH FLOOR (both parties, hard veto): a deal may not drop either team below
-            # startable bodies at a hitter position without a same-position body coming back.
-            # Catches the 'their only catcher for 2 of my OF' asymmetry the _tval math misses
-            # (catcher category value ~0, so 2 OF out-value the lone C and it reads "realistic").
-            if _leaves_position_short(t_pos_count, ins, outs):    # rival gives ins, receives outs
-                continue
-            if _leaves_position_short(my_pos_count, outs, ins):   # I give outs, receive ins
-                continue
-            net_val  = sum(i["_tval"] for i in ins) - sum(o["_tval"] for o in outs)  # my base value edge (+ = I win)
-            # A radar idea is something *I* would send — never suggest one that requires me to
-            # surrender my best-role star at par (same graduated reluctance _deal_star_reach
-            # checks on the rival's side). There's no "counter" on an outgoing offer, so instead
-            # of flagging it, just don't propose it.
-            if _deal_star_surrender(ins, outs, net_val):
-                continue
-            # Demand-side net from the RIVAL's POV (+ = they win by THEIR needs): what they
-            # receive (my outs) valued by their needs (category AND positional — same
-            # convention as the my-side calc below), minus what they surrender (the ins).
-            # Drives the "realistic vs aggressive ask" read so it's roster-aware, not just
-            # base-value. Matches the Trade Lab JS mirror (`netThem`/`partnerMeta`) exactly.
-            their_get_val = sum(o["_tval"] * _need_mult(o, t_needs, t_surplus, t_need_pos, t_surplus_pos) for o in outs)
-            their_give_val = sum(i["_tval"] * _need_mult(i, t_needs, t_surplus, t_need_pos, t_surplus_pos) for i in ins)
-            net_them = their_get_val - their_give_val
-            # Demand-side net from MY POV (+ = I win by MY needs) — feeds the quiet value-matrix
-            # (Base / You / Them give-get-net) on the card, not a verdict; there's nothing to
-            # "accept" on a deal I'm the one proposing.
-            my_get_val = sum(i["_tval"] * _need_mult(i, my_needs, my_surplus, need_pos, surplus_pos) for i in ins)
-            my_give_val = sum(o["_tval"] * _need_mult(o, my_needs, my_surplus, need_pos, surplus_pos) for o in outs)
-            net_me = my_get_val - my_give_val
-            # HONEST READ: a surviving deal that leaves the rival at exactly the floor at a
-            # single-slot position (they give their starting C/1B/2B/3B/SS with no backup) is
-            # thin, not clean. Each such slot penalizes net_them so _trade_tilt flips the read
-            # to "aggressive ask", and names the hole for the card footer. Read layer only.
-            thin_them = set()
-            for P in {g for i in ins for g in i.get("_tgroups", set())}:
-                if POS_STARTERS.get(P) != 1:                      # single-slot hitter positions only
+        if not mega_only:                                    # base <=2-per-side shapes
+            for o in out_pool:                                   # 1-for-1
+                for i in in_pool:
+                    if gate(o["_tval"], i["_tval"]):
+                        packages.append(([o], [i]))
+            for oa, ob in itertools.combinations(out_pool, 2):   # 2-for-2
+                for ia, ib in itertools.combinations(in_pool, 2):
+                    pos_ben  = _non_redundant_get_pos(set(ia["_tfillpos"]) | set(ib["_tfillpos"]),
+                                                      [oa, ob], [ia, ib], my_pos_count)
+                    benefits = (((ia["_tcats"] | ib["_tcats"]) & get_cats) | pos_ben)
+                    if len(benefits) < 2:
+                        continue   # a package must address >= 2 distinct needs (cat or position)
+                    if gate(oa["_tval"] + ob["_tval"], ia["_tval"] + ib["_tval"], mult=1.5):
+                        packages.append(([oa, ob], [ia, ib]))
+            # 2-for-1: two of my surplus pieces for ONE rival need-filler — lets value ADD UP to land
+            # a scarce piece (a C/SS stud) without a single-piece overpay tripping the pay-up cap.
+            for oa, ob in itertools.combinations(out_pool, 2):
+                for i in in_pool:
+                    if gate(oa["_tval"] + ob["_tval"], i["_tval"], mult=1.5):
+                        packages.append(([oa, ob], [i]))
+            # UPGRADE-SWAP: give my WEAKEST body at a target/need hitter position P (a surplus-only
+            # give pool can never offer it — P is a need, not a surplus) PLUS a rival-needed surplus
+            # sweetener, to GET a clear upgrade at P. The swap keeps my body count at P (shed 1 + add
+            # 1), so the depth floor holds and _non_redundant_get_pos still credits P as filled.
+            my_at_pos = {}
+            for r in my_players:
+                if r["_tptype"] != "hit":
                     continue
-                leaving  = sum(1 for i in ins  if P in i.get("_tgroups", set()))
-                arriving = sum(1 for o in outs if P in o.get("_tgroups", set()))
-                if t_pos_count.get(P, 0) - leaving + arriving == POS_STARTERS[P]:
-                    thin_them.add(P)
-            thin_note = ""
-            if thin_them:
-                net_them -= _TRADE_THIN_POS_PENALTY * len(thin_them)
-                _lbl = ", ".join(sorted(thin_them))
-                thin_note = f"leaves them without a backup at {_lbl}"
-            # DIRECTIONAL timing: selling-high on the GIVE side and buying-low on the GET
-            # side are the arbitrage (do more of it); giving away a riser or acquiring a
-            # regression candidate is the reverse (penalize — these are traps).
-            sell_out = sum(1 for o in outs if o.get("_tsell"))   # good: move my regressors
-            buy_in   = sum(1 for i in ins  if i.get("_tbuy"))    # good: acquire their risers
-            buy_out  = sum(1 for o in outs if o.get("_tbuy"))    # bad: don't sell my risers low
-            sell_in  = sum(1 for i in ins  if i.get("_tsell"))   # bad: don't buy their regressors
-            timing = sell_out + buy_in - buy_out - sell_in
-            # MY-SIDE VERDICT (the cohesion keystone): grade the deal from MY perspective with the
-            # EXACT _pending_verdict the Trade Lab / pending-offer surfaces show, keyed on net_me.
-            # Stored on the card so the Partner-Fit board can tier on it, AND used as a hard gate on
-            # the prescriptive surfaces (below) so the radar can only ever surface a deal the
-            # verdict itself would ACCEPT — the two surfaces can no longer disagree.
-            my_verdict = _pending_verdict(net_me, bool(gcov or gpos), timing, incoming=True)[0]
+                for P in (r["_tgroups"] & set(need_pos)):
+                    my_at_pos.setdefault(P, []).append(r)
+            for P, mine in my_at_pos.items():
+                weak = min(mine, key=lambda r: r["_tscore"])           # my weakest body at P
+                ups  = [i for i in in_pool
+                        if P in set(i.get("_tfillpos", [])) and i["_tscore"] > weak["_tscore"]]
+                for i in ups:
+                    for sweet in out_pool:                             # a rival-needed sweetener evens value
+                        if sweet is weak:
+                            continue
+                        if gate(weak["_tval"] + sweet["_tval"], i["_tval"], mult=1.5):
+                            packages.append(([weak, sweet], [i]))
+
+        # CONSOLIDATION MEGADEALS (N-for-M, |give| >= |get|, at least one side >= 3): give several
+        # depth pieces for fewer-but-better need-fillers. A WIDER give pool lets depth bundle; the
+        # gate is a RELAXED raw pay-up band (consolidation inherently overpays on raw _tval — the
+        # value only shows up demand-adjusted, which the downstream win-win filter enforces).
+        mega_packages = []
+        if mega:
+            # GIVE-POOL LEVER: a blockbuster gives DEPTH to get fewer-but-better, but if the give side
+            # is surplus depth ONLY, 4 low-value pieces can't BALANCE a multi-star get side (Baldwin +
+            # Witt) without me stealing (get - give > the steal ceiling) -- so the real 4-for-3 never
+            # forms. So the mega give pool is BROADER than the base surplus-only pool: it also admits a
+            # sub-star CONTRIBUTOR (`_tval < _STAR_TVAL_FLOOR`) from ANY position (not just a surplus
+            # one) that still HELPS the rival (`send_cats`), so several genuine pieces can add up to a
+            # fair give. My studs stay out (the star floor caps it); I can't be gutted (the both-sides
+            # `_leaves_position_short` HARD VETO in _grade_package still blocks going thin at any slot);
+            # and a value-losing give still can't pass (the win-win net_me gate).
+            mega_out = sorted([r for r in my_players
+                               if (r["_tcats"] & send_cats)
+                               and ((r["_tgroups"] & surplus_pos) or r["_tval"] < _STAR_TVAL_FLOOR)
+                               and (r["_tval"] <= _give_ceil or r["_tsell"])],
+                              key=lambda r: -r["_tscore"])[:_MEGA_GIVE_WIDTH]
+            def _mega_gate(vo, vi):
+                return (vo - vi) <= _MEGA_MAX_PAYUP and (vi - vo) <= _TRADE_MAX_EDGE
+            for gs in range(2, _MEGA_MAX_GIVE + 1):
+                for ns in range(2, _MEGA_MAX_GET + 1):
+                    if gs < ns or (gs < 3 and ns < 3):   # consolidation/even, and at least one side >= 3
+                        continue
+                    for outs in itertools.combinations(mega_out, gs):
+                        for ins in itertools.combinations(in_pool, ns):
+                            pos_ben = _non_redundant_get_pos(
+                                set().union(*[set(i["_tfillpos"]) for i in ins]),
+                                list(outs), list(ins), my_pos_count)
+                            benefits = (set().union(*[i["_tcats"] for i in ins]) & get_cats) | pos_ben
+                            if len(benefits) < 2:                # must address >= 2 distinct needs
+                                continue
+                            if _mega_gate(sum(o["_tval"] for o in outs),
+                                          sum(i["_tval"] for i in ins)):
+                                mega_packages.append((list(outs), list(ins)))
+
+        # Per-rival context bundle for the shared grader (find_trades + the megadeal path both
+        # feed packages through _grade_package, so the value/verdict math lives in ONE place).
+        ctx = {
+            "ranks": ranks, "my_key": my_key, "team": team, "mode": mode,
+            "my_needs": my_needs, "my_surplus": my_surplus,
+            "need_pos": need_pos, "surplus_pos": surplus_pos,
+            "t_needs": t_needs, "t_surplus": t_surplus,
+            "t_need_pos": t_need_pos, "t_surplus_pos": t_surplus_pos,
+            "get_cats": get_cats, "send_cats": send_cats,
+            "my_pos_count": my_pos_count, "t_pos_count": t_pos_count,
+        }
+        for outs, ins in packages:
+            t = _grade_package(outs, ins, ctx)
+            if t is None:                                        # hard gate (depth/star-surrender/no-fit)
+                continue
             # Prescriptive surfaces (Trade Radar/dashboard) recommend only a genuine WIN-WIN:
             # ACCEPT for me (not a pay-up COUNTER/DECLINE), the rival CLEARLY gains (net_them past
             # a real-gain bar, not merely breaks even), and I'm not prying their star at par. Left
             # off for the Partner-Fit board (realistic_only=False), which tiers reach deals too.
-            if realistic_only and (my_verdict != "ACCEPT"
-                                   or net_them < _TRADE_RIVAL_GAIN_MIN
-                                   or _deal_star_reach(ins, outs, net_val)):
+            if realistic_only and (t["my_verdict"] != "ACCEPT"
+                                   or t["net_them"] < _TRADE_RIVAL_GAIN_MIN
+                                   or _deal_star_reach(ins, outs, t["net_val"])):
                 continue
-            # Season fit: deeper need cats/positions addressed (higher rank number) score more.
-            # FAVOR mode tilts to me — their benefit down-weighted (0.3), reward my value edge
-            # (+5·net_val). FAIR mode optimizes for a realistic, accepted deal — weight THEIR
-            # benefit higher (0.5, acceptance likelihood) and, instead of rewarding an edge,
-            # PENALIZE paying up (−4·overpay) so the closest-to-even need-fills rank first.
-            my_gain    = sum(ranks[my_key][c] for c in gcov) + sum(need_pos[p][0] for p in gpos)
-            their_gain = sum(ranks[team][c]   for c in scov)
-            if mode == "fair":
-                score = (my_gain + 0.5 * their_gain + 4.0 * timing
-                         - 4.0 * max(0.0, -net_val) - 0.5 * (len(ins) - 1))
-            else:
-                score = (my_gain + 0.3 * their_gain + 5.0 * net_val
-                         + 4.0 * timing - 0.5 * (len(ins) - 1))
-            trades.append({
-                "team": team, "outs": outs, "ins": ins, "net_val": net_val, "score": score,
-                "net_them": net_them, "net_me": net_me, "my_verdict": my_verdict, "thin_note": thin_note,
-                "my_give_val": my_give_val, "my_get_val": my_get_val,
-                "their_give_val": their_give_val, "their_get_val": their_get_val,
-                "lane": mode, "sell_out": sell_out, "buy_in": buy_in,
-                "get_cats":  sorted(gcov, key=lambda c: -ranks[my_key][c]),
-                "get_pos":   sorted(gpos, key=lambda p: -need_pos[p][0]),
-                "send_cats": sorted(scov, key=lambda c: -ranks[team][c]),
-            })
+            trades.append(t)
+        # Megadeals are WIN-WIN-ONLY regardless of realistic_only (a big multi-player ask is only
+        # worth surfacing when both sides clearly gain), and ranked BREADTH-first — the deal that
+        # fixes the most needs at a fair demand-adjusted price wins, heavier packages lightly taxed.
+        for outs, ins in mega_packages:
+            t = _grade_package(outs, ins, ctx)
+            if t is None:
+                continue
+            if (t["my_verdict"] != "ACCEPT" or t["net_them"] < _TRADE_RIVAL_GAIN_MIN
+                    or _deal_star_reach(ins, outs, t["net_val"])):
+                continue
+            timing = (sum(1 for o in outs if o.get("_tsell")) + sum(1 for i in ins if i.get("_tbuy"))
+                      - sum(1 for o in outs if o.get("_tbuy")) - sum(1 for i in ins if i.get("_tsell")))
+            needs_filled = len(t["get_cats"]) + len(t["get_pos"])
+            t["mega"] = True
+            t["score"] = (needs_filled + 2.0 * t["net_me"] + 1.0 * t["net_them"]
+                          + 4.0 * timing + _MEGA_SIZE_BONUS * (len(outs) + len(ins)))
+            trades.append(t)
 
     trades.sort(key=lambda t: -t["score"])
     picked, per_team, seen = [], {}, set()
@@ -697,6 +811,31 @@ def find_trades_combined(pitchers, hitters, roto, my_team, best_recent_p, best_r
         per_team[t["team"]] = per_team.get(t["team"], 0) + 1
         picked.append(t)
         if len(picked) >= cards:
+            break
+    return picked
+
+
+def find_megadeals(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
+                   pos_data, hit_pctile, pit_pctile, limit=2, pos_data_by_team=None):
+    """Top `limit` CONSOLIDATION megadeals (N-for-M, |give| >= |get|, at least one side >= 3),
+    league-wide from my_team's POV, highest breadth-first score first, ONE PER PARTNER (so the
+    Trade Lab strip mixes up teams; the score favors bigger deals via _MEGA_SIZE_BONUS). WIN-WIN only: each grades
+    ACCEPT for me AND the rival clearly gains AND doesn't pry their star. Runs find_trades' mega
+    -only path (the base <=2-per-side shapes are skipped) on the FAIR give-ceiling so a genuinely
+    good chip can bundle. Returns [] when no megadeal is a two-sided win — expected on many days.
+    Used by the digest Trade Radar (limit=1) and the Trade Lab megadeal strip (limit=2)."""
+    deals = find_trades(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
+                        pos_data, hit_pctile, pit_pctile, mode="fair",
+                        pos_data_by_team=pos_data_by_team, mega=True, mega_only=True)
+    # One blockbuster per PARTNER so the strip mixes up teams (deals are already score-sorted, so
+    # the first per team is that team's best). The digest's limit=1 is unaffected.
+    picked, seen_teams = [], set()
+    for d in deals:
+        if d["team"] in seen_teams:
+            continue
+        seen_teams.add(d["team"])
+        picked.append(d)
+        if len(picked) >= limit:
             break
     return picked
 
@@ -1197,14 +1336,19 @@ def build_pending_trades_section(graded, best_recent_p, best_recent_h, hit_pctil
 def build_trade_radar(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
                       pos_data, hit_pctile, pit_pctile, team_logos=None):
     # Trade Radar is prescriptive ("go send this") — only ever surface deals a rival would
-    # realistically accept (see find_trades' realistic_only docstring).
+    # realistically accept (see find_trades' realistic_only docstring). Show up to 3 normal
+    # (<=2-per-side) asks + up to 1 CONSOLIDATION megadeal (give depth, get fewer-but-better
+    # need-fillers) — the multi-player win-win a manager builds by hand.
     trades = find_trades_combined(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
-                                  pos_data, hit_pctile, pit_pctile, realistic_only=True)
-    if not trades:
+                                  pos_data, hit_pctile, pit_pctile, realistic_only=True, cards=3)
+    mega = find_megadeals(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
+                          pos_data, hit_pctile, pit_pctile, limit=1)
+    all_deals = trades + mega
+    if not all_deals:
         return ""
     team_logos = team_logos or {}
     cards = []
-    for t in trades:
+    for t in all_deals:
         give = "".join(_trade_player_line(o, set(t["send_cats"]), MUTED, "give",
                                           best_recent_p=best_recent_p, best_recent_h=best_recent_h,
                                           hit_pctile=hit_pctile) for o in t["outs"])
@@ -1230,6 +1374,37 @@ def build_trade_radar(pitchers, hitters, roto, my_team, best_recent_p, best_rece
         acc_chip = (f'<span style="font-size:8.5px;font-weight:700;letter-spacing:.4px;'
                     f'text-transform:uppercase;color:{acc_color};border:1px solid {acc_color};'
                     f'border-radius:3px;padding:1px 5px;margin-left:6px;">{accept}</span>')
+        # BLOCKBUSTER tag on a megadeal card — the headline of the whole Radar. A SOLID-filled
+        # purple->magenta chip (not an outline badge) so it reads as "this is the big one", the
+        # PURPLE tying it to the Trade Lab's blockbuster strip. Purple as a card border/solid fill
+        # can't be mistaken for the translucent PWR/thin-pos chips on the player lines below it.
+        mega_is = bool(t.get("mega"))
+        mega_chip = (f'<span style="font-size:8.5px;font-weight:800;letter-spacing:.5px;'
+                     f'text-transform:uppercase;color:#fff;background:{PURPLE};'
+                     f'background-image:linear-gradient(135deg,{PURPLE},{MAGENTA});'
+                     f'border-radius:3px;padding:1px 6px;margin-left:6px;">&#128171; Blockbuster</span>'
+                     if mega_is else "")
+        # The card itself leads the eye: a brighter purple border + a faint purple wash on a
+        # blockbuster, plain SURFACE on a normal card.
+        card_border = f'1.5px solid {PURPLE}' if mega_is else f'1px solid {BORDER}'
+        card_bg = (f'background:{SURFACE};background-image:linear-gradient('
+                   f'180deg,rgba(168,85,247,0.07),rgba(168,85,247,0));'
+                   if mega_is else f'background:{SURFACE};')
+        # "Why it's a blockbuster" — a dynamic one-liner that sells the excitement: how many depth
+        # pieces roll up into how many difference-makers, how many needs it fixes at once, and that
+        # the rival still gains (so it's a real win-win, not a fantasy). Only on megadeal cards.
+        mega_insight = ""
+        if mega_is:
+            n_out, n_in = len(t["outs"]), len(t["ins"])
+            n_needs = len(t.get("get_cats", [])) + len(t.get("get_pos", []))
+            needs_str = f'{n_needs} of your needs' if n_needs != 1 else 'a need'
+            mega_insight = (
+                f'<div style="font-size:11px;color:{TEXT};margin-top:8px;'
+                f'background:rgba(168,85,247,0.10);border:1px solid {PURPLE};'
+                f'border-radius:6px;padding:7px 9px;line-height:1.45;">'
+                f'<span style="color:{PURPLE};font-weight:800;">&#128171; Why it&rsquo;s a blockbuster:</span> '
+                f'rolls {n_out} depth pieces into {n_in} difference-maker{"s" if n_in != 1 else ""} '
+                f'&mdash; fixes {needs_str} in a single move, and they still come out ahead.</div>')
         # Quiet one-line net hint (Base / You / Them) — see _trade_net_summary.
         base_give = sum(o["_tval"] for o in t["outs"])
         base_get  = sum(i["_tval"] for i in t["ins"])
@@ -1242,12 +1417,12 @@ def build_trade_radar(pitchers, hitters, roto, my_team, best_recent_p, best_rece
                                         [o.get("PlayerName") for o in t["outs"]],
                                         [i.get("PlayerName") for i in t["ins"]])
         cards.append(
-            f'<div style="background:{SURFACE};border:1px solid {BORDER};border-radius:8px;'
+            f'<div style="{card_bg}border:{card_border};border-radius:8px;'
             f'padding:12px 14px;margin-bottom:12px;">'
             f'<div style="display:flex;justify-content:space-between;align-items:center;'
             f'font-size:11px;color:{MUTED};margin-bottom:8px;">'
             f'<span>with {logo}'
-            f'<span style="color:{TEXT};font-weight:700;">{t["team"]}</span>{acc_chip}</span>'
+            f'<span style="color:{TEXT};font-weight:700;">{t["team"]}</span>{acc_chip}{mega_chip}</span>'
             f'<span>{net_summary}{tradelab_btn}</span></div>'
             f'<table style="width:100%;border-collapse:collapse;"><tr>'
             f'<td style="width:47%;vertical-align:top;">'
@@ -1263,15 +1438,23 @@ def build_trade_radar(pitchers, hitters, roto, my_team, best_recent_p, best_rece
             f'<span style="color:{ACCENT};font-weight:700;">{get_lbl}</span>; they shore up '
             f'<span style="color:{TEXT};">{send_lbl}</span>'
             f'<span style="color:{MUTED};"> &middot; {value}</span>{thin_html}</div>'
+            f'{mega_insight}'
             f'</div>'
         )
     n_fair = sum(1 for t in trades if t.get("lane") == "fair")
-    sub = (f'{len(trades)} swap{"s" if len(trades) != 1 else ""} that fix a rival&rsquo;s '
-           f'category need &mdash; <span style="color:{GREEN};">realistic</span>, near-even '
-           f'asks that actually land the upgrade, plus value plays where a rival is motivated'
-           if n_fair else
-           f'{len(trades)} swap{"s" if len(trades) != 1 else ""} that fix a rival&rsquo;s '
-           f'category need while tilting value your way (buy-low / sell-high where possible)')
+    n_norm = len(trades)
+    if n_norm:
+        sub = (f'{n_norm} swap{"s" if n_norm != 1 else ""} that fix a rival&rsquo;s '
+               f'category need &mdash; <span style="color:{GREEN};">realistic</span>, near-even '
+               f'asks that actually land the upgrade, plus value plays where a rival is motivated'
+               if n_fair else
+               f'{n_norm} swap{"s" if n_norm != 1 else ""} that fix a rival&rsquo;s '
+               f'category need while tilting value your way (buy-low / sell-high where possible)')
+        if mega:
+            sub += (f' &middot; <span style="color:{PURPLE};font-weight:700;">plus a &#128171; blockbuster</span>'
+                    f'<span style="color:{MUTED};"> &mdash; give depth, get fewer-but-better</span>')
+    else:
+        sub = 'A &#128171; blockbuster &mdash; give roster depth, get a scarce upgrade'
     return section_head("Trade Radar", sub) + "".join(cards)
 
 
