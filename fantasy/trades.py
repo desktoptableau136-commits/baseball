@@ -122,6 +122,14 @@ _MEGA_BALLAST_MAX   = 1.20 # ...and above this it's a piece they'd want to keep 
 _MEGA_CORE_MIN      = 2    # a blockbuster must fill >=2 real needs with actual need-fillers (not ballast)
 _MEGA_SHED_BONUS    = 0.6  # score REWARD per give-piece that sheds my weak incumbent at a need position
                            # (addition-by-subtraction: dump the dead-weight C/SS I'm replacing in the same move)
+# SPREAD-THE-DRAIN cap: a real consolidation gives up depth in a FEW spots (2 SP + 1 C + 1 OF), it does NOT
+# gut a single position (shipping 3+ of my 7 OF leaves me at the bare fielding floor with zero cushion). Cap
+# how many give pieces may share ANY one position group (pitchers lumped as "P"). Multi-eligible bats count
+# toward EVERY group they cover (giving a 1B/OF drains OF too). This forces the loop to reach into my surplus
+# staff + shed-able C for the extra bodies instead of stacking outfielders -- reproducing the hand-built shape.
+_MEGA_GIVE_POS_CAP  = 2    # max give pieces from one position group (my example: never >2 from a single spot)
+_MEGA_SPREAD_BONUS  = 0.5  # score REWARD per DISTINCT give position-source -- among win-wins, prefer the deal
+                           # that spreads the drain (SP+C+OF) over one that leans on a single group
 # Pitching counts as a surplus ROLE (so my deep SP staff can bundle into a give) when any pitching category
 # is one of my surpluses -- the reliever/starter analog of a surplus hitter POSITION.
 _PITCH_SURPLUS_CATS = frozenset({"ERA", "WHIP", "K", "W", "QS", "SVHD", "SV"})
@@ -263,6 +271,27 @@ def _non_redundant_get_pos(get_pos, outs, ins, my_pos_count):
         if not (post > cap and shed == 0):
             keep.add(P)
     return keep
+
+
+def _give_pos_sources(r):
+    """The position group(s) a give piece drains. A hitter drains every group it's eligible at
+    (a 1B/OF depth piece thins BOTH); a pitcher drains the lumped staff 'P'. Used to keep a
+    consolidation from gutting one spot -- see `_give_pos_overload` and the spread bonus."""
+    if r.get("_tptype") == "hit":
+        return set(r.get("_tgroups") or ())
+    return {"P"}
+
+
+def _give_pos_overload(outs):
+    """True when a give package concentrates more than `_MEGA_GIVE_POS_CAP` pieces on a single
+    position group -- the 'ship 3+ of my 7 OF' shape a manager would never build. Multi-eligible
+    bats count toward each group they cover, so a bundle of OF-eligible bodies trips it even when
+    their listed positions differ."""
+    counts = {}
+    for o in outs:
+        for g in _give_pos_sources(o):
+            counts[g] = counts.get(g, 0) + 1
+    return bool(counts) and max(counts.values()) > _MEGA_GIVE_POS_CAP
 
 
 _POS_SCARCITY = {}
@@ -774,6 +803,8 @@ def find_trades(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
                     if gs < ns or (gs < 3 and ns < 3):   # consolidation/even, and at least one side >= 3
                         continue
                     for outs in itertools.combinations(mega_out, gs):
+                        if gs >= 3 and _give_pos_overload(outs):   # don't gut one spot -- spread the drain
+                            continue
                         for ins in itertools.combinations(mega_in, ns):
                             core = sum(1 for i in ins if (i["_tcats"] & get_cats) or i.get("_tfillpos"))
                             if core < _MEGA_CORE_MIN:            # >=2 real need-fillers (ballast can't be the point)
@@ -829,10 +860,13 @@ def find_trades(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
             # (addition-by-subtraction). A give hitter at one of my need positions is the dead-weight C/SS
             # I'm replacing; the depth floor still guarantees a body comes back, so this is always safe.
             shed = sum(1 for o in outs if o["_tptype"] == "hit" and (o["_tgroups"] & set(need_pos)))
+            # SPREAD reward: among win-wins, favor a give that draws from several position sources
+            # (2 SP + 1 C + 1 OF) over one leaning on a single group -- the hand-built consolidation shape.
+            spread = len({g for o in outs for g in _give_pos_sources(o)})
             t["mega"] = True
             t["score"] = (needs_filled + 2.0 * t["net_me"] + 1.0 * t["net_them"]
                           + 4.0 * timing + _MEGA_SIZE_BONUS * (len(outs) + len(ins))
-                          + _MEGA_SHED_BONUS * shed)
+                          + _MEGA_SHED_BONUS * shed + _MEGA_SPREAD_BONUS * spread)
             trades.append(t)
 
     trades.sort(key=lambda t: -t["score"])
