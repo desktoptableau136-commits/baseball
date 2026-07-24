@@ -561,6 +561,44 @@ def _archetype_line(desc):
             if desc else "")
 
 
+def _recent_form_line(rec, role, win):
+    """One compact muted line naming the recent-window rates behind the `30-day` score, so
+    the season|recent header delta is legible. role: 'SP'|'RP'|'hit'. Renders only when a
+    recent row + window label exist (i.e. exactly when the dual-score header shows)."""
+    if not rec or not win:
+        return ""
+    parts = []
+    if role in ("SP", "RP"):
+        era, whip = _n(rec.get("ERA")), _n(rec.get("WHIP"))
+        kpct, kip = _n(rec.get("Kpct_P")), _n(rec.get("K/IP"))
+        if era >= 0:
+            parts.append(f"{era:.2f} ERA")
+        if kpct > 0:
+            parts.append(f"{kpct * 100:.0f}% K")
+        elif kip > 0:
+            parts.append(f"{kip:.2f} K/IP")
+        if whip > 0:
+            parts.append(f"{whip:.2f} WHIP")
+        if role == "RP":
+            svhd = _n(rec.get("SVHD"))
+            if svhd > 0:
+                parts.append(f"{int(svhd)} SV+H")
+    else:  # hitter
+        ops, avg, hr = _n(rec.get("OPS")), _n(rec.get("AVG")), _n(rec.get("HR"))
+        if ops > 0:
+            parts.append(f"{_st(ops)} OPS")
+        if avg > 0:
+            parts.append(f"{_st(avg)} AVG")
+        if hr > 0:
+            parts.append(f"{int(hr)} HR")
+    parts = parts[:3]
+    if not parts:
+        return ""
+    label = win.replace("-day", " days")   # "30-day" -> "30 days"
+    return (f'<div style="margin-top:4px;color:{MUTED};font-size:12px;">'
+            f'Last {label}: {" &middot; ".join(parts)}</div>')
+
+
 def _hitter_score_breakdown(r, idx_recent=None, hit_pctile=None):
     """Prose breakdown of a hitter's Score for the tap-to-expand panel."""
     comps, mult = hitter_score(r, _parts=True)
@@ -585,6 +623,7 @@ def _hitter_score_breakdown(r, idx_recent=None, hit_pctile=None):
     if mult < 0.995:
         narr += f' Trimmed to {round(mult * 100)}% for thin playing time (few at-bats vs a regular).'
     html = (f'<b style="color:{TEXT};">{head}</b>'
+            + _recent_form_line(rec, "hit", win)
             + _archetype_line(_hitter_archetype(r, hit_pctile, season, tag))
             + f'<div style="margin-top:4px;">{narr}</div>')
     hrp = _n(r.get("HR_Probability"))
@@ -600,7 +639,9 @@ def _hitter_score_breakdown(r, idx_recent=None, hit_pctile=None):
 
 def _pitcher_score_breakdown(r, idx_recent=None):
     """Prose breakdown of a pitcher's Score. Role-aware: SP → pitcher_score components
-    (blended with recent form); RP → rp_score (unblended)."""
+    (blended with recent form); RP → rp_score (season). Both show a `season | 30-day`
+    recent-form header when a short-window row exists — SP via pitcher_score on that row,
+    RP via rp_score_recent (rate-paced, since the headline rp_score is season-volume based)."""
     if _is_sp(r):
         comps, mult = pitcher_score(r, _parts=True)
         season, role, clauses = pitcher_score(r), "SP", _sp_clauses(r, comps)
@@ -609,9 +650,11 @@ def _pitcher_score_breakdown(r, idx_recent=None):
         season, role, clauses = rp_score(r), "RP", _rp_clauses(r, comps)
     if not comps:
         return ""
-    # SP blends recent form; RP is unblended (no recent line, header stays single-score).
-    rec = idx_recent.get(r.get("PlayerName", "")) if (role == "SP" and idx_recent) else None
-    rs  = pitcher_score(rec) if rec else 0
+    # Recent-form header: SP blends the window row directly; RP paces its window rates to a
+    # comparable season-scale score (rp_score_recent returns None on a thin/absent window,
+    # so the header falls back to the single-score form for both roles).
+    rec = idx_recent.get(r.get("PlayerName", "")) if idx_recent else None
+    rs  = (pitcher_score(rec) if role == "SP" else (rp_score_recent(rec, r) or 0)) if rec else 0
     win = tag = None
     if rs > 0:
         ds  = int(_n(rec.get("Dataset")) or 0)
@@ -627,6 +670,7 @@ def _pitcher_score_breakdown(r, idx_recent=None):
     if mult < 0.995:
         narr += f' Trimmed to {round(mult * 100)}% for small innings sample.'
     html = (f'<b style="color:{TEXT};">{head}</b>'
+            + _recent_form_line(rec, role, win)
             + _archetype_line(_pitcher_archetype(r, role, season, tag))
             + f'<div style="margin-top:4px;">{narr}</div>')
     html += _pitcher_badge_context(r)

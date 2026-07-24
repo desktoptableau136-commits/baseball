@@ -433,6 +433,65 @@ def rp_score(r, _raw=False, _parts=False):
     return max(0, min(100, round(s)))
 
 
+def _ip_notation_to_dec(ip):
+    """Baseball innings notation (25.1 = 25 1/3, 25.2 = 25 2/3) -> decimal. Local to keep
+    scoring.py a low leaf (no fetch_data import)."""
+    ip = _n(ip)
+    if ip <= 0:
+        return 0.0
+    whole = int(ip)
+    frac  = round((ip - whole) * 10)
+    return whole + frac / 3.0
+
+
+def rp_score_recent(rec, season_row):
+    """Rate-based RECENT (short-window) RP score, comparable to the season rp_score.
+
+    Display-only companion to rp_score for the score-pill dropdown's `season | 30-day`
+    header. The window row's FantasyPros counting stats (SVHD/K/W) are PACED to the
+    player's season-equivalent volume so both numbers ride the same static caps AND the
+    same live _SCORE_CALIB["rp"] rescale -> a clean same-scale, same-player comparison.
+    The delta then reflects pure rate change (K/IP, SV+H/appearance, W/IP, ERA, WHIP).
+
+    Returns an int 0-100, or None when not computable (missing window row / thin sample).
+    Uses the WINDOW FP fields (SVHD/K/W/IP) and deliberately omits ESPN_* keys so rp_score
+    reads the paced window values instead of the season-broadcast ESPN totals."""
+    if not rec:
+        return None
+    ip_w = _ip_notation_to_dec(rec.get("IP"))
+    ip_s = _ip_notation_to_dec(season_row.get("IP"))
+    if ip_w < 5 or ip_s <= 0:
+        return None                              # too thin to pace reliably
+
+    scale = ip_s / ip_w                          # pace window production to season IP
+    paced_k = _n(rec.get("K")) * scale
+    paced_w = _n(rec.get("W")) * scale
+    # SV+H is opportunity-driven -> pace per-appearance when IP/G is available, else per-IP.
+    svhd_w = _n(rec.get("SVHD"))
+    ipg_w  = _n(rec.get("IP_per_G"))
+    ipg_s  = _n(season_row.get("IP_per_G"))
+    if ipg_w > 0 and ipg_s > 0:
+        g_w = ip_w / ipg_w
+        g_s = ip_s / ipg_s
+        paced_svhd = (svhd_w / g_w) * g_s if g_w > 0 else svhd_w * scale
+    else:
+        paced_svhd = svhd_w * scale
+
+    # A genuinely scoreless short window (ERA/WHIP == 0 over real innings) is ELITE, but
+    # rp_score's `_n(...) or 5.0` / `or 1.5` fallbacks treat a falsy 0 as a blowup. Nudge a
+    # real 0 to a tiny positive so it scores as near-perfect run prevention, not a disaster.
+    era_r  = _n(rec.get("ERA"));  whip_r = _n(rec.get("WHIP"))
+    if 0 <= era_r  < 0.01: era_r  = 0.01
+    if 0 <= whip_r < 0.01: whip_r = 0.01
+    synth = {
+        "SVHD": paced_svhd, "K": paced_k, "W": paced_w,
+        "IP_per_G": ipg_w if ipg_w > 0 else ipg_s,
+        "ERA": era_r, "WHIP": whip_r, "xERA": rec.get("xERA"),
+        "BarrelPctAllowed": rec.get("BarrelPctAllowed"), "WhiffPctile": rec.get("WhiffPctile"),
+    }   # no ESPN_* keys -> rp_score falls to these paced window values
+    return rp_score(synth)
+
+
 def compute_score_calibration(pitchers):
     """Re-anchor the SP/RP score calibration live from this snapshot's raw-score distribution
     (approach A) so displayed scores track the season without a hand-paste. For each role,
