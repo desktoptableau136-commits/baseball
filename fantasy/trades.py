@@ -105,6 +105,30 @@ _MEGA_MAX_GET    = 4     # up to 4 on the get side; shapes require |give| >= |ge
 _MEGA_MAX_PAYUP  = 0.90  # raw give-get pay-up allowed (vs fair's 0.35) -- consolidation inherently overpays on raw value
 _MEGA_SIZE_BONUS = 0.9   # per-player REWARD in the mega score -- blockbusters should FAVOR the bigger deal
                          # (4-for-4 / 4-for-3) over a lean 3-for-2, all else close; win-win gates still floor quality
+# --- VALUE-BALLAST lever (what lets a real 4-for-3 form): a consolidation gives N bodies for M<N, so
+# the M returned pieces have to carry enough VALUE to balance -- but the two pieces that actually FIX my
+# needs (a scarce C + SS) usually can't total that alone without me either overpaying (past _MEGA_MAX_PAYUP)
+# or stealing (past _TRADE_MAX_EDGE). A real deal solves this with a non-need "ballast" piece coming back
+# (the user's Gausman): not an upgrade, just enough value to make giving the extra body fair. So the mega
+# GET pool = need-fillers PLUS a few mid-value ballast pieces; every package must still fill >=2 real needs
+# (_MEGA_CORE_MIN), so ballast can only ever be the 3rd/4th piece that balances, never the point of the deal.
+_MEGA_GET_WIDTH     = 6    # need-filler pool width for the mega path (wider than base _TRADE_POOL_WIDTH:
+                           # a blockbuster reaches for a scarce C AND SS off the same rival)
+_MEGA_DEPTH_WIDTH   = 4    # give-side DEPTH ballast: disposable pieces that don't help the rival's cats but
+                           # ride along to balance value / shed my dead weight (the give-side analog of ballast)
+_MEGA_BALLAST_WIDTH = 3    # how many rival mid-value non-need pieces to consider as value ballast
+_MEGA_BALLAST_MIN   = 0.30 # ballast value band: below this a piece is roster filler (adds no real value)
+_MEGA_BALLAST_MAX   = 1.20 # ...and above this it's a piece they'd want to keep / would be a need-filler anyway
+_MEGA_CORE_MIN      = 2    # a blockbuster must fill >=2 real needs with actual need-fillers (not ballast)
+_MEGA_SHED_BONUS    = 0.6  # score REWARD per give-piece that sheds my weak incumbent at a need position
+                           # (addition-by-subtraction: dump the dead-weight C/SS I'm replacing in the same move)
+# Pitching counts as a surplus ROLE (so my deep SP staff can bundle into a give) when any pitching category
+# is one of my surpluses -- the reliever/starter analog of a surplus hitter POSITION.
+_PITCH_SURPLUS_CATS = frozenset({"ERA", "WHIP", "K", "W", "QS", "SVHD", "SV"})
+# find_megadeals temporarily lifts find_trades' return caps to these while scanning, so the cross-team
+# win-win pool isn't truncated to 6/2-per-team BEFORE the one-per-partner dedup can pick variety.
+_MEGA_SCAN_CARDS    = 48    # plenty of headroom to collect the best blockbuster from every partner
+_MEGA_SCAN_PER_TEAM = 2     # keep a couple per team pre-dedup (the dedup then takes the best one each)
 
 
 _POS_DEPTH_SLACK    = 1     # bodies beyond POS_STARTERS I can still use (bench/flex) before a position reads "stacked"
@@ -688,20 +712,61 @@ def find_trades(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
         # value only shows up demand-adjusted, which the downstream win-win filter enforces).
         mega_packages = []
         if mega:
-            # GIVE-POOL LEVER: a blockbuster gives DEPTH to get fewer-but-better, but if the give side
-            # is surplus depth ONLY, 4 low-value pieces can't BALANCE a multi-star get side (Baldwin +
-            # Witt) without me stealing (get - give > the steal ceiling) -- so the real 4-for-3 never
-            # forms. So the mega give pool is BROADER than the base surplus-only pool: it also admits a
-            # sub-star CONTRIBUTOR (`_tval < _STAR_TVAL_FLOOR`) from ANY position (not just a surplus
-            # one) that still HELPS the rival (`send_cats`), so several genuine pieces can add up to a
-            # fair give. My studs stay out (the star floor caps it); I can't be gutted (the both-sides
-            # `_leaves_position_short` HARD VETO in _grade_package still blocks going thin at any slot);
-            # and a value-losing give still can't pass (the win-win net_me gate).
-            mega_out = sorted([r for r in my_players
-                               if (r["_tcats"] & send_cats)
-                               and ((r["_tgroups"] & surplus_pos) or r["_tval"] < _STAR_TVAL_FLOOR)
-                               and (r["_tval"] <= _give_ceil or r["_tsell"])],
-                              key=lambda r: -r["_tscore"])[:_MEGA_GIVE_WIDTH]
+            # GIVE-POOL LEVER: a blockbuster gives DEPTH to get fewer-but-better. The give pool is BROADER
+            # than the base surplus-only pool -- it admits any DISPOSABLE piece so several can add up to a
+            # fair give: a surplus-position hitter, a surplus-ROLE pitcher (my deep staff when a pitching
+            # cat is a surplus), a sub-star contributor, OR my weak incumbent at a slot I'm upgrading (the
+            # sub-star clause already catches Will Smith/Alvarez at C). Unlike the base pool it does NOT
+            # require the piece to help a rival CATEGORY (send_cats) -- a piece can ride along as give-side
+            # depth as long as SOME give piece helps them (the grader's `scov` check) and they still net a
+            # win (the net_them gate). My studs stay out (the _give_ceil + star floor), I can't be gutted
+            # (the both-sides `_leaves_position_short` HARD VETO in _grade_package), and a value-losing
+            # give still can't pass (the win-win net_me gate).
+            _pitch_surplus = bool(my_surplus & _PITCH_SURPLUS_CATS)
+            def _mega_disposable(r):
+                if r["_tval"] > _give_ceil and not r.get("_tsell"):
+                    return False                              # a piece I'd hold (too valuable, not a sell)
+                if r["_tval"] < _STAR_TVAL_FLOOR:
+                    return True                               # sub-star depth / a weak incumbent I'd shed
+                if r["_tptype"] == "hit" and (r["_tgroups"] & surplus_pos):
+                    return True                               # a good bat at a position I'm deep in
+                if r["_tptype"] == "pit" and _pitch_surplus:
+                    return True                               # a good arm off a surplus staff
+                return False
+            # Give pool MIRRORS the get pool: a HELPER core (pieces that plug a rival category, so the deal
+            # actually benefits them -- the grader's `scov` requires >=1) PLUS DEPTH ballast (disposable
+            # pieces that don't help their cats but ride along to balance value / shed my own dead weight).
+            # Guaranteeing helpers are present is what a plain top-N-by-score pool missed: for a rival who
+            # needs PITCHING, my best-scored disposable bats never help them, so every package failed scov.
+            _disp = [r for r in my_players if _mega_disposable(r)]
+            mega_help  = sorted([r for r in _disp if r["_tcats"] & send_cats],
+                                key=lambda r: -r["_tscore"])[:_MEGA_GIVE_WIDTH]
+            mega_depth = sorted([r for r in _disp if not (r["_tcats"] & send_cats)],
+                                key=lambda r: -r["_tscore"])[:_MEGA_DEPTH_WIDTH]
+            _seen_out = {id(r) for r in mega_help}
+            mega_out = mega_help + [r for r in mega_depth if id(r) not in _seen_out]
+            # WIDER need-filler pool for the mega path: the base in_pool caps at _TRADE_POOL_WIDTH (4)
+            # for the 2-for-2 combinatorics, but a blockbuster reaches across MORE of a rival's roster
+            # (a scarce C AND SS from the same team), so a 4-piece cap silently drops a second partner's
+            # fillers. Rebuild it at _MEGA_GET_WIDTH, ranked by VALUE (a blockbuster targets the best
+            # available upgrade, not the hottest short-term score).
+            mega_need = sorted([r for r in t_players
+                                if (r["_tcats"] & get_cats) or _fills_need_pos(r)],
+                               key=lambda r: -r["_tval"])[:_MEGA_GET_WIDTH]
+            for r in mega_need:
+                r["_tfillpos"] = sorted(_fills_need_pos(r))
+            # BALLAST GET POOL: need-fillers PLUS a few rival mid-value non-need pieces so a bigger give can
+            # BALANCE without overpaying/stealing. Ballast can only be the piece that evens the value -- the
+            # _MEGA_CORE_MIN guard below forces >=2 genuine need-fillers per package, so the deal's PURPOSE
+            # stays the scarce upgrade, never the ballast.
+            _need_set = {id(r) for r in mega_need}
+            mega_ballast = sorted([r for r in t_players
+                                   if id(r) not in _need_set
+                                   and _MEGA_BALLAST_MIN <= r["_tval"] <= _MEGA_BALLAST_MAX],
+                                  key=lambda r: -r["_tval"])[:_MEGA_BALLAST_WIDTH]
+            for r in mega_ballast:
+                r["_tfillpos"] = sorted(_fills_need_pos(r))   # (empty for ballast; keeps the field consistent)
+            mega_in = mega_need + mega_ballast
             def _mega_gate(vo, vi):
                 return (vo - vi) <= _MEGA_MAX_PAYUP and (vi - vo) <= _TRADE_MAX_EDGE
             for gs in range(2, _MEGA_MAX_GIVE + 1):
@@ -709,7 +774,10 @@ def find_trades(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
                     if gs < ns or (gs < 3 and ns < 3):   # consolidation/even, and at least one side >= 3
                         continue
                     for outs in itertools.combinations(mega_out, gs):
-                        for ins in itertools.combinations(in_pool, ns):
+                        for ins in itertools.combinations(mega_in, ns):
+                            core = sum(1 for i in ins if (i["_tcats"] & get_cats) or i.get("_tfillpos"))
+                            if core < _MEGA_CORE_MIN:            # >=2 real need-fillers (ballast can't be the point)
+                                continue
                             pos_ben = _non_redundant_get_pos(
                                 set().union(*[set(i["_tfillpos"]) for i in ins]),
                                 list(outs), list(ins), my_pos_count)
@@ -757,9 +825,14 @@ def find_trades(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
             timing = (sum(1 for o in outs if o.get("_tsell")) + sum(1 for i in ins if i.get("_tbuy"))
                       - sum(1 for o in outs if o.get("_tbuy")) - sum(1 for i in ins if i.get("_tsell")))
             needs_filled = len(t["get_cats"]) + len(t["get_pos"])
+            # SHED bonus: reward dumping my weak incumbent at a slot I'm upgrading in the SAME deal
+            # (addition-by-subtraction). A give hitter at one of my need positions is the dead-weight C/SS
+            # I'm replacing; the depth floor still guarantees a body comes back, so this is always safe.
+            shed = sum(1 for o in outs if o["_tptype"] == "hit" and (o["_tgroups"] & set(need_pos)))
             t["mega"] = True
             t["score"] = (needs_filled + 2.0 * t["net_me"] + 1.0 * t["net_them"]
-                          + 4.0 * timing + _MEGA_SIZE_BONUS * (len(outs) + len(ins)))
+                          + 4.0 * timing + _MEGA_SIZE_BONUS * (len(outs) + len(ins))
+                          + _MEGA_SHED_BONUS * shed)
             trades.append(t)
 
     trades.sort(key=lambda t: -t["score"])
@@ -824,9 +897,20 @@ def find_megadeals(pitchers, hitters, roto, my_team, best_recent_p, best_recent_
     -only path (the base <=2-per-side shapes are skipped) on the FAIR give-ceiling so a genuinely
     good chip can bundle. Returns [] when no megadeal is a two-sided win — expected on many days.
     Used by the digest Trade Radar (limit=1) and the Trade Lab megadeal strip (limit=2)."""
-    deals = find_trades(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
-                        pos_data, hit_pctile, pit_pctile, mode="fair",
-                        pos_data_by_team=pos_data_by_team, mega=True, mega_only=True)
+    # find_trades caps its RETURN at _TRADE_MAX_CARDS (6) / _TRADE_PER_TEAM_CAP (2) — fine for the
+    # radar's few cards, but it would truncate the cross-team pool BEFORE the one-per-partner dedup
+    # below can pick variety (the best blockbuster from partner B is lost if partner A already filled
+    # the 6 slots). Temporarily lift the caps so the mega pass returns its full win-win set, then this
+    # function's own dedup selects the best-per-partner. Facade-safe via _set_trade_caps (mutates THIS
+    # module's globals where find_trades reads them); restored in finally so no other surface is affected.
+    _save = (_TRADE_MAX_CARDS, _TRADE_PER_TEAM_CAP)
+    _set_trade_caps(_MEGA_SCAN_CARDS, _MEGA_SCAN_PER_TEAM)
+    try:
+        deals = find_trades(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
+                            pos_data, hit_pctile, pit_pctile, mode="fair",
+                            pos_data_by_team=pos_data_by_team, mega=True, mega_only=True)
+    finally:
+        _set_trade_caps(*_save)
     # One blockbuster per PARTNER so the strip mixes up teams (deals are already score-sorted, so
     # the first per team is that team's best). The digest's limit=1 is unaffected.
     picked, seen_teams = [], set()
