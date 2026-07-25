@@ -1633,7 +1633,7 @@ _UPGRADE_MARGIN = 3.0   # min score-pt upgrade over my worst starter to bother f
 def _roster_suggestion(matchup, pitchers, hitters, fa_sp, fa_rp, fa_hit,
                         my_team, best_recent_p, best_recent_h,
                         all_matchups, week_end_str, classification=None,
-                        league_total_roster_max=28, pos_data=None, lineup_eff=None,
+                        league_active_roster_max=26, league_il_roster_max=2, pos_data=None, lineup_eff=None,
                         pill_fn=None):
     """Return a LIST of Week-at-a-Glance pickup bullets (HTML strings), roster-context
     aware. (Was: a single 'best available hitter' bullet, blind to positional need -- it
@@ -1741,8 +1741,12 @@ def _roster_suggestion(matchup, pitchers, hitters, fa_sp, fa_rp, fa_hit,
     )
     _drop_score = {id(r): s for r, s, _ in scored_drop}
 
-    def _can_drop(cand):
-        """True if dropping cand leaves at least one healthy player at every position it fills."""
+    def _can_drop(cand, pending_add=None):
+        """True if dropping cand leaves at least one healthy player at every position it
+        fills. `pending_add` is the FA being picked up in the SAME move -- he counts as
+        already on the roster for coverage purposes, so e.g. dropping your only SS is fine
+        when the add is himself SS-eligible (the transaction's end state, not the pre-add
+        snapshot, is what matters)."""
         if _on_il(cand):
             return False
         cand_name = cand.get("PlayerName", "")
@@ -1756,6 +1760,8 @@ def _roster_suggestion(matchup, pitchers, hitters, fa_sp, fa_rp, fa_hit,
                 and _is_healthy(r)
                 and (_pos_tags(r) & slots)
             ]
+            if pending_add is not None and (_pos_tags(pending_add) & slots):
+                healthy_others.append(pending_add)
             if not healthy_others:
                 return False
         return True
@@ -1763,21 +1769,36 @@ def _roster_suggestion(matchup, pitchers, hitters, fa_sp, fa_rp, fa_hit,
     def _in_surplus(r):
         return bool(_pos_groups_of(r) & surplus_groups)
 
-    # worst first, but surplus positions ahead of everything (drop from strength)
-    drop_order = [r for r, _, _ in sorted(
-        [(r, s, t) for r, s, t in scored_drop if _can_drop(r)],
-        key=lambda x: (0 if _in_surplus(x[0]) else 1, x[1]))]
     _used_drops = set()
 
-    def _take_drop():
-        for r in drop_order:
+    def _take_drop(pending_add=None):
+        """Worst-first, but surplus positions ahead of everything (drop from strength).
+        Recomputed per `pending_add` so a same-position swap (e.g. add a SS, drop your only
+        other SS) isn't blocked by a coverage check that ignores the incoming player."""
+        order = [r for r, _ in sorted(
+            [(r, s) for r, s, _ in scored_drop if _can_drop(r, pending_add)],
+            key=lambda x: (0 if _in_surplus(x[0]) else 1, x[1]))]
+        for r in order:
             if r.get("PlayerName") not in _used_drops:
                 _used_drops.add(r.get("PlayerName"))
                 return r
         return None
 
-    my_total_count = len(full_pit) + len(full_hit)
-    slots_left = max(0, league_total_roster_max - my_total_count)
+    # Unique real roster occupants, deduped by (name, MLB team) -- a two-way player (e.g.
+    # Ohtani) gets a row in BOTH full_pit and full_hit for the ONE active slot he occupies,
+    # so a plain len()+len() double-counts him. Keying on (name, MLB team) -- not name alone
+    # -- keeps two real players who share a name (e.g. two different "Max Muncy"s on
+    # different MLB teams) from being wrongly collapsed into one.
+    # IL slots hold at most `league_il_roster_max` players -- ESPN lets extra injured players
+    # sit on the active/bench roster once the 2 dedicated IL slots are full, and those extras
+    # DO consume active-roster space. So only up to the IL cap gets excluded from the active
+    # count, not every _on_il-flagged player.
+    my_all_occupants = {(r.get("PlayerName"), r.get("Team")) for r in full_pit + full_hit}
+    my_il_occupants = {
+        (r.get("PlayerName"), r.get("Team")) for r in full_pit + full_hit if _on_il(r)
+    }
+    il_slots_used = min(len(my_il_occupants), league_il_roster_max)
+    slots_left = max(0, league_active_roster_max - (len(my_all_occupants) - il_slots_used))
 
     def _move_tail(add_row):
         """Free-pickup badge if an open roster spot remains, else ' . Drop <worst surplus>'."""
@@ -1785,7 +1806,7 @@ def _roster_suggestion(matchup, pitchers, hitters, fa_sp, fa_rp, fa_hit,
         if slots_left > 0:
             slots_left -= 1
             return f'<span style="color:{GREEN};font-size:10px;margin-left:6px;">&#10003; roster spot open</span>'
-        d = _take_drop()
+        d = _take_drop(add_row)
         if d and d.get("PlayerName") != add_row.get("PlayerName"):
             surplus_tag = f' <span style="color:{MUTED};font-size:10px;">[surplus]</span>' if _in_surplus(d) else ''
             return (f' &middot; Drop <span style="color:{MUTED};">{d.get("PlayerName","")}'
@@ -4633,12 +4654,14 @@ def build_email(snap, override_team=None):
     except Exception as _e:
         print(f"  WARNING: today's-games panel failed ({_e}); skipping it.")
 
-    league_total_roster_max = int(snap.get("league_total_roster_max") or 28)
+    league_active_roster_max = int(snap.get("league_active_roster_max") or 26)
+    league_il_roster_max = int(snap.get("league_il_roster_max") or 2)
     roster_suggestion = _roster_suggestion(
         matchup, pitchers, hitters, fa_sp, fa_rp, fa_hit,
         my_team, best_recent_p, best_recent_h,
         all_matchups, week_end_str, classification=category_classification,
-        league_total_roster_max=league_total_roster_max,
+        league_active_roster_max=league_active_roster_max,
+        league_il_roster_max=league_il_roster_max,
         pos_data=pos_data, lineup_eff=(snap.get("lineup_efficiency_current") or {} if not override_team else {}),
     )
     trade_bullets = [_pending_headline(g) for g in incoming_pending]

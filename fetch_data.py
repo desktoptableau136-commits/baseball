@@ -2412,15 +2412,24 @@ def main():
     _n_inj = sum(1 for r in pitchers + hitters if r.get("InjuryBodyPart"))
     print(f"       {len(_inj_notes)} injured MLB players; detail attached to {_n_inj} rows")
 
-    # Total roster cap = max total players (active + IL) on any team. The fullest team is at the cap.
-    # send_digest uses: open_spots = league_total_roster_max - my_total → free pickup if > 0.
-    from collections import Counter as _Counter
-    _team_total = _Counter()
-    for r in pitchers + hitters:
-        tm = r.get("FantasyTeam", "")
-        if tm and int(r.get("Dataset", 0) or 0) == CURRENT_YEAR:
-            _team_total[tm] += 1
-    league_total_roster_max = max(_team_total.values()) if _team_total else 28
+    # Roster caps: pulled straight from ESPN's league settings (lineupSlotCounts), NOT
+    # inferred from any team's current fullness. The old max(per-team total) heuristic had
+    # two bugs: (a) it double-counted two-way players -- Ohtani gets a row in BOTH pitchers
+    # and hitters for the ONE real roster slot he occupies, inflating whichever team rostered
+    # him; (b) it conflated IL-only capacity with active capacity, so a team sitting at its
+    # active cap with an open IL slot looked like it had a free pickup slot. send_digest uses:
+    # active_slots_left = league_active_roster_max - my_active_count (a healthy free-agent
+    # add needs an ACTIVE slot; an open IL slot can't hold one).
+    try:
+        _slot_counts = league.espn_request.league_get(
+            params={"view": "mSettings"})["settings"]["rosterSettings"]["lineupSlotCounts"]
+        _IL_SLOT_ID = 17
+        league_il_roster_max = int(_slot_counts.get(str(_IL_SLOT_ID), 0) or 0)
+        league_active_roster_max = sum(
+            int(cnt) for sid, cnt in _slot_counts.items() if int(sid) != _IL_SLOT_ID)
+    except Exception:
+        league_active_roster_max, league_il_roster_max = 26, 2
+    league_total_roster_max = league_active_roster_max + league_il_roster_max
 
     print("\n[10/10] Writing snapshot...")
     snapshot = {
@@ -2440,6 +2449,8 @@ def main():
         "all_prev_matchups": all_prev_matchups,
         **matchup_dates,
         "league_total_roster_max": league_total_roster_max,
+        "league_active_roster_max": league_active_roster_max,
+        "league_il_roster_max": league_il_roster_max,
         "recent_hitting":    recent_hitting,
         "recent_pitching":   recent_pitching,
         "prev_week_hitting":  prev_week_hitting,

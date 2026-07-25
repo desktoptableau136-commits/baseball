@@ -101,7 +101,8 @@ def build_context(snap, my_team):
     roster_sugg = sd._roster_suggestion(
         matchup, pitchers, hitters, fa_sp, fa_rp, fa_hit, my_team, best_recent_p, best_recent_h,
         all_matchups, week_end_str, classification=classification,
-        league_total_roster_max=snap.get("league_total_roster_max", 28),
+        league_active_roster_max=snap.get("league_active_roster_max", 26),
+        league_il_roster_max=snap.get("league_il_roster_max", 2),
         pos_data=pos_data, lineup_eff=lineup_eff_current, pill_fn=_mini_badge,
     )
     emerging, fading = sd.save_role_watch(pitchers, my_team, claimed)
