@@ -133,6 +133,16 @@ _MEGA_SPREAD_BONUS  = 0.5  # score REWARD per DISTINCT give position-source -- a
 # Pitching counts as a surplus ROLE (so my deep SP staff can bundle into a give) when any pitching category
 # is one of my surpluses -- the reliever/starter analog of a surplus hitter POSITION.
 _PITCH_SURPLUS_CATS = frozenset({"ERA", "WHIP", "K", "W", "QS", "SVHD", "SV"})
+# "Why it's a blockbuster" callout: a position's scarcity multiplier (_POS_SCARCITY) at or above
+# this reads as "the league's thinnest position" (docs peg C at ~x1.28; deep spots like 1B sit
+# near x0.78-1.0) -- below it the scarcity clause is simply omitted rather than overclaimed.
+_MEGA_SCARCE_MULT = 1.20
+# ...and an incoming piece with a calibrated _tscore at or above this is a genuine "difference
+# -maker" worth NAMING in the callout (the "clear plus" tier boundary) -- below it he's ballast
+# that balances value, not a headline. A consolidation deal often lands 2-3 real difference
+# -makers, not just one, so every qualifying piece gets named (capped at 3 for readability).
+_MEGA_STAR_SCORE = 65
+_MEGA_STAR_CAP    = 3
 # find_megadeals temporarily lifts find_trades' return caps to these while scanning, so the cross-team
 # win-win pool isn't truncated to 6/2-per-team BEFORE the one-per-partner dedup can pick variety.
 _MEGA_SCAN_CARDS    = 48    # plenty of headroom to collect the best blockbuster from every partner
@@ -1451,6 +1461,101 @@ def build_pending_trades_section(graded, best_recent_p, best_recent_h, hit_pctil
     return section_head("Pending Trades", sub) + "".join(cards)
 
 
+def _and_join(xs):
+    """Human list join: [] -> '', [C] -> 'C', [C,SS] -> 'C and SS', [C,SS,1B] -> 'C, SS and 1B'.
+    Mirrors trade_lab.py's JS `andJoin` / Python `_and_join` so the two surfaces read alike."""
+    xs = list(xs)
+    if len(xs) <= 1:
+        return xs[0] if xs else ""
+    if len(xs) == 2:
+        return f"{xs[0]} and {xs[1]}"
+    return ", ".join(xs[:-1]) + f" and {xs[-1]}"
+
+
+def _mega_quality_tier(p):
+    """Scouting-report descriptor off the player's own calibrated `_tscore` (p50->50, p90->80,
+    the SAME score shown everywhere else on him) -- deliberately not a fabricated ordinal rank."""
+    noun = "arm" if p.get("_tptype") == "pit" else "bat"
+    score = p.get("_tscore") or 0
+    if score >= 80:
+        return f"an elite {noun}"
+    if score >= _MEGA_STAR_SCORE:
+        return f"a clear plus {noun}"
+    return f"a steady {noun}"
+
+
+_MEGA_COUNT_WORD = {2: "two", 3: "three", 4: "four"}
+
+
+def _mega_quality_group(players):
+    """Same read as `_mega_quality_tier` but for a NAMED GROUP of headliners (a consolidation
+    blockbuster often lands 2-3 real difference-makers, not just one) -- one collective phrase
+    ("two elite bats") instead of stapling a tier onto each name."""
+    if not players:
+        return "a real difference-maker"
+    if len(players) == 1:
+        return _mega_quality_tier(players[0])
+    nouns = {"arm" if p.get("_tptype") == "pit" else "bat" for p in players}
+    noun = (nouns.pop() + "s") if len(nouns) == 1 else "difference-makers"
+    scores = [p.get("_tscore") or 0 for p in players]
+    tier = "elite" if min(scores) >= 80 else "clear plus" if min(scores) >= _MEGA_STAR_SCORE else "genuine"
+    count_word = _MEGA_COUNT_WORD.get(len(players), str(len(players)))
+    return f"{count_word} {tier} {noun}"
+
+
+def _mega_insight_text(t):
+    """The 'Why it's a blockbuster' scouting-report sentence -- shared by the digest Trade Radar
+    card and the Trade Lab megadeal-strip `spark` (via `sd._mega_insight_text`) so the two
+    surfaces can't drift in voice. Names EVERY incoming piece that clears `_MEGA_STAR_SCORE`
+    (capped at `_MEGA_STAR_CAP`, highest-`_tval` first) -- a consolidation deal often lands
+    several real difference-makers, not just one -- plus a quality/scarcity read grounded in
+    their own `_tscore`/`_POS_SCARCITY` (no invented rank), the give/get counts in plain
+    language, and what the rival walks away with. Plain-unicode punctuation (works unescaped in
+    both an emailed HTML attachment and a JS-rendered string)."""
+    ins_ranked = sorted(t["ins"], key=lambda p: -(p.get("_tval") or 0))
+    headliners = [p for p in ins_ranked if (p.get("_tscore") or 0) >= _MEGA_STAR_SCORE][:_MEGA_STAR_CAP]
+    if not headliners and ins_ranked:
+        headliners = ins_ranked[:1]   # no piece clears the bar -- still name the best of the lot
+    who = _and_join([p.get("PlayerName") for p in headliners if p.get("PlayerName")]) or "a difference-maker"
+    quality = _mega_quality_group(headliners)
+    get_cats = t.get("get_cats", [])
+    # Attribute the position/category claim to what the NAMED headliners actually fill, not the
+    # package's aggregate get_pos/get_cats — a package can credit a position/cat that a DIFFERENT,
+    # unnamed incoming piece covers (e.g. every headliner is a hitter, a throw-in arm fills K).
+    headliner_pos, headliner_cats = [], set()
+    for p in headliners:
+        for pos in (p.get("_tfillpos") or []):
+            if pos not in headliner_pos:
+                headliner_pos.append(pos)
+        headliner_cats |= (p.get("_tcats") or set())
+    if headliner_pos:
+        mult = max((_POS_SCARCITY.get(p, 1.0) for p in headliner_pos), default=1.0)
+        scarcity = " at the league's thinnest position" if mult >= _MEGA_SCARCE_MULT else ""
+        lead = (f"{who} — {quality}{scarcity} — finally end{'s' if len(headliners) == 1 else ''} "
+                f"your carousel at {', '.join(headliner_pos)}.")
+    else:
+        own_cats = [c for c in get_cats if c in headliner_cats]
+        if own_cats:
+            where = _and_join([_CAT_DISPLAY.get(c, c) for c in own_cats[:2]])
+            lead = f"{who} — {quality} — bring{'s' if len(headliners) == 1 else ''} the {where} boost your roster's been missing."
+        else:
+            # No named headliner personally owns a credited position or category (some other,
+            # unnamed piece in the package does) — never claim a stat they don't carry.
+            verb = "is" if len(headliners) == 1 else "are"
+            lead = f"{who} — {quality} — {verb} simply better than what you're giving up."
+    n_out, n_in = len(t["outs"]), len(t["ins"])
+    count_clause = (f'{n_out} spare part{"s" if n_out != 1 else ""} out, '
+                    f'{n_in} real building block{"s" if n_in != 1 else ""} in')
+    send_cats = t.get("send_cats", [])
+    if send_cats:
+        rival_cats = _and_join([_CAT_DISPLAY.get(c, c) for c in send_cats[:3]])
+        staff_or_lineup = "staff" if set(send_cats) & _PITCH_SURPLUS_CATS else "lineup"
+        rival_clause = f'{t["team"]} still leaves with the {rival_cats} their {staff_or_lineup} is bleeding'
+    else:
+        rival_clause = f'{t["team"]} still walks away better off'
+    return f"{lead} {count_clause}, and {rival_clause}."
+
+
 def build_trade_radar(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
                       pos_data, hit_pctile, pit_pctile, team_logos=None):
     # Trade Radar is prescriptive ("go send this") — only ever surface deals a rival would
@@ -1508,21 +1613,17 @@ def build_trade_radar(pitchers, hitters, roto, my_team, best_recent_p, best_rece
         card_bg = (f'background:{SURFACE};background-image:linear-gradient('
                    f'180deg,rgba(168,85,247,0.07),rgba(168,85,247,0));'
                    if mega_is else f'background:{SURFACE};')
-        # "Why it's a blockbuster" — a dynamic one-liner that sells the excitement: how many depth
-        # pieces roll up into how many difference-makers, how many needs it fixes at once, and that
-        # the rival still gains (so it's a real win-win, not a fantasy). Only on megadeal cards.
+        # "Why it's a blockbuster" — a scouting-report one-liner that names the actual headliner
+        # (not just counts), why he's a real difference-maker, and what the rival gets out of it
+        # too. Shared with the Trade Lab megadeal strip via _mega_insight_text. Only on megadeal cards.
         mega_insight = ""
         if mega_is:
-            n_out, n_in = len(t["outs"]), len(t["ins"])
-            n_needs = len(t.get("get_cats", [])) + len(t.get("get_pos", []))
-            needs_str = f'{n_needs} of your needs' if n_needs != 1 else 'a need'
             mega_insight = (
                 f'<div style="font-size:11px;color:{TEXT};margin-top:8px;'
                 f'background:rgba(168,85,247,0.10);border:1px solid {PURPLE};'
                 f'border-radius:6px;padding:7px 9px;line-height:1.45;">'
                 f'<span style="color:{PURPLE};font-weight:800;">&#128171; Why it&rsquo;s a blockbuster:</span> '
-                f'rolls {n_out} depth pieces into {n_in} difference-maker{"s" if n_in != 1 else ""} '
-                f'&mdash; fixes {needs_str} in a single move, and they still come out ahead.</div>')
+                f'{_mega_insight_text(t)}</div>')
         # Quiet one-line net hint (Base / You / Them) — see _trade_net_summary.
         base_give = sum(o["_tval"] for o in t["outs"])
         base_get  = sum(i["_tval"] for i in t["ins"])
