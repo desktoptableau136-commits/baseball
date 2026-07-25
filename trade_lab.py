@@ -687,6 +687,7 @@ details#vdetail[open] > summary::before {{ content:'\\25BC'; }}
 .valgrid .vgneg {{ color:{RED}; font-weight:700; }}
 .valgrid .vgeven {{ color:{TEXT}; font-weight:700; }}
 .dealsum {{ color:{TEXT}; font-size:12px; font-style:italic; margin-top:8px; padding-top:8px; border-top:1px solid {BORDER}; }}
+.vdcap {{ color:{MUTED}; font-size:10.5px; line-height:1.45; margin-top:6px; }}
 #reads {{ margin-top:10px; font-size:12px; line-height:1.6; }}
 .chip {{ display:inline-block; font-size:10px; font-weight:700; padding:1px 6px; border-radius:8px; margin:1px 2px; border:1px solid {BORDER}; color:{MUTED}; }}
 .chip.need {{ background:rgba(34,197,94,.16); border-color:{GREEN}; color:{GREEN}; }}
@@ -1735,6 +1736,9 @@ function recompute() {{
         + _vrow('My value', myGive, myGet, netMe, 'Re-valued by your roster needs')
         + _vrow('Their value', thGet, thGive, netThem, (partnerMeta.name||'Their') + ' give/get, re-valued by their needs')
       + '</div>'
+    + '<div class="vdcap">Base = category production above the league median for his role (percentile-based), '
+    + 'scaled for position scarcity and discounted for injury &mdash; one scale across hitters, starters &amp; relievers. '
+    + 'My/Their rows re-price it by each side&rsquo;s roster needs.</div>'
     + '<div class="readline" style="margin-top:8px"><span class="readlbl">You gain:</span> ' + gainChips + (posChips?' &nbsp; '+posChips:'') + '</div>'
     + '<div class="readline"><span class="readlbl">You lose:</span> ' + loseChips + '</div>';
 }}
