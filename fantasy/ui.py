@@ -409,7 +409,8 @@ def nav_bar():
     """'Jump to' pill nav, rendered in the top-right of the header (not the body, so it
     doesn't push Week at a Glance down). Anchor links behave like tabs without JS/CSS
     tricks that Gmail strips; they jump in the attachment and degrade to harmless styled
-    links inline. Also drops the `top` anchor so the band `↑ TOP` links have a target."""
+    links inline. Also drops the `top` anchor that both the header logo and
+    `back_to_top_fab()`'s floating button target."""
     items = [
         ("#band-myroster", "My Roster"),
         ("#band-fa",       "Transactions"),
@@ -427,6 +428,34 @@ def nav_bar():
         f'<div style="text-align:right;line-height:1.6;">'
         f'<span style="color:{MUTED};font-size:9px;font-weight:700;text-transform:uppercase;'
         f'letter-spacing:1px;display:block;margin-bottom:3px;">Jump to</span>{pills}</div>'
+    )
+
+
+def back_to_top_fab():
+    """Floating '^' back-to-top button, fixed to the bottom-right of the viewport for the
+    whole read. Replaces the old per-band '↑ TOP' link (`band_divider`'s, now used only by
+    weekly_recap — the digest switched to `collapsible_band`, whose <summary> never grew
+    an equivalent, so the digest silently lost its only way back to the header once bands
+    went collapsible). A single fixed element beats one link per band: it's reachable from
+    inside a collapsed OR expanded band, mid-scroll, without hunting for the nearest divider.
+    Hidden until the reader scrolls past the header (`_FAB_SHOW_PX`), then fades in — so it
+    doesn't sit uselessly atop the header on first paint. Targets the same `#top` anchor
+    `nav_bar()` drops. Browser-only: needs `position:fixed` + a scroll listener, so it's a
+    no-op (safely ignored, not broken) in Gmail's sanitized inline body — the digest
+    attachment is the intended surface, same caveat as the rest of the collapsible-band JS."""
+    return (
+        f'<a href="#top" id="back-to-top" aria-label="Back to top" style="position:fixed;'
+        f'right:18px;bottom:18px;width:42px;height:42px;border-radius:50%;background:{SURFACE};'
+        f'border:1px solid {BORDER};color:{ACCENT};font-size:18px;font-weight:800;'
+        f'line-height:40px;text-align:center;text-decoration:none;box-shadow:0 2px 12px rgba(0,0,0,0.45);'
+        f'opacity:0;visibility:hidden;transition:opacity .2s ease;z-index:999;">&#8593;</a>'
+        f'<script>(function(){{'
+        f'var b=document.getElementById("back-to-top");if(!b)return;'
+        f'window.addEventListener("scroll",function(){{'
+        f'if(window.scrollY>320){{b.style.opacity="1";b.style.visibility="visible";}}'
+        f'else{{b.style.opacity="0";b.style.visibility="hidden";}}'
+        f'}}, {{passive:true}});'
+        f'}})();</script>'
     )
 
 

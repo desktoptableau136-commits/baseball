@@ -2212,8 +2212,9 @@ def build_glossary_section():
                "In the browser-opened attachment it expands on tap into a full-width row below the player. "
                "It opens with the <b>season and recent (last-30) scores</b> (each colored by tier) beside a "
                "🔥/↑/➖/↓/❄ Recent Form marker — relievers included, their recent score built from last-30 <i>rates</i> so it's "
-               "comparable to the season number — then a compact <b>Last 30 days</b> line naming the window "
-               "stats behind it (e.g. &ldquo;0.00 ERA · 19% K · 0.32 WHIP&rdquo; / &ldquo;1.028 OPS · .275 AVG "
+               "comparable to the season number — then a compact <b>Season</b> line and a "
+               "<b>Last 30 days</b> line, same stats stacked so the two windows compare directly "
+               "(e.g. &ldquo;Season: 3.10 ERA · 24% K · 1.08 WHIP&rdquo; over &ldquo;Last 30 days: 0.00 ERA · 19% K · 0.32 WHIP&rdquo; / &ldquo;1.028 OPS · .275 AVG "
                "· 8 HR&rdquo;), then a one-line <b>scouting read</b> of the player's archetype (e.g. &ldquo;a "
                "true three-outcome slugger&rdquo; / &ldquo;a front-line arm — misses bats and limits "
                "damage&rdquo;), then the 2-3 drivers behind the number (e.g. &ldquo;carried by "
@@ -4825,6 +4826,7 @@ def build_email(snap, override_team=None):
     {coverage_footer}
   </div>
 </div>
+{back_to_top_fab()}
 {_BD_TOGGLE_SCRIPT}
 {_BAND_TOGGLE_SCRIPT}
 </body>
