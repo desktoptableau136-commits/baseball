@@ -217,6 +217,7 @@ def positional_breakdown(pitchers, hitters, my_team, best_recent_p=None, best_re
             "ptype":        ptype,
             "starter":      my_p[0] if my_p else None,   # rank-defining anchor (top score)
             "worst_player": drop_pool[-1] if drop_pool else None,
+            "my_players":   my_p,          # full roster at this position, score-desc, _pscore attached
             "my_avg":       round(my_avg, 1),
             "rank":         rank,
             "n_teams":      n,

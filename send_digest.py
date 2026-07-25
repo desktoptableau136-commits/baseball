@@ -306,7 +306,22 @@ def save_role_watch(pitchers, my_team, claimed=None):
     fading.sort(key=lambda x: -x["season"])
     return emerging[:3], fading[:3]
 
-def fa_hitters(hitters, claimed=None, idx_recent=None):
+def fa_hitters(hitters, claimed=None, idx_recent=None, pos_data=None):
+    """Free-agent hitter pool for the digest FA table + dashboard tile.
+
+    Without `pos_data`: flat top-12 by score (legacy shape — still what the
+    dashboard's plain top-2 tile gets, since it doesn't pass pos_data).
+
+    With `pos_data` (from `positional_breakdown`): picks 1-3 hitters PER
+    POSITION instead of top-12 overall, sized to how much of a need that spot
+    is for me — bottom-third league rank -> 3, top-third -> 1 (floor of 1, a
+    "set" position is never hidden entirely), middle -> 2. Same third-split as
+    the NEED/SURPLUS convention in `_roster_suggestion`. Positions are filled
+    neediest-first against ONE shared candidate pool, and a pick is removed
+    from the pool once claimed — so a multi-eligible free agent (e.g. 2B/SS)
+    is only ever listed once, under whichever position needed him most,
+    instead of padding out every group he's eligible for.
+    """
     claimed = claimed or set()
     fa = [
         r for r in hitters
@@ -318,7 +333,75 @@ def fa_hitters(hitters, claimed=None, idx_recent=None):
     ]
     for r in fa:
         r["_score"] = _blend(r, hitter_score, idx_recent) if idx_recent is not None else hitter_score(r)
-    return sorted(fa, key=lambda r: -r["_score"])[:12]
+
+    if not pos_data:
+        return sorted(fa, key=lambda r: -r["_score"])[:12]
+
+    hit_groups = [(p["pos"], p.get("rank"), p.get("n_teams") or 0)
+                  for p in pos_data if p.get("ptype") == "hit"]
+    slots_by_pos = {label: slots for label, slots, ptype in POS_GROUPS if ptype == "hit"}
+
+    def _quota(rank, n):
+        if not rank or not n:
+            return 2
+        third = max(1, round(n / 3.0))
+        if rank >= n - third + 1:
+            return 3   # bottom third — real need
+        if rank <= third:
+            return 1   # top third — already set (floor of 1, never zero)
+        return 2       # middle third
+
+    # Neediest position (worst rank) first, so a shared-eligibility player is
+    # claimed by the position that needs him most.
+    hit_groups.sort(key=lambda g: -(g[1] or 0))
+
+    claimed_names = set()
+    result = []
+    for pos, rank, n in hit_groups:
+        slots = slots_by_pos.get(pos, {pos})
+        pool = sorted(
+            [r for r in fa
+             if r.get("PlayerName") not in claimed_names
+             and any(s in str(r.get("Position", "")).split(", ") for s in slots)],
+            key=lambda r: -r["_score"],
+        )
+        picks = pool[:_quota(rank, n)]
+        for r in picks:
+            claimed_names.add(r.get("PlayerName"))
+            r["_fa_pos_group"] = pos
+            r["_fa_pos_rank"]  = rank
+            r["_fa_pos_n"]     = n
+        result.extend(picks)
+    return result
+
+def _my_pos_summary(my_players, idx_recent, hit_pctile=None, limit=3):
+    """Compact 'season|30-day (form)' line for MY roster at a position, so a 'Need Help'
+    FA banner can be judged against what I'm replacing without scrolling back to
+    Positional Breakdown. Same season|recent dual score + hot/cold/steady emoji as the
+    tap-to-expand breakdown (`_hitter_score_breakdown`'s header), PLUS the same
+    injury tag + tactical badges (PWR/SB/$/▼ via `inj_tag`/`hitter_badges`) shown next to
+    every other name in this table — so an injured or thin-role starter reads the same
+    here as everywhere else. DISPLAY ONLY, no scoring impact. Empty when I have nobody
+    at the position."""
+    if not my_players:
+        return ""
+    parts = []
+    for r in my_players[:limit]:
+        name = r.get("PlayerName", "")
+        tag_html = inj_tag(r) + hitter_badges(r, hit_pctile)
+        season = hitter_score(r)
+        rec = idx_recent.get(name) if idx_recent else None
+        rs = hitter_score(rec) if rec else 0
+        if rs > 0:
+            tag = "hot" if rs > season else ("cold" if rs < season else "steady")
+            score_html = f'<span style="color:{MUTED}">{season}|{rs}</span> {_FORM_EMOJI[tag]}'
+        else:
+            score_html = f'<span style="color:{MUTED}">{season}</span>'
+        parts.append(f'{name}{tag_html} {score_html}')
+    return (
+        f'<span style="color:{SILVER};font-size:10px;margin-left:10px;">'
+        f'You have: {", ".join(parts)}</span>'
+    )
 
 def luck_standings(roto_rows, standings):
     totals = {}
@@ -3439,7 +3522,11 @@ def build_email(snap, override_team=None):
 
     fa_sp     = fa_starters(pitchers, claimed, idx_recent=best_recent_p)
     fa_rp     = fa_relievers(pitchers, claimed)
-    fa_hit    = fa_hitters(hitters, claimed, idx_recent=best_recent_h)
+    # positional_breakdown only needs pitchers/hitters/my_team/best_recent_* (all set
+    # above), so it's pulled forward from its old spot (right before graded_pending)
+    # to feed fa_hitters' per-position quota logic.
+    pos_data  = positional_breakdown(pitchers, hitters, my_team, best_recent_p, best_recent_h)
+    fa_hit    = fa_hitters(hitters, claimed, idx_recent=best_recent_h, pos_data=pos_data)
     luck      = luck_standings(roto, standings)
     team_logos = {" ".join(s["team_name"].split()): s.get("logo_url", "") for s in standings}
     cats, n   = category_ranks(roto, my_team)
@@ -3510,7 +3597,6 @@ def build_email(snap, override_team=None):
     my_season_pseudo_roto = sum(n - rank + 1 for rank in cats.values() if rank is not None)
     alerts    = roster_alerts(pitchers, hitters, my_team)
     starts    = my_upcoming_starts(pitchers, my_team)
-    pos_data  = positional_breakdown(pitchers, hitters, my_team, best_recent_p, best_recent_h)
 
     # Grade real pending trade offers ONCE (my team only — snapshot stores only my trades);
     # the section render, the Briefing "Act today" list, and the Week-at-a-Glance headline
@@ -4162,10 +4248,49 @@ def build_email(snap, override_team=None):
         )
 
     # ── FA: Hitters ────────────────────────────────────────────────────────────
+    # Grouped by position (fa_hitters assigns 1-3 per position, neediest first —
+    # see fa_hitters docstring); a banner row per position mirrors the FA SP
+    # day-banner pattern and shows WHY that group's size differs (Need Help /
+    # Average / Strong, same language + thresholds as Positional Breakdown).
     if fa_hit:
+        _pos_data_by_pos = {p["pos"]: p for p in pos_data}
         rows = ""
-        for i, r in enumerate(fa_hit):
-            bg = f"background:{SURFACE2};" if i % 2 else ""
+        row_idx = 0
+        last_group = object()   # sentinel so the first row always opens a banner
+        for r in fa_hit:
+            pos = r.get("_fa_pos_group")
+            if pos is not None and pos != last_group:
+                last_group = pos
+                rank, n_teams = r.get("_fa_pos_rank"), r.get("_fa_pos_n") or 0
+                if not rank or not n_teams:
+                    rank_color, strength = MUTED, "—"
+                elif rank <= max(1, round(n_teams / 3.0)):
+                    rank_color, strength = GREEN, "Strong"
+                elif rank >= n_teams - max(1, round(n_teams / 3.0)) + 1:
+                    rank_color, strength = RED, "Need Help"
+                else:
+                    rank_color, strength = YELLOW, "Average"
+                rank_str = f"#{rank} of {n_teams}" if rank else "—"
+                # "Need Help" is exactly the case where deciding on a pickup needs to see
+                # what I'm replacing — surface it right in the banner so there's no
+                # scrolling back to Positional Breakdown to compare.
+                my_summary = (
+                    _my_pos_summary(_pos_data_by_pos.get(pos, {}).get("my_players"), best_recent_h, hit_pctile)
+                    if strength == "Need Help" else ""
+                )
+                rows += (
+                    f'<tr style="background:{SURFACE};">'
+                    f'<td colspan="11" style="padding:5px 10px;'
+                    f'border-top:1px solid {BORDER};border-bottom:1px solid {BORDER};">'
+                    f'<span style="color:{ACCENT};font-size:11px;font-weight:700;'
+                    f'text-transform:uppercase;letter-spacing:.5px;">{pos}</span>'
+                    f'<span style="color:{rank_color};font-size:10px;font-weight:600;'
+                    f'margin-left:8px;">{rank_str} &middot; {strength}</span>'
+                    f'{my_summary}'
+                    f'</td></tr>'
+                )
+            bg = f"background:{SURFACE2};" if row_idx % 2 else ""
+            row_idx += 1
             rh = rec_h.get(r.get("PlayerName", ""), {})
             _wd_hit = pickup_win_delta(r, winprob_ctx, winprob_rf, today_str, week_end_str, ptype="hit", weeks_played=winprob_weeks)
             _cell, _bdrow = score_reveal(
@@ -4207,7 +4332,7 @@ def build_email(snap, override_team=None):
     else:
         table = f'<p style="color:{MUTED};font-style:italic;margin-bottom:24px;">No FA hitters found.</p>'
 
-    fa_hit_section = section_head("FA Pickup — Hitters", "Top available hitters · HR% = modeled per-game HR probability · Cats = his season strengths, with the ↑ category his pickup most swings this matchup · sorted by composite score") + table
+    fa_hit_section = section_head("FA Pickup — Hitters", "Top available hitters by position — more where you're thin, fewer where you're set · HR% = modeled per-game HR probability · Cats = his season strengths, with the ↑ category his pickup most swings this matchup") + table
 
     # ── Category Rankings ──────────────────────────────────────────────────────
     CAT_LABELS = [
