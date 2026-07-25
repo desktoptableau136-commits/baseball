@@ -123,7 +123,7 @@ def build_context(snap, my_team):
     my_key = " ".join(my_team.split())
     wk_ranks, wk_pts, roto_week_results = sd.compute_week_finishes(roto, my_team, current_week_num)
     sparkline, peak_label = sd.make_sparkline(roto, my_team, current_week_num, weekly_results=roto_week_results)
-    n_hot, n_cold = sd.roster_hot_cold_counts(pitchers, hitters, my_team, rec_h, rec_p, p15)
+    n_hot, n_cold = sd.roster_hot_cold_counts(pitchers, hitters, my_team, best_recent_h, best_recent_p)
 
     my_row = next((r for r in luck if " ".join((r.get("team") or "").split()) == my_key), {})
 
@@ -576,28 +576,34 @@ def render_pitching(ctx):
 
 
 def _arm_movers(ctx):
-    """One hottest + one coldest rostered arm by 15-day ERA vs season."""
+    """One hottest + one coldest rostered arm by Recent Form (season-vs-recent Score
+    delta, whichever window is freshest per player) -- the SAME comparison the
+    digest's Pitcher Recent Form section and tap-to-expand header use."""
     my_key = " ".join(ctx["my_team"].split())
     movers = []
     for r in ctx["pitchers"]:
         if (" ".join((r.get("FantasyTeam") or "").split()) == my_key and int(r.get("Dataset", 0) or 0) == YEAR
                 and _n(r.get("ERA")) > 0):
-            rp = ctx["p15"].get(r.get("PlayerName", "")) or ctx["rec_p"].get(r.get("PlayerName", ""), {})
-            r_era = _n(rp.get("ERA")); r_ip = _n(rp.get("IP"))
-            if r_era > 0 and r_ip >= 3:
-                movers.append((_n(r.get("ERA")) - r_era, r.get("PlayerName"), r_era))
+            rec, season, rs, win, tag = sd._pitcher_recent_form(r, ctx["best_recent_p"])
+            if tag:
+                movers.append((rs - season, r.get("PlayerName"), _n(rec.get("ERA")), win, tag))
     if not movers:
         return ""
-    movers.sort(reverse=True)
+    movers.sort(key=lambda x: x[0], reverse=True)
     hot = movers[0]; cold = movers[-1]
     bits = []
-    if hot[0] >= 0.40:
-        bits.append(f'<span style="color:{GREEN};">&#128293; {hot[1]} {hot[2]:.2f}</span>')
-    if cold[0] <= -0.40 and cold[1] != hot[1]:
-        bits.append(f'<span style="color:{ACCENT};">&#10052; {cold[1]} {cold[2]:.2f}</span>')
+    # Icon comes from the actual tag (not a hardcoded fire/snowflake) so a "warm" (not
+    # "hot") mover here can't show a hotter icon than the same player's Recent Form
+    # cell in the digest -- the exact drift this whole consolidation was meant to kill.
+    if hot[4] in ("hot", "warm"):
+        bits.append(f'<span style="color:{GREEN};">{sd._FORM_EMOJI[hot[4]]} {hot[1]} {hot[2]:.2f} '
+                    f'<span style="color:{MUTED};">({hot[3].replace("-day", "d")})</span></span>')
+    if cold[4] in ("cold", "cool") and cold[1] != hot[1]:
+        bits.append(f'<span style="color:{ACCENT};">{sd._FORM_EMOJI[cold[4]]} {cold[1]} {cold[2]:.2f} '
+                    f'<span style="color:{MUTED};">({cold[3].replace("-day", "d")})</span></span>')
     if not bits:
         return ""
-    return f'<div style="margin-top:5px;padding-top:4px;font-size:11px;color:{MUTED};">L15 ERA &nbsp;{" &nbsp;&middot;&nbsp; ".join(bits)}</div>'
+    return f'<div style="margin-top:5px;padding-top:4px;font-size:11px;color:{MUTED};">Recent Form &nbsp;{" &nbsp;&middot;&nbsp; ".join(bits)}</div>'
 
 
 def render_hitting(ctx):
@@ -606,32 +612,38 @@ def render_hitting(ctx):
     for r in ctx["hitters"]:
         if (" ".join((r.get("FantasyTeam") or "").split()) == my_key and int(r.get("Dataset", 0)) == YEAR
                 and float(r.get("OPS") or 0) > 0):
-            rh = ctx["best_recent_h"].get(r.get("PlayerName", ""), {})
-            r_ops = _n(rh.get("OPS"))
-            if r_ops > 0:
-                movers.append((r_ops - _n(r.get("OPS")), r, r_ops))
-    # sort by the OPS delta only -- tuples carry a dict (r), so an unkeyed
+            rec, season, rs, win, tag = sd._hitter_recent_form(r, ctx["best_recent_h"])
+            if tag:
+                movers.append((rs - season, r, _n(rec.get("OPS")), tag))
+    # sort by the Score delta only -- tuples carry a dict (r), so an unkeyed
     # sort compares dicts on a delta tie and raises TypeError (crashed CI 2026-07-11)
     movers.sort(key=lambda x: x[0], reverse=True)
     hot = movers[:3]; cold = movers[-3:][::-1] if len(movers) > 3 else []
 
-    def line(d, r, r_ops, icon, col):
+    # Icon AND value color come from the actual per-player tag (not a hardcoded
+    # fire/green for the whole top/bottom-3 bucket) so a merely-"steady" mover in the
+    # ranked list can't show a green value + hot icon -- the exact drift this whole
+    # consolidation was meant to kill.
+    _tag_color = {"hot": GREEN, "warm": GREEN, "steady": MUTED, "cool": ACCENT, "cold": ACCENT}
+
+    def line(d, r, r_ops, tag):
         hrp = _n(r.get("HR_Probability"))
         hr_s = f' <span style="color:{MUTED};font-size:9px;">HR{hrp*100:.0f}%</span>' if hrp > 0 else ""
+        col = _tag_color[tag]
         return (
             f'<div style="display:flex;justify-content:space-between;gap:5px;white-space:nowrap;padding:3.5px 0;border-bottom:1px solid {BORDER};">'
-            f'<span style="overflow:hidden;text-overflow:ellipsis;color:{TEXT};">{icon} {sd.team_logo(r.get("Team"), 14)}{r.get("PlayerName")}{sd.hitter_badges(r, ctx["hit_pctile"])} '
+            f'<span style="overflow:hidden;text-overflow:ellipsis;color:{TEXT};">{sd._FORM_EMOJI[tag]} {sd.team_logo(r.get("Team"), 14)}{r.get("PlayerName")}{sd.hitter_badges(r, ctx["hit_pctile"])} '
             f'<span style="color:{MUTED};font-size:10px;">{_pos(r)}</span></span>'
             f'<span style="flex:0 0 auto;"><span style="color:{col};font-weight:700;">{_fv(r_ops,3)}</span>'
-            f'<span style="color:{MUTED};font-size:10px;"> ({d:+.3f})</span>{hr_s} {_mini_badge(sd._blend(r, sd.hitter_score, ctx["best_recent_h"]))}</span></div>'
+            f'<span style="color:{MUTED};font-size:10px;"> ({d:+.0f})</span>{hr_s} {_mini_badge(sd._blend(r, sd.hitter_score, ctx["best_recent_h"]))}</span></div>'
         )
-    rows = [line(d, r, ro, "&#128293;", GREEN) for d, r, ro in hot]
+    rows = [line(d, r, ro, tag) for d, r, ro, tag in hot]
     if cold:
         rows.append(f'<div style="border-top:1px solid {BORDER};margin:4px 0;"></div>')
-        rows += [line(d, r, ro, "&#10052;", ACCENT) for d, r, ro in cold]
+        rows += [line(d, r, ro, tag) for d, r, ro, tag in cold]
     if not rows:
         rows = [f'<div style="color:{MUTED};">No hitter data.</div>']
-    return _tile("Hitting Hot / Cold", "".join(rows), flex=1.18, sub="7-day OPS vs season")
+    return _tile("Hitter Recent Form", "".join(rows), flex=1.18, sub="Score vs whichever recent window is freshest")
 
 
 def render_holes(ctx):
