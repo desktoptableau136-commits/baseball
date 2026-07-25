@@ -100,8 +100,9 @@ _PIT_FALLBACK   = {"IP_RELY": 20.0, "GS_VIABLE": 3.0, "GP_VIABLE": 12.0, "IP_VIA
 
 
 _SCORE_CALIB = {
-    "sp": (1.5070, -44.3346),   # recalibrated 2026-07-06 — also the small-pool fallback
-    "rp": (1.6543, -28.0645),
+    "sp": (1.2503, -15.0391),   # recalibrated 2026-07-25 (post QS/W rebalance) — also the small-pool fallback
+    "rp": (1.6272, -28.9514),   # recalibrated 2026-07-25 (post _ip_reliability_mult add)
+    "hit": (1.4112, 0.2910),    # recalibrated 2026-07-25 (post live-recalibration add; was fixed 1.587/-5.2)
 }
 
 
@@ -172,36 +173,48 @@ def pitcher_score(r, _raw=False, _parts=False):
         return ({}, 1.0) if _parts else 0
 
     c = {}
-    # ── Strikeouts (28): results-based K% (or K/IP) blended 60/40 with the
-    #    predictive whiff% percentile, which leads K% start-to-start.
+    # ── Strikeouts (SP 20 / RP 28): results-based K% (or K/IP) blended 60/40 with the
+    #    predictive whiff% percentile, which leads K% start-to-start. Trimmed from 28 for
+    #    SP to make room for QS/W credit below — RP keeps the original 28 cap.
+    k_cap = 20 if is_sp else 28
     if kpct > 0:
-        k_comp = min(28, kpct / 0.28 * 28)
+        k_comp = min(k_cap, kpct / 0.28 * k_cap)
     else:
-        k_comp = min(28, kip / 1.5 * 28)
+        k_comp = min(k_cap, kip / 1.5 * k_cap)
     if whiff_pt > 0:
-        k_comp = 0.6 * k_comp + 0.4 * min(28, whiff_pt / 100 * 28)
+        k_comp = 0.6 * k_comp + 0.4 * min(k_cap, whiff_pt / 100 * k_cap)
     c["K"] = k_comp
 
-    # ── Run prevention (28): actual ERA (a league category) blended 55/45 with
+    # ── Run prevention (SP 26 / RP 28): actual ERA (a league category) blended 55/45 with
     #    xERA (deserved, strips defense/sequencing luck).
+    runprev_cap = 26 if is_sp else 28
     era_base = 0.55 * era + 0.45 * xera if (era > 0 and xera > 0) else era
-    c["RunPrev"] = max(0, min(28, (6.0 - era_base) / 4.0 * 28))
+    c["RunPrev"] = max(0, min(runprev_cap, (6.0 - era_base) / 4.0 * runprev_cap))
 
     # ── WHIP (20): results only — no clean predictive twin in the feed.
     c["WHIP"] = max(0, min(20, (2.0 - whip) / 1.1 * 20))
 
-    # ── Contact quality allowed (0-12): barrel%-allowed + xwOBA-against, both
-    #    lower-is-better. Rewards suppressing hard contact regardless of results.
+    # ── Contact quality allowed (SP 0-8 / RP 0-12): barrel%-allowed + xwOBA-against, both
+    #    lower-is-better. Rewards suppressing hard contact regardless of results. Trimmed
+    #    from 12 for SP alongside K — the two components this whole rebalance identified as
+    #    over-weighted for a contact-managed, not lucky, profile.
+    brl_cap, xwoba_cap = (3, 5) if is_sp else (5, 7)
     contact = 0.0
     if brl_ag > 0:
-        contact += max(0, min(5, (10.0 - brl_ag) / 6.0 * 5))
+        contact += max(0, min(brl_cap, (10.0 - brl_ag) / 6.0 * brl_cap))
     if xwoba_ag > 0:
-        contact += max(0, min(7, (0.360 - xwoba_ag) / 0.110 * 7))
+        contact += max(0, min(xwoba_cap, (0.360 - xwoba_ag) / 0.110 * xwoba_cap))
     c["Contact"] = contact
 
     if is_sp:
-        # SP role: reward starts volume; SVHD is irrelevant
-        c["Role"] = 12 if gs > 10 else 9
+        # QS (18): durability + run-prevention skill via the existing qs_probability model
+        # (already computed elsewhere, never previously fed into any score). Full credit at
+        # ~70% modeled QS rate (an ace-durability threshold; league avg is ~38%).
+        qsp = qs_probability(r)
+        c["QS"] = max(0, min(18, ((qsp or 0) / 70.0) * 18))
+        # W (8): a real scored category SP previously got zero credit for (RP's Role already
+        # credits it). Divisor 15 not RP's 10 — a full-season SP racks up more decisions.
+        c["W"] = min(8, w / 15 * 8)
     else:
         # RP role: SVHD first, then W and IP/G as opportunity signals
         c["Role"] = (5 + min(7, svhd / 15 * 7)
@@ -304,7 +317,7 @@ def compute_league_averages(hitters, pitchers):
     return _LG
 
 
-def hitter_score(r, _parts=False):
+def hitter_score(r, _raw=False, _parts=False):
     """0-100 hitter score. `_parts=True` returns (components_dict, opportunity_mult)
     instead — the raw pre-multiplier component contributions and the playing-time
     multiplier — so the score-breakdown tooltip stays in sync with the real math."""
@@ -349,8 +362,12 @@ def hitter_score(r, _parts=False):
         return c, mult
 
     s = sum(c.values()) * mult
-    # Calibrate to shared 0-100 scale (p50→50, p90→80) derived from observed distribution
-    s = s * 1.587 - 5.2
+    if _raw:
+        return s
+    # Calibrate to shared 0-100 scale (p50→50, p90→80) — re-anchored live per snapshot by
+    # compute_score_calibration(); falls back to the hand-tuned constants for a thin pool.
+    A, C = _SCORE_CALIB["hit"]
+    s = s * A + C
     return max(0, min(100, round(s)))
 
 
@@ -420,10 +437,11 @@ def rp_score(r, _raw=False, _parts=False):
     if whiff_pt > 0:
         contact += min(4, whiff_pt / 100 * 4)
     c["Contact"] = contact
+    mult = _ip_reliability_mult(r)
     if _parts:
-        return c, 1.0
+        return c, mult
 
-    s = sum(c.values())
+    s = sum(c.values()) * mult
     if _raw:
         return s
     # Calibrate to shared 0-100 scale (p50→50, p90→80) — re-anchored live per snapshot by
@@ -492,15 +510,22 @@ def rp_score_recent(rec, season_row):
     return rp_score(synth)
 
 
-def compute_score_calibration(pitchers):
-    """Re-anchor the SP/RP score calibration live from this snapshot's raw-score distribution
-    (approach A) so displayed scores track the season without a hand-paste. For each role,
-    solve A/C such that raw p50 -> 50 and p90 -> 80, using the SAME qualified pool as
+def compute_score_calibration(pitchers, hitters):
+    """Re-anchor the SP/RP/hitter score calibration live from this snapshot's raw-score
+    distribution (approach A) so displayed scores track the season without a hand-paste. For
+    each role, solve A/C such that raw p50 -> 50 and p90 -> 80, using the SAME qualified pool as
     recalibrate_scores.py (SP: _is_sp + IP past the reliability floor; RP: _pit_viable_min on
-    GP or IP; both from YEAR rows). Writes the module global _SCORE_CALIB. SMALL-POOL GUARD:
+    GP or IP; hitter: AB >= 30% of full-time benchmark, same floor prepare_scoring's hit_pool
+    uses; all from YEAR rows). Writes the module global _SCORE_CALIB. SMALL-POOL GUARD:
     a role whose qualified pool is below _MIN_CALIB_POOL or degenerate (p90 <= p50) KEEPS its
     hand-tuned fallback constants, so a noisy early-season distribution can't warp the scale.
-    Must run AFTER compute_pitcher_benchmarks — qualification + _raw scores read _PIT_BENCH."""
+    Must run AFTER compute_pitcher_benchmarks (qualification + _raw scores read _PIT_BENCH) and
+    compute_ab_benchmarks (hitter qualification reads _AB_BENCH). NOTE: this runs before
+    compute_league_averages in prepare_scoring's sequence, so pitcher_score's SP-branch
+    qs_probability() call sees an empty _LG here and falls back to its own hardcoded league
+    averages for this one-time raw-score solve — a small precision loss on the calibration
+    anchor only, not on live per-player displayed scores (computed later, after _LG is
+    populated). Do not reorder to fix this."""
     ps = [r for r in pitchers if int(_n(r.get("Dataset")) or 0) == YEAR]
     sp_ip_min = (_PIT_BENCH.get((YEAR, "SP"), {}).get("IP") or 0) * _IP_RELY_FRAC \
                 or _PIT_FALLBACK["IP_RELY"]
@@ -509,13 +534,16 @@ def compute_score_calibration(pitchers):
     rp_raw = sorted(rp_score(r, _raw=True) for r in ps
                     if not _is_sp(r) and (_n(r.get("ESPN_GP")) >= _pit_viable_min("RP", "GP")
                                           or _n(r.get("IP")) >= _pit_viable_min("RP", "IP")))
+    ab_min = (_AB_BENCH.get(YEAR) or _FULLTIME_AB[YEAR]) * 0.30
+    hit_raw = sorted(hitter_score(r, _raw=True) for r in hitters
+                     if int(_n(r.get("Dataset")) or 0) == YEAR and _n(r.get("AB")) >= ab_min)
 
     def _pctl(vals, q):
         i = q * (len(vals) - 1)
         lo = int(i); hi = min(lo + 1, len(vals) - 1)
         return vals[lo] + (vals[hi] - vals[lo]) * (i - lo)
 
-    for role, raws in (("sp", sp_raw), ("rp", rp_raw)):
+    for role, raws in (("sp", sp_raw), ("rp", rp_raw), ("hit", hit_raw)):
         if len(raws) < _MIN_CALIB_POOL:
             continue                        # too thin — keep the hand-tuned fallback
         p50, p90 = _pctl(raws, 0.50), _pctl(raws, 0.90)
@@ -605,6 +633,18 @@ def _effective_era(r):
     target = _n(r.get("xERA")) or (_LG.get("era") or 4.00)
     ip = _n(r.get("IP"))
     return (era * ip + target * _ERA_REG_PRIOR_IP) / (ip + _ERA_REG_PRIOR_IP)
+
+
+def _effective_whip(r):
+    """WHIP regressed toward league-average WHIP, IP-weighted (same _ERA_REG_PRIOR_IP shrinkage
+    as _effective_era) — no Statcast 'x' twin exists for WHIP, so the target is the league mean
+    rather than an expected stat."""
+    whip = _n(r.get("WHIP"))
+    if whip <= 0:
+        return 0.0
+    target = _LG.get("whip") or 1.35
+    ip = _n(r.get("IP"))
+    return (whip * ip + target * _ERA_REG_PRIOR_IP) / (ip + _ERA_REG_PRIOR_IP)
 
 
 def blowup_risk(r, recent_era=None):

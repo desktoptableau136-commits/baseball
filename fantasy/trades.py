@@ -32,6 +32,11 @@ TRADE_LAB_URL = "https://desktoptableau136-commits.github.io/baseball/"  # hoste
 _TRADE_SVHD_W       = 0.35  # punt-saves: discount SV+H contribution in trade value
 
 
+_TRADE_QS_W         = 0.65  # QS-probability credit weight in _trade_value — above SVHD's 0.35 (QS is a
+    # durability/skill signal, not role-assignment noise like saves) but below 1.0 since it's
+    # model-derived, not a raw box-score count.
+
+
 _POS_SCARCITY_CLAMP = (0.75, 1.50)  # bound the positional-scarcity multiplier so a thin pool can't over-swing _tval
 
 
@@ -317,11 +322,11 @@ def _trade_value(r, ptype, hit_pctile, pit_pctile):
     equal, so the radar handed you 'give abundant OF, get scarce SS' deals no rival would
     accept. Promoted from a find_trades closure so the pending-trade evaluator grades on
     the SAME currency."""
-    cats, pctile = (_FA_HIT_CATS, hit_pctile) if ptype == "hit" else (_FA_RP_CATS, pit_pctile)
+    cats, pctile = (_FA_HIT_CATS, hit_pctile) if ptype == "hit" else (_TRADE_PIT_CATS, pit_pctile)
     v = 0.0
     for c in cats:
         p = _cat_pctile(pctile, c, _cat_value(r, c))
-        v += max(0.0, p - 0.5) * (_TRADE_SVHD_W if c == "SVHD" else 1.0)
+        v += max(0.0, p - 0.5) * (_TRADE_SVHD_W if c == "SVHD" else (_TRADE_QS_W if c == "QS" else 1.0))
     if ptype == "hit" and _POS_SCARCITY:
         # Best-slot value: a multi-eligible bat is worth his scarcest position (a
         # catcher-eligible hitter carries the C premium). Empty global → mult 1.0 (raw),

@@ -1,17 +1,20 @@
-"""Re-derive the pitcher_score / rp_score calibration constants.
+"""Re-derive the pitcher_score / rp_score / hitter_score calibration constants.
 
-Both role scores are calibrated so the qualified-league distribution maps
+All three role scores are calibrated so the qualified-league distribution maps
 p50 -> 50 and p90 -> 80 on the shared 0-100 scale. When the raw component mix
-changes (e.g. adding xERA / whiff% / contact-allowed), the raw distribution
-shifts and these constants must be re-derived, or every displayed number moves.
+changes (e.g. adding xERA / whiff% / contact-allowed, or the SP QS/W rebalance),
+the raw distribution shifts and these constants must be re-derived, or every
+displayed number moves. This is also the source of the `_SCORE_CALIB` small-pool
+fallback literals in `fantasy/scoring.py` — refresh those from a healthy-season
+run of this script whenever the component mix changes materially.
 
 Run:  python recalibrate_scores.py
-Then paste the printed constants into pitcher_score / rp_score in send_digest.py.
+Then paste the printed constants into _SCORE_CALIB in fantasy/scoring.py.
 """
 import json
-from send_digest import (pitcher_score, rp_score, _is_sp, _n, YEAR,
-                         compute_pitcher_benchmarks, _pit_viable_min,
-                         _PIT_BENCH, _IP_RELY_FRAC, _PIT_FALLBACK)
+from send_digest import (pitcher_score, rp_score, hitter_score, _is_sp, _n, YEAR,
+                         compute_pitcher_benchmarks, compute_ab_benchmarks, _pit_viable_min,
+                         _PIT_BENCH, _IP_RELY_FRAC, _PIT_FALLBACK, _AB_BENCH, _FULLTIME_AB)
 
 
 def pctl(sorted_vals, q):
@@ -45,7 +48,9 @@ def main():
     # Match send_digest's dynamic, role-relative volume thresholds so the qualified
     # population tracks the season (mirrors _ip_reliability_mult / _pit_viable_min).
     compute_pitcher_benchmarks(d["pitchers"])
+    compute_ab_benchmarks(d["hitters"])
     ps = [r for r in d["pitchers"] if int(r.get("Dataset", 0) or 0) == YEAR]
+    hs = d["hitters"]
     # SP qualification = the same small-sample reliability floor pitcher_score applies
     # (_IP_RELY_FRAC of the season SP leader); RP uses the positional viability floors.
     sp_ip_min = (_PIT_BENCH.get((YEAR, "SP"), {}).get("IP") or 0) * _IP_RELY_FRAC \
@@ -56,9 +61,14 @@ def main():
     rp_raw = [rp_score(r, _raw=True) for r in ps
               if not _is_sp(r) and (_n(r.get("ESPN_GP")) >= _pit_viable_min("RP", "GP")
                                     or _n(r.get("IP")) >= _pit_viable_min("RP", "IP"))]
+    # Hitter qualification mirrors prepare_scoring's hit_pool AB floor (30% of full-time AB).
+    ab_min = (_AB_BENCH.get(YEAR) or _FULLTIME_AB[YEAR]) * 0.30
+    hit_raw = [hitter_score(r, _raw=True) for r in hs
+               if int(_n(r.get("Dataset")) or 0) == YEAR and _n(r.get("AB")) >= ab_min]
 
     solve(sp_raw, "pitcher_score (SP path)", "minus")
     solve(rp_raw, "rp_score", "plus")
+    solve(hit_raw, "hitter_score", "plus")
 
 
 if __name__ == "__main__":

@@ -271,7 +271,9 @@ def _sp_clauses(r, comps):
     """(fill, strength, weakness) per SP component."""
     kpct = _n(r.get("Kpct_P")); kip = _n(r.get("K/IP")); era = _n(r.get("ERA"))
     whip = _n(r.get("WHIP")); brl = _n(r.get("BarrelPctAllowed")); xwoba_ag = _n(r.get("xwOBA_against"))
-    maxes = {"K": 28, "RunPrev": 28, "WHIP": 20, "Contact": 12, "Role": 12}
+    w = _n(r.get("ESPN_W")) or _n(r.get("W"))
+    qsp = _n(qs_probability(r))
+    maxes = {"K": 20, "RunPrev": 26, "WHIP": 20, "Contact": 8, "QS": 18, "W": 8}
     out = []
 
     def add(key, strong, weak):
@@ -286,7 +288,9 @@ def _sp_clauses(r, comps):
         add("Contact", f"soft contact ({brl:.1f}% barrels)", f"hard contact ({brl:.1f}% barrels)")
     elif xwoba_ag > 0:
         add("Contact", f"soft contact (xwOBA-ag {_st(xwoba_ag)})", f"hard contact (xwOBA-ag {_st(xwoba_ag)})")
-    return out   # Role (start volume) is a marker, not a skill — left out of the narrative
+    add("QS", f"a reliable QS threat ({qsp:.0f}% modeled QS rate)", f"a shaky QS bet ({qsp:.0f}% modeled QS rate)")
+    add("W", f"racking up wins ({int(w)} W)", None)   # low W is often team-context, not a skill knock — same convention as _rp_clauses' W
+    return out
 
 
 def _rp_clauses(r, comps):
@@ -705,14 +709,28 @@ _FA_RP_CATS  = ["SVHD", "K", "W", "ERA", "WHIP"]
 _FA_SP_CATS  = ["K", "W", "ERA", "WHIP"]  # season strengths for the FA-SP Cats cell; reuses the pit_pctile pool (no QS pool)
 
 
+_TRADE_PIT_CATS = ["SVHD", "QS", "K", "W", "ERA", "WHIP"]  # _trade_value's pitcher cat list —
+    # SP and RP share one list; each role naturally scores 0 on the other's role-specific cat
+    # (SVHD for SP, QS for RP), so no _is_sp branching is needed here.
+
+
 def _cat_value(row, cat):
-    """Raw per-player value for a roto category (RP counting stats prefer ESPN season)."""
+    """Raw per-player value for a roto category (RP counting stats prefer ESPN season).
+    ERA/WHIP go through IP-weighted luck/sample-size shrinkage (_effective_era/_effective_whip)
+    so a tiny-sample rate-stat outlier can't dominate a percentile pool; QS has no per-player
+    raw stat anywhere in the data model, so it's proxied by the existing qs_probability model."""
     if cat == "SVHD":
         return _n(row.get("ESPN_SVHD")) or _n(row.get("SVHD"))
+    if cat == "QS":
+        return _n(qs_probability(row)) if _is_sp(row) else 0.0
     if cat == "K":
         return _n(row.get("ESPN_K")) or _n(row.get("K"))
     if cat == "W":
         return _n(row.get("ESPN_W")) or _n(row.get("W"))
+    if cat == "ERA":
+        return _effective_era(row)
+    if cat == "WHIP":
+        return _effective_whip(row)
     return _n(row.get(cat))
 
 
