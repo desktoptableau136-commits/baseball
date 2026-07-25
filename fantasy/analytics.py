@@ -24,8 +24,29 @@ _badge_name_key = _name_key
 
 _DL_STATUSES = {"TEN_DAY_DL", "FIFTEEN_DAY_DL", "SIXTY_DAY_DL", "IL", "OUT"}
 
-# Recent-form emoji for the tap-to-expand score-breakdown "N-day form" line.
-_FORM_EMOJI = {"hot": "\U0001F525", "cold": "\U0001F976", "steady": "➖"}
+# Recent Form -- the ONE hot/cold read shared by every surface (tap-to-expand header,
+# _my_pos_summary, the visible Recent Form column/sections, the Roster KPI, and both
+# dashboard tiles). Classified from a recent-vs-season composite SCORE delta (not a raw
+# stat delta), using whichever window is freshest per player (best_recent_h/best_recent_p
+# cascade). _FORM_EMOJI covers all 5 tiers so the dropdown prose and the visible column
+# icon are drawn from identical buckets -- "cold" uses the same snowflake as the column
+# (not a separate glyph) on purpose, so a player can't read differently in the two places.
+_FORM_HOT_DELTA  = 12   # recent score - season score >= this -> hot
+_FORM_WARM_DELTA = 5    # >= this (below hot) -> warm   (mirrored: <= -5 cool, <= -12 cold)
+_FORM_EMOJI = {"hot": "\U0001F525", "warm": "↑", "steady": "➖", "cool": "↓", "cold": "❄"}
+
+
+def _form_tag(delta):
+    """Classify a recent-vs-season Score delta into the 5-tier Recent Form tag."""
+    if delta >= _FORM_HOT_DELTA:
+        return "hot"
+    if delta >= _FORM_WARM_DELTA:
+        return "warm"
+    if delta <= -_FORM_HOT_DELTA:
+        return "cold"
+    if delta <= -_FORM_WARM_DELTA:
+        return "cool"
+    return "steady"
 
 
 def _on_il(r):
@@ -452,9 +473,9 @@ def _archetype_form_tail(season, tag, noun, hot, cold_lead):
     """Shared form/value tail for the archetype one-liner. Words only — the hot/cold
     emoji lives on the dedicated 'N-day form' line, so it isn't doubled here. A cold
     read still credits a genuinely good player ('...but still a solid bat')."""
-    if tag == "hot":
+    if tag in ("hot", "warm"):
         return hot
-    if tag == "cold":
+    if tag in ("cold", "cool"):
         tier = "elite" if season >= 85 else ("solid" if season >= 65 else None)
         art  = "an" if tier == "elite" else "a"
         return f"{cold_lead} but still {art} {tier} {noun}" if tier else cold_lead
@@ -604,20 +625,79 @@ def _recent_form_line(rec, role, win):
             f'Last {label}: {" &middot; ".join(parts)}</div>')
 
 
+def _hitter_recent_form(r, idx_recent):
+    """Season-vs-recent hitter Score comparison -- the ONE hot/cold read shared by the
+    tap-to-expand header, _my_pos_summary, and the visible Recent Form column,
+    so none of them can silently disagree. Returns
+    (rec, season_score, recent_score, window_label, tag); rec/window_label/tag are
+    None (recent_score 0) when no qualifying recent row exists."""
+    season = hitter_score(r)
+    rec = idx_recent.get(r.get("PlayerName", "")) if idx_recent else None
+    rs  = hitter_score(rec) if rec else 0
+    if rs <= 0:
+        return rec, season, 0, None, None
+    ds  = int(_n(rec.get("Dataset")) or 0)
+    win = f"{ds}-day" if ds in (7, 15, 30) else "7-day"
+    return rec, season, rs, win, _form_tag(rs - season)
+
+
+def _pitcher_recent_form(r, idx_recent):
+    """Season-vs-recent pitcher Score comparison, role-aware (SP blends the window row
+    directly; RP paces the window via rp_score_recent, rate-paced since the season
+    rp_score is volume-based). The ONE hot/cold read shared by the tap-to-expand header
+    and the visible Recent Form column, for both SP and RP.
+    Returns (rec, season_score, recent_score, window_label, tag), same shape as
+    _hitter_recent_form."""
+    sp = _is_sp(r)
+    season = pitcher_score(r) if sp else rp_score(r)
+    rec = idx_recent.get(r.get("PlayerName", "")) if idx_recent else None
+    rs  = ((pitcher_score(rec) if sp else rp_score_recent(rec, r)) or 0) if rec else 0
+    if rs <= 0:
+        return rec, season, 0, None, None
+    ds  = int(_n(rec.get("Dataset")) or 0)
+    win = f"{ds}-day" if ds in (7, 15, 30) else "15-day"
+    return rec, season, rs, win, _form_tag(rs - season)
+
+
+def recent_form_cell(r, role, idx_recent, td_style=None):
+    """The Recent Form cells -- TWO `<td>`s (value+icon, then a separate window-tag
+    column) -- used by My Upcoming Starts, FA Starting Pitchers, FA Hitters, My/FA
+    Relief Pitchers, and the two Recent Form sections. Every caller's header/colspan
+    must carry an extra column for the window tag. role: 'hit' or 'pit' (pitcher
+    auto-splits SP/RP internally). Shows the `season|recent` Score pair -- the SAME
+    numbers the tap-to-expand header shows (`Hitter score (season | 30-day): 77 | 60`)
+    -- so the column and the dropdown are reading the identical comparison, not a raw
+    stat. Icon/color come from that same Score delta (_hitter_recent_form/
+    _pitcher_recent_form); the window column ('15d'/'30d'/...) names which window
+    backed it, since the cascade picks a different window per player."""
+    if role == "hit":
+        rec, season, rs, win, tag = _hitter_recent_form(r, idx_recent)
+        no_data = "No recent stats — player may not have played recently"
+    else:
+        rec, season, rs, win, tag = _pitcher_recent_form(r, idx_recent)
+        no_data = "No recent stats — player may not have pitched recently"
+    if not rec or rs <= 0:
+        return (hot_cold_cell(None, None, td_style=td_style, no_data_title=no_data)
+                + _window_cell(None, td_style=td_style))
+    display_str = f"{season} | {rs}"
+    delta       = rs - season
+    win_label   = win.replace("-day", "d") if win else None
+    return (hot_cold_cell(display_str, delta,
+                          hot_thresh=_FORM_HOT_DELTA, warm_thresh=_FORM_WARM_DELTA,
+                          td_style=td_style)
+            + _window_cell(win_label, td_style=td_style))
+
+
 def _hitter_score_breakdown(r, idx_recent=None, hit_pctile=None):
     """Prose breakdown of a hitter's Score for the tap-to-expand panel."""
     comps, mult = hitter_score(r, _parts=True)
     if not comps:
         return ""
     season = hitter_score(r)
-    # Recent-form lookup drives both the dual-score header and the "N-day form" line.
-    rec = idx_recent.get(r.get("PlayerName", "")) if idx_recent else None
-    rs  = hitter_score(rec) if rec else 0
-    win = tag = None
-    if rs > 0:
-        ds  = int(_n(rec.get("Dataset")) or 0)
-        win = f"{ds}-day" if ds in (7, 15, 30) else "7-day"
-        tag = "hot" if rs > season else ("cold" if rs < season else "steady")
+    # Recent-form lookup drives both the dual-score header and the "N-day form" line --
+    # the SAME season-vs-recent Score comparison the visible Recent Form column uses,
+    # so the two can never disagree.
+    rec, _, rs, win, tag = _hitter_recent_form(r, idx_recent)
     sc = f'<span style="color:{_score_text_hex(season)};font-weight:800;">{season}</span>'
     if rs > 0:
         rc = f'<span style="color:{_score_text_hex(rs)};font-weight:800;">{rs}</span>'
@@ -655,16 +735,9 @@ def _pitcher_score_breakdown(r, idx_recent=None):
         season, role, clauses = rp_score(r), "RP", _rp_clauses(r, comps)
     if not comps:
         return ""
-    # Recent-form header: SP blends the window row directly; RP paces its window rates to a
-    # comparable season-scale score (rp_score_recent returns None on a thin/absent window,
-    # so the header falls back to the single-score form for both roles).
-    rec = idx_recent.get(r.get("PlayerName", "")) if idx_recent else None
-    rs  = (pitcher_score(rec) if role == "SP" else (rp_score_recent(rec, r) or 0)) if rec else 0
-    win = tag = None
-    if rs > 0:
-        ds  = int(_n(rec.get("Dataset")) or 0)
-        win = f"{ds}-day" if ds in (7, 15, 30) else "15-day"
-        tag = "hot" if rs > season else ("cold" if rs < season else "steady")
+    # Recent-form header -- the SAME season-vs-recent Score comparison the visible
+    # Recent Form column uses (_pitcher_recent_form), so the two can never disagree.
+    rec, _, rs, win, tag = _pitcher_recent_form(r, idx_recent)
     sc = f'<span style="color:{_score_text_hex(season)};font-weight:800;">{season}</span>'
     if rs > 0:
         rc = f'<span style="color:{_score_text_hex(rs)};font-weight:800;">{rs}</span>'

@@ -389,11 +389,8 @@ def _my_pos_summary(my_players, idx_recent, hit_pctile=None, limit=3):
     for r in my_players[:limit]:
         name = r.get("PlayerName", "")
         tag_html = inj_tag(r) + hitter_badges(r, hit_pctile)
-        season = hitter_score(r)
-        rec = idx_recent.get(name) if idx_recent else None
-        rs = hitter_score(rec) if rec else 0
+        _, season, rs, _, tag = _hitter_recent_form(r, idx_recent)
         if rs > 0:
-            tag = "hot" if rs > season else ("cold" if rs < season else "steady")
             score_html = f'<span style="color:{MUTED}">{season}|{rs}</span> {_FORM_EMOJI[tag]}'
         else:
             score_html = f'<span style="color:{MUTED}">{season}</span>'
@@ -649,10 +646,10 @@ def _whiff_sub(r):
     )
 
 def _qs_sub(r):
-    """Small muted second line under the QS% cell naming the run-prevention SKILL
-    behind the projection: xERA (Baseball Savant, luck-stripped ERA — what the ER
-    projection regresses toward). DISPLAY ONLY. xERA only, NOT raw ERA (which has
-    its own adjacent column here, unlike whiff% under K%). Empty when missing."""
+    """Small muted second line under the ERA cell naming the run-prevention SKILL
+    behind the QS projection: xERA (Baseball Savant, luck-stripped ERA — what the ER
+    projection regresses toward). DISPLAY ONLY. xERA only, never raw ERA. Used in both
+    My Upcoming Starts and FA Starting Pitchers. Empty when missing."""
     val = _n(r.get("xERA"))
     if val <= 0:
         return ""
@@ -809,21 +806,16 @@ _CAT_DEC = {
     "OPS": 3, "ERA": 2, "WHIP": 2,
 }
 
-# ── ROSTER HOT/COLD ──────────────────────────────────────────────────────────
+# ── HITTER / PITCHER RECENT FORM ─────────────────────────────────────────────
 
-def build_hot_cold_section(hitters, recent_hitting, my_team, best_recent_h=None, hit_pctile=None):
-    if not recent_hitting:
+def build_hot_cold_section(hitters, my_team, best_recent_h=None, hit_pctile=None):
+    if not best_recent_h:
         return ""
 
-    # Index recent stats by player name
-    recent = {r["PlayerName"]: r for r in recent_hitting if r.get("PlayerName")}
-
-    # Get my rostered hitters with season OPS
-    season_year = YEAR
     my_hitters = [
         r for r in hitters
         if " ".join((r.get("FantasyTeam") or "").split()) == " ".join(my_team.split())
-        and int(r.get("Dataset", 0)) == season_year
+        and int(r.get("Dataset", 0)) == YEAR
         and float(r.get("OPS") or 0) > 0
     ]
     if not my_hitters:
@@ -831,27 +823,20 @@ def build_hot_cold_section(hitters, recent_hitting, my_team, best_recent_h=None,
 
     rows_data = []
     for r in my_hitters:
-        name = r["PlayerName"]
-        season_ops = float(r.get("OPS") or 0)
-        rec = recent.get(name, {})
-        recent_ops = float(rec.get("OPS") or 0) if rec else None
-        recent_g   = int(rec.get("G") or 0) if rec else 0
-
-        delta = (recent_ops - season_ops) if recent_ops else None
+        _, season, rs, _, tag = _hitter_recent_form(r, best_recent_h)
         rows_data.append({
-            "name":       name,
+            "name":       r["PlayerName"],
             "pos":        r.get("Position", ""),
             "team":       r.get("Team", ""),
-            "season_ops": season_ops,
-            "recent_ops": recent_ops,
-            "recent_g":   recent_g,
-            "delta":      delta,
+            "season_ops": float(r.get("OPS") or 0),
+            "tag":        tag,
+            "delta":      (rs - season) if tag else None,
             "inj":        inj_tag(r),
-            "srow":       r,   # full season row for the HR% tooltip drivers
-            "score":      _blend(r, hitter_score, best_recent_h) if best_recent_h is not None else hitter_score(r),
+            "srow":       r,   # full season row for the HR% tooltip drivers + Recent Form cell
+            "score":      _blend(r, hitter_score, best_recent_h),
         })
 
-    # Sort: players with recent data first (by delta desc), then no-data players
+    # Sort: players with a recent-form read first (biggest Score delta), then no-data players
     with_data    = sorted([r for r in rows_data if r["delta"] is not None], key=lambda x: -x["delta"])
     without_data = [r for r in rows_data if r["delta"] is None]
     sorted_rows  = with_data + without_data
@@ -859,32 +844,6 @@ def build_hot_cold_section(hitters, recent_hitting, my_team, best_recent_h=None,
     rows_html = ""
     for i, r in enumerate(sorted_rows):
         bg = f"background:{SURFACE2};" if i % 2 else ""
-        delta = r["delta"]
-
-        if delta is None:
-            delta_html = f'<span style="color:{MUTED};">—</span>'
-            arrow = ""
-        elif delta >= 0.050:
-            delta_html = f'<span style="color:{GREEN};font-weight:700;">+{delta:.3f}</span>'
-            arrow = f'<span style="color:{GREEN};">🔥</span>'
-        elif delta >= 0.015:
-            delta_html = f'<span style="color:{GREEN};">+{delta:.3f}</span>'
-            arrow = f'<span style="color:{GREEN};">↑</span>'
-        elif delta <= -0.050:
-            delta_html = f'<span style="color:{RED};font-weight:700;">{delta:.3f}</span>'
-            arrow = f'<span style="color:{RED};">❄</span>'
-        elif delta <= -0.015:
-            delta_html = f'<span style="color:{RED};">{delta:.3f}</span>'
-            arrow = f'<span style="color:{RED};">↓</span>'
-        else:
-            delta_html = f'<span style="color:{MUTED};">{delta:+.3f}</span>'
-            arrow = ""
-
-        recent_str = (
-            f'{r["recent_ops"]:.3f} <span style="color:{MUTED};font-size:10px;">({r["recent_g"]}G)</span>'
-            if r["recent_ops"] else f'<span style="color:{MUTED};">—</span>'
-        )
-
         _cell, _bdrow = score_reveal(
             r["score"], _hitter_score_breakdown(r["srow"], best_recent_h, hit_pctile),
             _bd_uid("rhc", r["name"]), 7)
@@ -893,36 +852,37 @@ def build_hot_cold_section(hitters, recent_hitting, my_team, best_recent_h=None,
             f'<td style="{TD_S}font-weight:600;">{team_logo(r["team"])}{r["name"]}{r["inj"]}{hitter_badges(r["srow"], hit_pctile)}</td>'
             f'<td style="{TDC}color:{MUTED};">{r["pos"]}</td>'
             f'<td style="{TDC}">{r["season_ops"]:.3f}</td>'
-            f'<td style="{TDC}">{recent_str}</td>'
-            f'<td style="{TDC}">{delta_html} {arrow}</td>'
             f'<td style="{TDC}">{_hrp_cell(r["srow"])}</td>'
+            + recent_form_cell(r["srow"], "hit", best_recent_h) +
             f'<td style="{TDC}">{_cell}</td>'
             f'</tr>'
             f'{_bdrow}'
         )
 
-    n_hot  = sum(1 for r in with_data if r["delta"] >= 0.015)
-    n_cold = sum(1 for r in with_data if r["delta"] <= -0.015)
-    sub = f"{n_hot} hot · {n_cold} cold · last 7 days vs season OPS · HR% = modeled per-game HR probability"
+    n_hot  = sum(1 for r in with_data if r["tag"] in ("hot", "warm"))
+    n_cold = sum(1 for r in with_data if r["tag"] in ("cold", "cool"))
+    sub = f"{n_hot} hot · {n_cold} cold · Recent Form = Score vs whichever recent window is freshest per player · HR% = modeled per-game HR probability"
 
     return (
-        section_head("Roster Hot/Cold", sub) +
+        section_head("Hitter Recent Form", sub) +
         f'<table style="width:100%;border-collapse:collapse;margin-bottom:24px;font-size:13px;">'
         f'<thead><tr>'
         f'<th style="{TH_S}">Hitter</th>'
         f'<th style="{TH_S}text-align:center;">Pos</th>'
         f'<th style="{TH_S}text-align:center;">Season OPS</th>'
-        f'<th style="{TH_S}text-align:center;">Last 7 OPS</th>'
-        f'<th style="{TH_S}text-align:center;">Δ</th>'
         f'<th style="{TH_S}text-align:center;">HR%</th>'
+        f'<th style="{TH_S}text-align:center;">Recent Form</th>'
+        f'<th style="{TH_S}text-align:center;" title="Which recent window (30/15/7-day) backed the Recent Form read">📅</th>'
         f'<th style="{TH_S}text-align:center;">Score</th>'
         f'</tr></thead><tbody>{rows_html}</tbody></table>'
     )
 
-def build_pitcher_hot_cold_section(pitchers, my_team, rec_p=None, best_recent_p=None):
+def build_pitcher_hot_cold_section(pitchers, my_team, best_recent_p=None):
+    if not best_recent_p:
+        return ""
     my_key = " ".join(my_team.split())
 
-    # Season rows for my pitchers
+    # Season rows for my pitchers (SP AND RP -- _pitcher_recent_form auto-branches role)
     season = {
         r["PlayerName"]: r for r in pitchers
         if " ".join((r.get("FantasyTeam") or "").split()) == my_key
@@ -932,35 +892,18 @@ def build_pitcher_hot_cold_section(pitchers, my_team, rec_p=None, best_recent_p=
     if not season:
         return ""
 
-    # 15-day rows as "recent"; fall back to pybaseball 15-day scrape for fringe players
-    recent_15 = {
-        r["PlayerName"]: r for r in pitchers
-        if int(r.get("Dataset", 0) or 0) == 15
-    }
-
     rows_data = []
     for name, r in season.items():
-        season_era = _n(r.get("ERA"))
-        rec        = recent_15.get(name) or (rec_p or {}).get(name, {})
-        recent_era = _n(rec.get("ERA")) if rec else None
-        recent_ip  = _n(rec.get("IP"))  if rec else 0
-
-        # Require at least 3 IP in the recent window to avoid noise
-        if recent_era and recent_ip < 3:
-            recent_era = None
-
-        # delta > 0 means recent ERA is LOWER (better) → hot
-        delta = (season_era - recent_era) if recent_era and season_era else None
+        _, pseason, rs, _, tag = _pitcher_recent_form(r, best_recent_p)
         rows_data.append({
             "name":       name,
             "pos":        r.get("Position", ""),
             "team":       r.get("Team", ""),
-            "season_era": season_era,
-            "recent_era": recent_era,
-            "recent_ip":  recent_ip,
-            "delta":      delta,
+            "season_era": _n(r.get("ERA")),
+            "tag":        tag,
+            "delta":      (rs - pseason) if tag else None,
             "inj":        inj_tag(r),
-            "srow":       r,   # season row for the score-breakdown panel
+            "srow":       r,   # season row for the score-breakdown panel + Recent Form cell
             "score":      _score_p(r, best_recent_p),
         })
 
@@ -970,34 +913,7 @@ def build_pitcher_hot_cold_section(pitchers, my_team, rec_p=None, best_recent_p=
 
     rows_html = ""
     for i, r in enumerate(sorted_rows):
-        bg    = f"background:{SURFACE2};" if i % 2 else ""
-        delta = r["delta"]
-
-        if delta is None:
-            delta_html = f'<span style="color:{MUTED};">—</span>'
-            arrow = ""
-        elif delta >= 1.00:
-            delta_html = f'<span style="color:{GREEN};font-weight:700;">-{delta:.2f}</span>'
-            arrow = f'<span style="color:{GREEN};">🔥</span>'
-        elif delta >= 0.40:
-            delta_html = f'<span style="color:{GREEN};">-{delta:.2f}</span>'
-            arrow = f'<span style="color:{GREEN};">↑</span>'
-        elif delta <= -1.00:
-            delta_html = f'<span style="color:{RED};font-weight:700;">+{abs(delta):.2f}</span>'
-            arrow = f'<span style="color:{RED};">❄</span>'
-        elif delta <= -0.40:
-            delta_html = f'<span style="color:{RED};">+{abs(delta):.2f}</span>'
-            arrow = f'<span style="color:{RED};">↓</span>'
-        else:
-            sign = "-" if delta >= 0 else "+"
-            delta_html = f'<span style="color:{MUTED};">{sign}{abs(delta):.2f}</span>'
-            arrow = ""
-
-        recent_str = (
-            f'{r["recent_era"]:.2f} <span style="color:{MUTED};font-size:10px;">({r["recent_ip"]:.0f} IP)</span>'
-            if r["recent_era"] else f'<span style="color:{MUTED};">—</span>'
-        )
-
+        bg = f"background:{SURFACE2};" if i % 2 else ""
         _whiff = _n(r["srow"].get("WhiffPct"))
         whiff_cell = (
             f'<span style="color:{GREEN};font-weight:700;">{_whiff:.0f}%</span>' if _whiff >= 30
@@ -1011,28 +927,27 @@ def build_pitcher_hot_cold_section(pitchers, my_team, rec_p=None, best_recent_p=
             f'<td style="{TD_S}font-weight:600;">{team_logo(r["team"])}{r["name"]}{r["inj"]}{pitcher_regression_badge(r["srow"])}</td>'
             f'<td style="{TDC}color:{MUTED};">{r["pos"]}</td>'
             f'<td style="{TDC}">{r["season_era"]:.2f}</td>'
-            f'<td style="{TDC}">{recent_str}</td>'
-            f'<td style="{TDC}">{delta_html} {arrow}</td>'
             f'<td style="{TDC}">{whiff_cell}</td>'
+            + recent_form_cell(r["srow"], "pit", best_recent_p) +
             f'<td style="{TDC}">{_cell}</td>'
             f'</tr>'
             f'{_bdrow}'
         )
 
-    n_hot  = sum(1 for r in with_data if r["delta"] >= 0.40)
-    n_cold = sum(1 for r in with_data if r["delta"] <= -0.40)
-    sub    = f"{n_hot} hot · {n_cold} cold · last 15 days vs season ERA"
+    n_hot  = sum(1 for r in with_data if r["tag"] in ("hot", "warm"))
+    n_cold = sum(1 for r in with_data if r["tag"] in ("cold", "cool"))
+    sub    = f"{n_hot} hot · {n_cold} cold · Recent Form = Score vs whichever recent window is freshest per player (RP via rp_score_recent)"
 
     return (
-        section_head("Pitcher Hot/Cold", sub) +
+        section_head("Pitcher Recent Form", sub) +
         f'<table style="width:100%;border-collapse:collapse;margin-bottom:24px;font-size:13px;">'
         f'<thead><tr>'
         f'<th style="{TH_S}">Pitcher</th>'
         f'<th style="{TH_S}text-align:center;">Pos</th>'
         f'<th style="{TH_S}text-align:center;">Season ERA</th>'
-        f'<th style="{TH_S}text-align:center;">Last 15 ERA</th>'
-        f'<th style="{TH_S}text-align:center;">Δ</th>'
         f'<th style="{TH_S}text-align:center;">Whiff%</th>'
+        f'<th style="{TH_S}text-align:center;">Recent Form</th>'
+        f'<th style="{TH_S}text-align:center;" title="Which recent window (30/15/7-day) backed the Recent Form read">📅</th>'
         f'<th style="{TH_S}text-align:center;">Score</th>'
         f'</tr></thead><tbody>{rows_html}</tbody></table>'
     )
@@ -2295,8 +2210,8 @@ def build_glossary_section():
         _entry(f'Score badge (tap to expand){badge(72)}',
                "The colored pill is the player's 0–100 role score (green ≥ 72, blue ≥ 52, amber ≥ 32, red below). "
                "In the browser-opened attachment it expands on tap into a full-width row below the player. "
-               "It opens with the <b>season and recent (last-30) scores</b> (each colored by tier) beside a 🔥/🥶 "
-               "form marker — relievers included, their recent score built from last-30 <i>rates</i> so it's "
+               "It opens with the <b>season and recent (last-30) scores</b> (each colored by tier) beside a "
+               "🔥/↑/➖/↓/❄ Recent Form marker — relievers included, their recent score built from last-30 <i>rates</i> so it's "
                "comparable to the season number — then a compact <b>Last 30 days</b> line naming the window "
                "stats behind it (e.g. &ldquo;0.00 ERA · 19% K · 0.32 WHIP&rdquo; / &ldquo;1.028 OPS · .275 AVG "
                "· 8 HR&rdquo;), then a one-line <b>scouting read</b> of the player's archetype (e.g. &ldquo;a "
@@ -2305,12 +2220,13 @@ def build_glossary_section():
                "swing-and-miss and a low WHIP; held back by hard contact&rdquo;). If the player is hurt it ends with a 🩹 <b>Injury</b> line — which side of the IL "
                "he's on (10 / 15 / 60-day, OUT, or day-to-day), the body part and specifics, and his "
                "expected return. The ▾ caret marks a tappable badge; ✕ (or tapping another badge) closes it."),
-        _entry(f'Hot / cold{_mark("&#128293;", GREEN)}{_mark("&#10052;", ACCENT)}',
-               "In the Hot/Cold columns, 🔥 (or ↑) marks a player running <b>hot</b> vs his season baseline "
-               "over the recent window (7-day OPS for hitters, 15-day ERA for pitchers); ❄ (or ↓) marks "
-               "<b>cold</b>. The colored value beside it is the recent stat; the Δ is the change from season. "
-               "This recent window is narrower than the one named in the Score breakdown, so a bat can read "
-               "🔥 here yet “cold” there."),
+        _entry(f'Recent Form{_mark("&#128293;", GREEN)}{_mark("&#10052;", RED)}',
+               "In the Recent Form columns, 🔥 (or ↑) marks a player running <b>hot</b> vs his season "
+               "baseline; ❄ (or ↓) marks <b>cold</b>. Built from the exact same season-vs-recent Score "
+               "comparison as the Score breakdown's dual-score header — whichever window is freshest per "
+               "player (30/15/7-day), tagged next to the value (e.g. “15d”) — so a player can never read hot "
+               "here and cold there. The colored value beside the icon is the recent stat itself, shown for "
+               "context; the icon and color are driven by the Score delta, not that raw number."),
 
         _subhead("Pitchers (starters)"),
         _entry(f'QS / 5K+ / 2{qs_badge(6.0, 2)}{k5_badge(6)}{two_start_badge()}',
@@ -2400,8 +2316,10 @@ def build_glossary_section():
                "A skill signal that leads strikeout results."),
         _entry("Barrel% / HardHit% allowed", "Share of batted balls against that are barrels (ideal "
                "exit-velo + angle) or hit ≥95 mph. Lower is better."),
-        _entry("L15 ERA", "ERA over the last 15 days — the hot/cold window for starters, who pitch "
-               "infrequently (7 days is too noisy). Compared against season ERA."),
+        _entry("Recent Form window", "The recent-window row behind a Recent Form cell — whichever of "
+               "30/15/7-day FantasyPros data (or a Baseball-Reference fallback) is freshest for that player. "
+               "For starters this is usually the 15-day row (7 days is too noisy for a 5-man rotation); "
+               "hitters usually resolve to 7-day. The window used is tagged next to the value."),
         _entry("Whiff%", "Raw swing-and-miss rate — share of swings that miss, across all pitch types "
                "(pitches-weighted, from Baseball Savant). A pitch-skill read on strikeout upside; ~25% is "
                "league average, 30%+ is elite. Shown for reference only — not folded into the Score."),
@@ -3395,11 +3313,12 @@ def compute_week_finishes(roto, my_team, current_week_num):
             wk_pts.append(scores[my_key])
     return wk_ranks, wk_pts, roto_week_results
 
-def roster_hot_cold_counts(pitchers, hitters, my_team, rec_h, rec_p, p15):
-    """Hot/cold counts across my ENTIRE roster for the Roster KPI — hitters by
-    7-day OPS vs season (±.015), pitchers by 15-day ERA vs season (±.40, ≥3
-    recent IP, rec_p fallback). The two thresholds differ by design (OPS vs ERA
-    scale) and match build_hot_cold_section / build_pitcher_hot_cold_section.
+def roster_hot_cold_counts(pitchers, hitters, my_team, best_recent_h, best_recent_p):
+    """Recent Form counts across my ENTIRE roster for the Roster KPI — hitters and
+    pitchers (SP + RP, role auto-detected) both via the season-vs-recent Score delta
+    (_hitter_recent_form / _pitcher_recent_form, thresholded on _FORM_HOT_DELTA /
+    _FORM_WARM_DELTA), the SAME comparison the Hitter/Pitcher Recent Form section
+    subtitles count -- so this tile and those subtitles can never drift apart.
     Returns (n_hot, n_cold)."""
     my_key = " ".join((my_team or "").split())
     n_hot = n_cold = 0
@@ -3407,25 +3326,16 @@ def roster_hot_cold_counts(pitchers, hitters, my_team, rec_h, rec_p, p15):
         if (" ".join((r.get("FantasyTeam") or "").split()) == my_key
                 and int(r.get("Dataset", 0)) == YEAR
                 and float(r.get("OPS") or 0) > 0):
-            s_ops = float(r.get("OPS") or 0)
-            rh = rec_h.get(r.get("PlayerName", ""), {})
-            r_ops = float(rh.get("OPS") or 0) if rh else 0
-            if s_ops > 0 and r_ops > 0:
-                d = r_ops - s_ops
-                if d >= 0.015:    n_hot  += 1
-                elif d <= -0.015: n_cold += 1
+            _, _, _, _, tag = _hitter_recent_form(r, best_recent_h)
+            if tag in ("hot", "warm"):    n_hot  += 1
+            elif tag in ("cold", "cool"): n_cold += 1
     for r in pitchers:
         if (" ".join((r.get("FantasyTeam") or "").split()) == my_key
                 and int(r.get("Dataset", 0) or 0) == YEAR
                 and _n(r.get("ERA")) > 0):
-            s_era = _n(r.get("ERA"))
-            rp    = p15.get(r.get("PlayerName", "")) or rec_p.get(r.get("PlayerName", ""), {})
-            r_era = _n(rp.get("ERA")) if rp else 0
-            r_ip  = _n(rp.get("IP"))  if rp else 0
-            if s_era > 0 and r_era > 0 and r_ip >= 3:
-                d = s_era - r_era
-                if d >= 0.40:    n_hot  += 1
-                elif d <= -0.40: n_cold += 1
+            _, _, _, _, tag = _pitcher_recent_form(r, best_recent_p)
+            if tag in ("hot", "warm"):    n_hot  += 1
+            elif tag in ("cold", "cool"): n_cold += 1
     return n_hot, n_cold
 
 def build_coverage_footer(snap):
@@ -3637,7 +3547,7 @@ def build_email(snap, override_team=None):
         )
 
     # Roster-wide hot/cold counts for the Roster KPI — shared helper (see above build_email).
-    n_hot, n_cold = roster_hot_cold_counts(pitchers, hitters, my_team, rec_h, rec_p, p15)
+    n_hot, n_cold = roster_hot_cold_counts(pitchers, hitters, my_team, best_recent_h, best_recent_p)
     hc_str = (
         f'<span style="color:{GREEN};">&#128293;&nbsp;{n_hot}</span>'
         f'<span style="color:{MUTED};margin:0 4px;">·</span>'
@@ -3827,7 +3737,7 @@ def build_email(snap, override_team=None):
             )
             rows += (
                 f'<tr style="background:{SURFACE};">'
-                f'<td colspan="8" style="padding:5px 10px;'
+                f'<td colspan="9" style="padding:5px 10px;'
                 f'border-top:1px solid {BORDER};border-bottom:1px solid {BORDER};">'
                 f'<span style="color:{ACCENT};font-size:11px;font-weight:700;'
                 f'text-transform:uppercase;letter-spacing:.5px;">{day_label}</span>'
@@ -3844,7 +3754,7 @@ def build_email(snap, override_team=None):
                 p15r = p15.get(name) or rec_p.get(name, {})
                 qsp = qs_probability(r)
                 qsp_color = GREEN if qsp and qsp >= 60 else (TEXT if qsp and qsp >= 40 else MUTED)
-                qsp_str = f'<span style="color:{qsp_color};font-weight:700;">{qsp}%</span>' if qsp else "—"
+                qsp_str = f'<span style="color:{qsp_color};font-weight:700;font-size:15px;">{qsp}%</span>' if qsp else "—"
                 _kpct_s = _n(r.get("Kpct_P"))
                 _kpct_s_top = _kpct_s > 0 and _kpct_s in _top3_kpct_starts
                 kpct_s_cell = (
@@ -3875,7 +3785,7 @@ def build_email(snap, override_team=None):
                            + _sp_badge_context(r, qs_fires_s, k_fires_s, _n_starts_s, p15r.get("ERA")))
                 _cell, _bdrow = score_reveal(
                     _score_p(r, best_recent_p), _mus_bd,
-                    _bd_uid("mus", name), 8)
+                    _bd_uid("mus", name), 9)
                 rows += (
                     f'<tr style="{bg}">'
                     f'<td style="{_tds}font-weight:600;">{team_logo(r.get("Team"))}{name}{inj_tag(r)}{start_badge}</td>'
@@ -3883,10 +3793,10 @@ def build_email(snap, override_team=None):
                     f'<td style="{_tdc}">{opp_logo(ha)}{ha}'
                     f'{"&nbsp;<span style=\"color:#888;font-size:11px\">(proj.)</span>" if r.get("PSP_Projected") else ""}'
                     f'{_opp_ops_sub(r)}</td>'
-                    f'<td style="{_tdc}">{qsp_str}{_qs_sub(r)}</td>'
-                    f'<td style="{_tdc}">{v(r.get("ERA"), 2)}</td>'
-                    + hot_cold_cell(r.get("ERA"), p15r.get("ERA"), lower_better=True, dec=2, no_data_title="No 15-day stats — player may not have pitched recently", td_style=_tdc) +
+                    f'<td style="{_tdc}">{qsp_str}</td>'
+                    f'<td style="{_tdc}">{v(r.get("ERA"), 2)}{_qs_sub(r)}</td>'
                     f'<td style="{_tdc}">{kpct_s_cell}{_whiff_sub(r)}</td>'
+                    + recent_form_cell(r, "pit", best_recent_p, td_style=_tdc) +
                     f'<td style="{_tdc}">{_cell}</td>'
                     f'</tr>'
                     f'{_bdrow}'
@@ -3911,8 +3821,9 @@ def build_email(snap, override_team=None):
             f'<th style="{_th}text-align:center;">Matchup</th>'
             f'<th style="{_th}text-align:center;">QS%</th>'
             f'<th style="{_th}text-align:center;">ERA</th>'
-            f'<th style="{_th}text-align:center;">L15 ERA</th>'
             f'<th style="{_th}text-align:center;">K%</th>'
+            f'<th style="{_th}text-align:center;">Recent Form</th>'
+            f'<th style="{_th}text-align:center;" title="Which recent window (30/15/7-day) backed the Recent Form read">📅</th>'
             f'<th style="{_th}text-align:center;">Score</th>'
             f'</tr></thead><tbody>{rows}</tbody></table>'
             f'</div>'
@@ -3951,15 +3862,10 @@ def build_email(snap, override_team=None):
             ds   = int(r.get("Dataset", 0) or 0)
             ds_label = {30: "30d", 15: "15d", 7: "7d"}.get(ds, "")
             no_espn = _n(r.get("ESPN_GP")) <= 0
-            ds_badge = (
-                f'<span style="color:{MUTED};font-size:9px;font-weight:600;'
-                f'background:rgba(100,116,139,0.12);border:1px solid rgba(100,116,139,0.25);'
-                f'border-radius:3px;padding:1px 4px;margin-left:5px;vertical-align:middle;">'
-                f'{ds_label}</span>'
-            ) if ds_label and no_espn else ""
+            ds_badge = _window_badge(ds_label) if ds_label and no_espn else ""
             _cell, _bdrow = score_reveal(
                 r[score_key], _pitcher_score_breakdown(r, best_recent_p),
-                _bd_uid("myrp", r.get("PlayerName", "")), 8)
+                _bd_uid("myrp", r.get("PlayerName", "")), 10)
             return (
                 f'<tr style="{bg}">'
                 f'<td style="{TD_S}font-weight:600;">{team_logo(r.get("Team"))}{r.get("PlayerName","")}{inj_tag(r)}{ds_badge}{pitcher_regression_badge(r)}</td>'
@@ -3969,6 +3875,7 @@ def build_email(snap, override_team=None):
                 f'<td style="{TDC}">{v(w, 0)}</td>'
                 f'<td style="{TDC}">{f"{era:.2f}" if era > 0 else "—"}</td>'
                 f'<td style="{TDC}">{f"{whip:.2f}" if whip > 0 else "—"}</td>'
+                + recent_form_cell(r, "pit", best_recent_p) +
                 f'<td style="{TDC}">{_cell}</td>'
                 f'</tr>'
                 f'{_bdrow}'
@@ -3986,6 +3893,8 @@ def build_email(snap, override_team=None):
             f'<th style="{TH_S}text-align:center;">W</th>'
             f'<th style="{TH_S}text-align:center;">ERA</th>'
             f'<th style="{TH_S}text-align:center;">WHIP</th>'
+            f'<th style="{TH_S}text-align:center;">Recent Form</th>'
+            f'<th style="{TH_S}text-align:center;" title="Which recent window (30/15/7-day) backed the Recent Form read">📅</th>'
             f'<th style="{TH_S}text-align:center;">Score</th>'
             f'</tr></thead><tbody>{rp_rows}</tbody></table>'
             f'</div>'
@@ -4052,7 +3961,7 @@ def build_email(snap, override_team=None):
             )
             rows += (
                 f'<tr style="background:{SURFACE};">'
-                f'<td colspan="9" style="padding:5px 10px;'
+                f'<td colspan="10" style="padding:5px 10px;'
                 f'border-top:1px solid {BORDER};border-bottom:1px solid {BORDER};">'
                 f'<span style="color:{ACCENT};font-size:11px;font-weight:700;'
                 f'text-transform:uppercase;letter-spacing:.5px;">{day_label}</span>'
@@ -4071,7 +3980,7 @@ def build_email(snap, override_team=None):
                 p15r = p15.get(_pname) or rec_p.get(_pname, {})
                 qsp = qs_probability(r)
                 qsp_color = GREEN if qsp and qsp >= 60 else (TEXT if qsp and qsp >= 40 else MUTED)
-                qsp_str = f'<span style="color:{qsp_color};font-weight:700;">{qsp}%</span>' if qsp else "—"
+                qsp_str = f'<span style="color:{qsp_color};font-weight:700;font-size:15px;">{qsp}%</span>' if qsp else "—"
 
                 # QS / 5K+ badges annotate the projected game line the reader sees, and
                 # fire unconditionally (not only on thin rotation days). QS = a projected
@@ -4121,7 +4030,7 @@ def build_email(snap, override_team=None):
                             + _winprob_context(_wd))
                 _cell, _bdrow = score_reveal(
                     r["_score"], _fasp_bd,
-                    _bd_uid("fasp", r.get("PlayerName", "")), 9)
+                    _bd_uid("fasp", r.get("PlayerName", "")), 10)
                 rows += (
                     f'<tr style="{bg}">'
                     f'<td style="{name_border}{_tds}font-weight:600;">{team_logo(r.get("Team"))}{r.get("PlayerName","")}{inj_tag(r)}{two_start_html}{pickup_badge}</td>'
@@ -4129,11 +4038,11 @@ def build_email(snap, override_team=None):
                     f'<td style="{_tdc}">{opp_logo(ha)}{ha}'
                     f'{"&nbsp;<span style=\"color:#888;font-size:11px\">(proj.)</span>" if r.get("PSP_Projected") else ""}'
                     f'{_opp_ops_sub(r)}</td>'
-                    f'<td style="{_tdc}">{qsp_str}{_qs_sub(r)}</td>'
-                    f'<td style="{_tdc}">{v(r.get("ERA"), 2)}</td>'
-                    + hot_cold_cell(r.get("ERA"), p15r.get("ERA"), lower_better=True, dec=2, no_data_title="No 15-day stats — player may not have pitched recently", td_style=_tdc) +
+                    f'<td style="{_tdc}">{qsp_str}</td>'
+                    f'<td style="{_tdc}">{v(r.get("ERA"), 2)}{_qs_sub(r)}</td>'
                     f'<td style="{_tdc}">{kpct_cell}{_whiff_sub(r)}</td>'
                     f'{_cats_cell(r, pit_pctile, _FA_SP_CATS, need_cats, swing=_wd, td_style=_tdc)}'
+                    + recent_form_cell(r, "pit", best_recent_p, td_style=_tdc) +
                     f'<td style="{_tdc}">{_cell}</td>'
                     f'</tr>'
                     f'{_bdrow}'
@@ -4147,9 +4056,10 @@ def build_email(snap, override_team=None):
             f'<th style="{_th}text-align:center;">Matchup</th>'
             f'<th style="{_th}text-align:center;">QS%</th>'
             f'<th style="{_th}text-align:center;">ERA</th>'
-            f'<th style="{_th}text-align:center;">L15 ERA</th>'
             f'<th style="{_th}text-align:center;">K%</th>'
             f'<th style="{_th}text-align:center;">Cats</th>'
+            f'<th style="{_th}text-align:center;">Recent Form</th>'
+            f'<th style="{_th}text-align:center;" title="Which recent window (30/15/7-day) backed the Recent Form read">📅</th>'
             f'<th style="{_th}text-align:center;">Score</th>'
             f'</tr></thead><tbody>{rows}</tbody></table>'
             f'</div>'
@@ -4171,16 +4081,11 @@ def build_email(snap, override_team=None):
             ds   = int(r.get("Dataset", 0) or 0)
             ds_label = {30: "30d", 15: "15d", 7: "7d"}.get(ds, "")
             no_espn = _n(r.get("ESPN_GP")) <= 0
-            ds_badge = (
-                f'<span style="color:{MUTED};font-size:9px;font-weight:600;'
-                f'background:rgba(100,116,139,0.12);border:1px solid rgba(100,116,139,0.25);'
-                f'border-radius:3px;padding:1px 4px;margin-left:5px;vertical-align:middle;">'
-                f'{ds_label}</span>'
-            ) if ds_label and no_espn else ""
+            ds_badge = _window_badge(ds_label) if ds_label and no_espn else ""
             _wd_rp = pickup_win_delta(r, winprob_ctx, winprob_rf, today_str, week_end_str, ptype="rp", weeks_played=winprob_weeks)
             _cell, _bdrow = score_reveal(
                 r["_rp_score"], _pitcher_score_breakdown(r, best_recent_p) + _winprob_context(_wd_rp),
-                _bd_uid("farp", r.get("PlayerName", "")), 9)
+                _bd_uid("farp", r.get("PlayerName", "")), 11)
             return (
                 f'<tr style="{bg}">'
                 f'<td style="{TD_S}font-weight:600;">{team_logo(r.get("Team"))}{r.get("PlayerName","")}{inj_tag(r)}{ds_badge}{pitcher_regression_badge(r)}</td>'
@@ -4191,6 +4096,7 @@ def build_email(snap, override_team=None):
                 f'<td style="{TDC}">{f"{era:.2f}" if era > 0 else "—"}</td>'
                 f'<td style="{TDC}">{f"{whip:.2f}" if whip > 0 else "—"}</td>'
                 f'{_cats_cell(r, rp_pctile, _FA_RP_CATS, need_cats, swing=_wd_rp)}'
+                + recent_form_cell(r, "pit", best_recent_p) +
                 f'<td style="{TDC}">{_cell}</td>'
                 f'</tr>'
                 f'{_bdrow}'
@@ -4207,6 +4113,8 @@ def build_email(snap, override_team=None):
             f'<th style="{TH_S}text-align:center;">ERA</th>'
             f'<th style="{TH_S}text-align:center;">WHIP</th>'
             f'<th style="{TH_S}text-align:center;">Cats</th>'
+            f'<th style="{TH_S}text-align:center;">Recent Form</th>'
+            f'<th style="{TH_S}text-align:center;" title="Which recent window (30/15/7-day) backed the Recent Form read">📅</th>'
             f'<th style="{TH_S}text-align:center;">Score</th>'
             f'</tr></thead><tbody>{"".join(_fa_rp_row(r,i) for i,r in enumerate(fa_rp))}</tbody></table>'
             f'</div>'
@@ -4280,7 +4188,7 @@ def build_email(snap, override_team=None):
                 )
                 rows += (
                     f'<tr style="background:{SURFACE};">'
-                    f'<td colspan="11" style="padding:5px 10px;'
+                    f'<td colspan="12" style="padding:5px 10px;'
                     f'border-top:1px solid {BORDER};border-bottom:1px solid {BORDER};">'
                     f'<span style="color:{ACCENT};font-size:11px;font-weight:700;'
                     f'text-transform:uppercase;letter-spacing:.5px;">{pos}</span>'
@@ -4291,11 +4199,10 @@ def build_email(snap, override_team=None):
                 )
             bg = f"background:{SURFACE2};" if row_idx % 2 else ""
             row_idx += 1
-            rh = rec_h.get(r.get("PlayerName", ""), {})
             _wd_hit = pickup_win_delta(r, winprob_ctx, winprob_rf, today_str, week_end_str, ptype="hit", weeks_played=winprob_weeks)
             _cell, _bdrow = score_reveal(
                 r["_score"], _hitter_score_breakdown(r, best_recent_h, hit_pctile) + _winprob_context(_wd_hit),
-                _bd_uid("fahit", r.get("PlayerName", "")), 11)
+                _bd_uid("fahit", r.get("PlayerName", "")), 12)
             rows += (
                 f'<tr style="{bg}">'
                 f'<td style="{TD_S}font-weight:600;">{team_logo(r.get("Team"))}{r.get("PlayerName","")}{inj_tag(r)}{hitter_badges(r, hit_pctile)}</td>'
@@ -4305,9 +4212,9 @@ def build_email(snap, override_team=None):
                 f'<td style="{TDC}">{v(r.get("RBI"), 0)}</td>'
                 f'<td style="{TDC}">{v(r.get("SB"), 0)}</td>'
                 f'<td style="{TDC}">{v(r.get("OPS"), 3)}</td>'
-                + hot_cold_cell(r.get("OPS"), rh.get("OPS"), dec=3, no_data_title="No 7-day stats — player may not have played recently") +
                 f'<td style="{TDC}">{_hrp_cell(r)}</td>'
                 f'{_cats_cell(r, hit_pctile, _FA_HIT_CATS, need_cats, swing=_wd_hit)}'
+                + recent_form_cell(r, "hit", best_recent_h) +
                 f'<td style="{TDC}">{_cell}</td>'
                 f'</tr>'
                 f'{_bdrow}'
@@ -4322,9 +4229,10 @@ def build_email(snap, override_team=None):
             f'<th style="{TH_S}text-align:center;">RBI</th>'
             f'<th style="{TH_S}text-align:center;">SB</th>'
             f'<th style="{TH_S}text-align:center;">OPS</th>'
-            f'<th style="{TH_S}text-align:center;">L7 OPS</th>'
             f'<th style="{TH_S}text-align:center;">HR%</th>'
             f'<th style="{TH_S}text-align:center;">Cats</th>'
+            f'<th style="{TH_S}text-align:center;">Recent Form</th>'
+            f'<th style="{TH_S}text-align:center;" title="Which recent window (30/15/7-day) backed the Recent Form read">📅</th>'
             f'<th style="{TH_S}text-align:center;">Score</th>'
             f'</tr></thead><tbody>{rows}</tbody></table>'
         )
@@ -4818,8 +4726,8 @@ def build_email(snap, override_team=None):
         pos_section,                                                                      # 10 Positional Breakdown (moved to top of My Roster)
         starts_section,                                                                   # 6
         my_rp_section,                                                                    # 7
-        build_pitcher_hot_cold_section(pitchers, my_team, rec_p, best_recent_p),         # 8
-        build_hot_cold_section(hitters, recent_hitting, my_team, best_recent_h, hit_pctile),  # 9
+        build_pitcher_hot_cold_section(pitchers, my_team, best_recent_p),         # 8
+        build_hot_cold_section(hitters, my_team, best_recent_h, hit_pctile),  # 9
     ] if p)
     transactions_band = "\n".join(p for p in [
         _matchup_closing_note(today_str == week_end_str),                                 # end-of-matchup: pickups can't swing today's closing matchup

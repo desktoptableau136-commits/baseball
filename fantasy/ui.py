@@ -430,43 +430,68 @@ def nav_bar():
     )
 
 
-def hot_cold_cell(season_val, recent_val, lower_better=False, dec=2, hot_thresh=None, warm_thresh=None, no_data_title=None, td_style=None):
-    """Table cell showing recent stat + hot/cold icon vs season baseline.
+def _window_badge(label):
+    """Small muted pill naming a data-window fallback (e.g. '15d'/'30d'), inline next
+    to whatever it follows. Used by the RP tables' season-data-source fallback badge
+    (which window backs the season row itself, next to the player name)."""
+    if not label:
+        return ""
+    return (
+        f'<span style="color:{MUTED};font-size:9px;font-weight:600;'
+        f'background:rgba(100,116,139,0.12);border:1px solid rgba(100,116,139,0.25);'
+        f'border-radius:3px;padding:1px 4px;margin-left:5px;vertical-align:middle;">'
+        f'{label}</span>'
+    )
+
+
+def _window_cell(label, td_style=None):
+    """Own `<td>` for the Recent Form window tag ('15d'/'30d'/'7d') -- a dedicated
+    column (not inline in the value cell) naming which window backed that row's
+    comparison, since the cascade picks a different window per player. Blank/dash
+    when no window applies (matches the value cell's own no-data dash)."""
+    tdc = td_style or TDC
+    if not label:
+        return f'<td style="{tdc}color:{MUTED};">—</td>'
+    return (
+        f'<td style="{tdc}">'
+        f'<span style="color:{MUTED};font-size:7px;font-weight:600;'
+        f'background:rgba(100,116,139,0.12);border:1px solid rgba(100,116,139,0.25);'
+        f'border-radius:3px;padding:1px 4px;vertical-align:middle;">'
+        f'{label}</span></td>'
+    )
+
+
+def hot_cold_cell(display_str, delta,
+                   hot_thresh=0.75, warm_thresh=0.25, no_data_title=None, td_style=None):
+    """Table cell rendering a precomputed recent-vs-season delta as a colored value +
+    hot/cold icon. The delta and the already-formatted display string are computed
+    upstream (recent_form_cell in analytics.py, the composite-Score comparison) --
+    this stays a pure rendering primitive with no scoring knowledge, so it never
+    imports the score functions themselves and never formats a number itself. The
+    window tag is a SEPARATE cell (`_window_cell`), not part of this one.
     td_style overrides the cell style (defaults to TDC) so a caller can render a
     tighter cell that matches a compacted table."""
     tdc = td_style or TDC
-    _dash_cell = (
-        f'<td style="{tdc}"><span style="color:{MUTED};cursor:help;border-bottom:1px dotted {MUTED};" title="{no_data_title}">—</span></td>'
-        if no_data_title else f'<td style="{tdc}color:{MUTED};">—</td>'
-    )
-    try:
-        sv = float(season_val or 0)
-        rv = float(recent_val or 0)
-        if sv <= 0 or rv <= 0:
-            return _dash_cell
-    except (TypeError, ValueError):
-        return _dash_cell
+    if display_str is None or delta is None:
+        return (
+            f'<td style="{tdc}"><span style="color:{MUTED};cursor:help;border-bottom:1px dotted {MUTED};" title="{no_data_title}">—</span></td>'
+            if no_data_title else f'<td style="{tdc}color:{MUTED};">—</td>'
+        )
 
-    ht = hot_thresh  if hot_thresh  is not None else (0.75 if lower_better else 0.050)
-    wt = warm_thresh if warm_thresh is not None else (0.25 if lower_better else 0.020)
-
-    delta = (sv - rv) if lower_better else (rv - sv)   # positive = improvement
-
-    if delta >= ht:
+    if delta >= hot_thresh:
         icon, color = "🔥", GREEN
-    elif delta >= wt:
+    elif delta >= warm_thresh:
         icon, color = "↑", GREEN
-    elif delta <= -ht:
+    elif delta <= -hot_thresh:
         icon, color = "❄", RED
-    elif delta <= -wt:
+    elif delta <= -warm_thresh:
         icon, color = "↓", RED
     else:
         icon, color = "", MUTED
 
-    val_str = f"{rv:.{dec}f}"
     return (
         f'<td style="{tdc}">'
-        f'<span style="color:{color};">{val_str}</span>'
+        f'<span style="color:{color};">{display_str}</span>'
         f'{"&nbsp;" + icon if icon else ""}'
         f'</td>'
     )
