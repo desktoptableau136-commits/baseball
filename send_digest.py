@@ -2166,13 +2166,16 @@ def build_glossary_section():
                "the live data each run, so “full-time” scales as the season grows."),
         _entry("Starting-pitcher score",
                "K% (blended with Baseball Savant whiff percentile) + run prevention (ERA blended with "
-               "Savant xERA) + WHIP + contact-quality allowed (barrel%/xwOBA-against) + a start-volume "
-               "role bonus. Small samples are damped toward the mean. Blended 65% season / 35% recent form."),
+               "Savant xERA) + WHIP + contact-quality allowed (barrel%/xwOBA-against) + <b>modeled "
+               "quality-start probability</b> + <b>wins</b> — real credit for two scored roto categories a "
+               "flat durability bonus used to miss. Small samples are damped toward the mean. Blended 65% "
+               "season / 35% recent form."),
         _entry("Relief-pitcher score",
                "Skill-weighted, punt-saves build: K, ERA (blended with xERA) and WHIP carry most of the "
                "weight; <b>SVHD (saves+holds) is deliberately de-emphasized (~15%)</b> since it's the most "
                "volatile category and one we're willing to sacrifice. A dominant setup man can outrank a "
-               "mediocre closer. Counting stats prefer ESPN season totals."),
+               "mediocre closer. Counting stats prefer ESPN season totals. Small samples are damped toward "
+               "the mean, same as the starting-pitcher score."),
         _entry("Hitter score",
                "Prefers wRC+ over OPS, plus xwOBA, sprint speed, Barrel%, ISO and modeled HR probability. "
                "Scaled by an <b>opportunity multiplier</b> (at-bats vs a full-time benchmark) so a part-time "
@@ -3106,7 +3109,7 @@ def prepare_scoring(pitchers, hitters):
     them. Returns (hit_pctile, pit_pctile)."""
     compute_ab_benchmarks(hitters)
     compute_pitcher_benchmarks(pitchers)
-    compute_score_calibration(pitchers)          # re-anchor SP/RP score scale (after benchmarks)
+    compute_score_calibration(pitchers, hitters)  # re-anchor SP/RP/hitter score scale (after benchmarks)
     compute_league_averages(hitters, pitchers)   # league-avg reference points → _LG
     compute_xera_offset(pitchers)                # de-bias the pitcher buy/sell (ERA vs xERA) flag
     # League percentile pools (qualified YEAR pools per type). The pitcher pool spans
@@ -3116,7 +3119,7 @@ def prepare_scoring(pitchers, hitters):
     hit_pool = [r for r in hitters  if int(_n(r.get("Dataset")) or 0) == YEAR and _n(r.get("AB")) >= ab_pool_floor]
     pit_pool = [r for r in pitchers if int(_n(r.get("Dataset")) or 0) == YEAR]
     hit_pctile = build_cat_percentiles(hit_pool, _FA_HIT_CATS)
-    pit_pctile = build_cat_percentiles(pit_pool, _FA_RP_CATS)
+    pit_pctile = build_cat_percentiles(pit_pool, _TRADE_PIT_CATS)
     compute_position_scarcity(hitters, hit_pctile)   # positional-scarcity scale → _POS_SCARCITY (hitter _tval)
     return hit_pctile, pit_pctile
 
