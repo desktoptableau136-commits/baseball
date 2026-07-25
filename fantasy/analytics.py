@@ -587,16 +587,13 @@ def _archetype_line(desc):
             if desc else "")
 
 
-def _recent_form_line(rec, role, win):
-    """One compact muted line naming the recent-window rates behind the `30-day` score, so
-    the season|recent header delta is legible. role: 'SP'|'RP'|'hit'. Renders only when a
-    recent row + window label exist (i.e. exactly when the dual-score header shows)."""
-    if not rec or not win:
-        return ""
+def _fmt_stat_parts(row, role):
+    """Shared up-to-3 formatted stat strings for a row/role, used by both the season and
+    recent-window lines so the two are directly comparable (same stats, same formatting)."""
     parts = []
     if role in ("SP", "RP"):
-        era, whip = _n(rec.get("ERA")), _n(rec.get("WHIP"))
-        kpct, kip = _n(rec.get("Kpct_P")), _n(rec.get("K/IP"))
+        era, whip = _n(row.get("ERA")), _n(row.get("WHIP"))
+        kpct, kip = _n(row.get("Kpct_P")), _n(row.get("K/IP"))
         if era >= 0:
             parts.append(f"{era:.2f} ERA")
         if kpct > 0:
@@ -606,23 +603,41 @@ def _recent_form_line(rec, role, win):
         if whip > 0:
             parts.append(f"{whip:.2f} WHIP")
         if role == "RP":
-            svhd = _n(rec.get("SVHD"))
+            svhd = _n(row.get("SVHD"))
             if svhd > 0:
                 parts.append(f"{int(svhd)} SV+H")
     else:  # hitter
-        ops, avg, hr = _n(rec.get("OPS")), _n(rec.get("AVG")), _n(rec.get("HR"))
+        ops, avg, hr = _n(row.get("OPS")), _n(row.get("AVG")), _n(row.get("HR"))
         if ops > 0:
             parts.append(f"{_st(ops)} OPS")
         if avg > 0:
             parts.append(f"{_st(avg)} AVG")
         if hr > 0:
             parts.append(f"{int(hr)} HR")
-    parts = parts[:3]
+    return parts[:3]
+
+
+def _recent_form_line(rec, role, win, season_row=None):
+    """Two compact muted lines naming the season and recent-window rates behind the
+    `season | 30-day` score header, so the delta is legible and the two are directly
+    comparable. role: 'SP'|'RP'|'hit'. The Season line renders whenever season_row has
+    the stats; the Last-N-days line renders only when a recent row + window label exist
+    (i.e. exactly when the dual-score header shows)."""
+    html = ""
+    if season_row is not None:
+        season_parts = _fmt_stat_parts(season_row, role)
+        if season_parts:
+            html += (f'<div style="margin-top:4px;color:{MUTED};font-size:12px;">'
+                      f'Season: {" &middot; ".join(season_parts)}</div>')
+    if not rec or not win:
+        return html
+    parts = _fmt_stat_parts(rec, role)
     if not parts:
-        return ""
+        return html
     label = win.replace("-day", " days")   # "30-day" -> "30 days"
-    return (f'<div style="margin-top:4px;color:{MUTED};font-size:12px;">'
-            f'Last {label}: {" &middot; ".join(parts)}</div>')
+    html += (f'<div style="margin-top:4px;color:{MUTED};font-size:12px;">'
+             f'Last {label}: {" &middot; ".join(parts)}</div>')
+    return html
 
 
 def _hitter_recent_form(r, idx_recent):
@@ -708,7 +723,7 @@ def _hitter_score_breakdown(r, idx_recent=None, hit_pctile=None):
     if mult < 0.995:
         narr += f' Trimmed to {round(mult * 100)}% for thin playing time (few at-bats vs a regular).'
     html = (f'<b style="color:{TEXT};">{head}</b>'
-            + _recent_form_line(rec, "hit", win)
+            + _recent_form_line(rec, "hit", win, season_row=r)
             + _archetype_line(_hitter_archetype(r, hit_pctile, season, tag))
             + f'<div style="margin-top:4px;">{narr}</div>')
     hrp = _n(r.get("HR_Probability"))
@@ -748,7 +763,7 @@ def _pitcher_score_breakdown(r, idx_recent=None):
     if mult < 0.995:
         narr += f' Trimmed to {round(mult * 100)}% for small innings sample.'
     html = (f'<b style="color:{TEXT};">{head}</b>'
-            + _recent_form_line(rec, role, win)
+            + _recent_form_line(rec, role, win, season_row=r)
             + _archetype_line(_pitcher_archetype(r, role, season, tag))
             + f'<div style="margin-top:4px;">{narr}</div>')
     html += _pitcher_badge_context(r)
