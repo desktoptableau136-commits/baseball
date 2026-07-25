@@ -222,6 +222,7 @@ def build_data(snap, my_team):
         "catLabels": CAT_LABELS,
         "lowerBetter": sorted(sd._LOWER_BETTER),
         "posStarters": {p: sd.POS_STARTERS.get(p, 1) for p in ("C","1B","2B","3B","SS","OF")},
+        "posScarcity": {p: round(sd._POS_SCARCITY.get(p, 1.0), 3) for p in ("C","1B","2B","3B","SS","OF")},
         "posSlack":  sd._POS_DEPTH_SLACK,   # redundancy guard: bench/flex bodies allowed beyond starters
         # Acceptance-model tuning baked from send_digest so the Lab JS can't drift from the digest:
         # graduated star reluctance + aggressive realistic band + demand-side need multiplier.
@@ -231,6 +232,9 @@ def build_data(snap, my_team):
             "needCat": sd._NEED_MULT_CAT, "needPos": sd._NEED_MULT_POS,
             "needSurplus": sd._NEED_MULT_SURPLUS, "needClamp": list(sd._NEED_MULT_CLAMP),
             "thinPosPenalty": sd._TRADE_THIN_POS_PENALTY,   # depth floor: read penalty per single-slot pos a team is left thin at
+            "megaScarceMult": sd._MEGA_SCARCE_MULT,   # blockbuster banner: scarcity mult that earns "league's thinnest position"
+            "megaStarScore": sd._MEGA_STAR_SCORE,     # blockbuster banner: _tscore floor for a piece to get NAMED
+            "megaStarCap": sd._MEGA_STAR_CAP,         # blockbuster banner: max named headliners
         },
         "refreshed": snap.get("refreshed_at", ""),
     }
@@ -444,23 +448,11 @@ def build_megadeal_board(pitchers, hitters, roto, team_keys, ranks, n,
         for d in deals:
             get = [{"name": p.get("PlayerName", ""), "tags": _fit_get_tags([p], my_needs)}
                    for p in d["ins"]]
-            # "Why it's a blockbuster" spark — names BOTH sides' prize: the slots/cats I upgrade
-            # (positions read as the headline; category needs are the fallback) AND the cats my depth
-            # pieces pay them in (send_cats = their weak spots), so the line explains why they'd bite
-            # instead of repeating a generic win-win tag.
-            n_out = len(d["outs"])
-            pos_up = d.get("get_pos", [])
-            # get_cats/send_cats are sorted most-needed-first; cap at 3 so the headline stays punchy.
-            cat_up = [CAT_LABELS.get(c, c) for c in d.get("get_cats", [])][:3]
-            send = [CAT_LABELS.get(c, c) for c in d.get("send_cats", [])][:3]
-            if pos_up:
-                prize = "a real upgrade at " + _and_join(pos_up)
-            elif cat_up:
-                prize = "a jolt of " + _and_join(cat_up)
-            else:
-                prize = "real difference-makers"
-            tail = f" — you pay them in {_and_join(send)}, right where they're thin." if send else "."
-            spark = f"Cash in {n_out} depth piece{'s' if n_out != 1 else ''} for {prize}{tail}"
+            # "Why it's a blockbuster" spark — a scouting-report read shared verbatim with the
+            # digest Trade Radar card (fantasy/trades._mega_insight_text, re-exported through sd)
+            # so the two surfaces can't drift in voice: names the headliner, a quality/scarcity
+            # read off his own score, and what the rival gets out of it too.
+            spark = sd._mega_insight_text(d)
             recs.append({
                 "team": d["team"], "tier": "MEGA",
                 "get": get, "give": [p.get("PlayerName", "") for p in d["outs"]],
@@ -530,7 +522,10 @@ def build_html(data):
         <span class="sidetag">MY TEAM</span>
         <select id="selL" class="teamsel"></select>
       </div>
-      <div class="roster" id="rosterL"></div>
+      <div class="sidebody">
+        <div class="dealpick" id="dealpickL" style="display:none;"></div>
+        <div class="roster" id="rosterL"></div>
+      </div>
     </div>
     <div id="mid">
       <div id="verdict"></div>
@@ -550,7 +545,10 @@ def build_html(data):
         <span class="sidetag">TRADE PARTNER</span>
         <select id="selR" class="teamsel"></select>
       </div>
-      <div class="roster" id="rosterR"></div>
+      <div class="sidebody">
+        <div class="dealpick" id="dealpickR" style="display:none;"></div>
+        <div class="roster" id="rosterR"></div>
+      </div>
     </div>
   </div>
   <div id="dealbar" onclick="jumpToDeal()">
@@ -582,9 +580,10 @@ body {{ margin:0; background:{BG}; color:{TEXT}; font-family:-apple-system,Segoe
 #cols {{ display:grid; grid-template-columns:3fr 4fr 3fr; gap:14px; align-items:start; }}
 .side {{ background:{SURFACE}; border:1px solid {BORDER}; border-radius:10px; overflow:hidden; }}
 .sidehead {{ display:flex; align-items:center; gap:8px; padding:10px 12px; border-bottom:1px solid {BORDER}; background:{SURFACE2}; }}
+.sidebody {{ max-height:74vh; overflow-y:auto; }}   /* one scroll region per side: "In this deal" + the roster below it */
 .sidetag {{ font-size:10px; font-weight:800; letter-spacing:.8px; color:{MUTED}; white-space:nowrap; }}
 .teamsel {{ flex:1; background:{BG}; color:{TEXT}; border:1px solid {BORDER}; border-radius:6px; padding:6px 8px; font-size:13px; font-weight:700; }}
-.roster {{ max-height:74vh; overflow-y:auto; padding:8px; }}
+.roster {{ padding:8px; }}
 .rolehdr {{ display:flex; align-items:center; gap:6px; font-size:10px; font-weight:800; letter-spacing:.8px; color:{MUTED}; text-transform:uppercase; margin:10px 4px 4px; border-bottom:1px solid {BORDER}; padding-bottom:3px; cursor:pointer; user-select:none; }}
 .rolehdr:hover {{ color:{TEXT}; }}
 .caret {{ font-size:9px; color:{MUTED}; width:10px; flex:0 0 auto; }}
@@ -620,7 +619,7 @@ body {{ margin:0; background:{BG}; color:{TEXT}; font-family:-apple-system,Segoe
 .pstat {{ color:{MUTED}; font-size:11px; margin-top:1px; }}
 .bd {{ display:none; margin-top:5px; padding:7px 8px; background:{SURFACE2}; border:1px solid {BORDER}; border-radius:6px; font-size:11.5px; line-height:1.5; color:{TEXT}; }}
 .bd.open {{ display:block; }}
-#mid {{ position:sticky; top:12px; min-width:0; background:{SURFACE}; border:1px solid {BORDER}; border-radius:10px; padding:14px; }}
+#mid {{ position:sticky; top:12px; min-width:0; max-height:74vh; overflow-y:auto; background:{SURFACE}; border:1px solid {BORDER}; border-radius:10px; padding:14px; }}
 #verdict {{ text-align:center; margin-bottom:10px; }}
 .vpill {{ display:inline-block; font-weight:800; font-size:14px; padding:4px 14px; border-radius:12px; color:#0b1220; }}
 .vwhy {{ color:{MUTED}; font-size:12px; margin-top:6px; }}
@@ -671,6 +670,14 @@ details#vdetail > summary:hover {{ color:{TEXT}; }}
 details#vdetail > summary::-webkit-details-marker {{ display:none; }}
 details#vdetail > summary::before {{ content:'\\25B6'; margin-right:6px; color:{ACCENT}; }}
 details#vdetail[open] > summary::before {{ content:'\\25BC'; }}
+/* "In this deal" recap — pinned above Hitters on its own side, outside the scrolling roster
+   so it stays visible no matter how far you've scrolled. Shows each picked player ONCE
+   (keyed by picked[side], not the position-grouped roster rows), even a multi-eligible one. */
+.dealpick {{ padding:8px 8px 4px; border-bottom:1px solid {BORDER}; background:rgba(59,130,246,.05); }}
+.dealpick .rolehdr {{ margin:0 0 4px; padding-bottom:3px; color:{ACCENT}; }}
+.dealpick .rolehdr:hover {{ color:{TEXT}; }}
+.dealpick .prow {{ cursor:default; }}
+.dealpick .prow:hover {{ background:transparent; }}
 .valgrid {{ display:grid; grid-template-columns:auto 1fr 1fr 1fr; gap:2px 10px; font-size:11px; margin-top:8px; padding-top:8px; border-top:1px solid {BORDER}; align-items:center; }}
 .valgrid .vgh {{ color:{MUTED}; font-weight:700; text-align:right; font-size:10px; text-transform:uppercase; letter-spacing:.03em; }}
 .valgrid .vgh:first-child {{ text-align:left; }}
@@ -747,8 +754,8 @@ details#vdetail[open] > summary::before {{ content:'\\25BC'; }}
 .fbwhy .wl {{ color:{MUTED}; font-weight:700; }}
 @media (max-width:1000px) {{
   #cols {{ grid-template-columns:1fr; }}
-  #mid {{ position:static; order:-1; }}
-  .roster {{ max-height:none; }}
+  #mid {{ position:static; order:-1; max-height:none; overflow-y:visible; }}
+  .sidebody {{ max-height:none; overflow-y:visible; }}
   .fblist {{ grid-template-columns:1fr; }}
 }}
 /* Pocket (phone) layout — additive; desktop above is untouched. Bigger tap targets,
@@ -785,6 +792,7 @@ var picked = {{ L:{{}}, R:{{}} }};   // id -> player, per side
 var strategy = 'favor';              // fair | favor | fleece — how hard the coach tilts value to me
 var collapsed = {{ L:{{}}, R:{{}} }};  // side -> role -> bool; persists per-role section fold state across re-renders
 var collapsedPos = {{ L:{{}}, R:{{}} }};  // side -> position -> bool; per-hitter-position fold state
+var dealPickFold = {{ L:false, R:false }};  // side -> bool; "In this deal" box fold state, independent per side
 var coachFold = false;               // Deal Coach collapsed? persists across re-renders
 var TARGET_NET = {{ fair:0.0, favor:0.30, fleece:0.70 }};   // value edge the coach steers toward
 var STUD_CEIL  = {{ fair:99, favor:1.6, fleece:1.2 }};      // don't suggest offering my pieces above this value
@@ -1353,9 +1361,52 @@ function needMult(p, meta) {{
 }}
 function sumEff(arr, meta) {{ var s = 0; arr.forEach(function(p) {{ s += (p.tval || 0) * needMult(p, meta); }}); return s; }}
 
+// One row in the "In this deal" recap — same look as a roster prow, but read-only (no
+// toggle/target/arb markers) and with the score-pill breakdown ALWAYS unfolded, since the
+// whole point is showing everything about a picked player without a second click.
+function dealPlayerRow(p) {{
+  var pos = (p.posTokens || []).map(function(t) {{ return '<span class="poschip">' + t + '</span>'; }}).join(' ');
+  if (pos) pos = ' ' + pos;
+  return '<div class="prow sel">'
+    + '<div class="prow-top">' + p.logo + '<span class="pname">' + p.name + '</span>' + pos + p.badges
+    + '<span class="pill" style="background:' + pillColor(p.score) + '">' + p.score + '</span>'
+    + '</div>'
+    + '<div class="pstat">' + p.stat + '</div>'
+    + '<div class="bd open">' + (p.breakdown || 'No breakdown.') + '</div>'
+    + '</div>';
+}}
+
+// Renders the pinned "In this deal" box above THIS side's Hitters — every player picked on
+// this side, name/badges/score pill/breakdown, shown exactly ONCE regardless of how many
+// position sub-groups he's duplicated across in the roster below (keyed off picked[side],
+// not the position-grouped render). Sits outside the scrolling .roster div so it's always
+// visible; hides itself entirely when nothing's picked on this side. Independently
+// collapsible per side via dealPickFold, same fold pattern as a role/position header.
+function renderDealPick(side) {{
+  var box = document.getElementById(side === 'L' ? 'dealpickL' : 'dealpickR');
+  if (!box) return;
+  var keys = Object.keys(picked[side]);
+  if (!keys.length) {{ box.innerHTML = ''; box.style.display = 'none'; return; }}
+  box.style.display = '';
+  var fold = !!dealPickFold[side];
+  var hdr = '<div class="rolehdr" onclick="toggleDealPick(\'' + side + '\')">'
+    + '<span class="caret">' + (fold ? '&#9654;' : '&#9660;') + '</span>'
+    + '<span class="rolelbl">In this deal</span>'
+    + '<span class="rolecount">' + keys.length + '</span>'
+    + '</div>';
+  var body = fold ? '' : keys.map(function(k) {{ return dealPlayerRow(picked[side][k]); }}).join('');
+  box.innerHTML = hdr + body;
+}}
+
+function toggleDealPick(side) {{
+  dealPickFold[side] = !dealPickFold[side];
+  renderDealPick(side);
+}}
+
 function recompute() {{
   var L = picked.L, R = picked.R;                       // L = give, R = get
   var lKeys = Object.keys(L), rKeys = Object.keys(R);
+  renderDealPick('L'); renderDealPick('R');
   var giveBox = document.getElementById('giveList');
   var getBox  = document.getElementById('getList');
   giveBox.innerHTML = lKeys.length ? lKeys.map(function(k){{return ledgerItem('L',L[k]);}}).join('')
@@ -1509,20 +1560,72 @@ function recompute() {{
   // the whole builder panel, so building a blockbuster feels like the headline it is.
   var isMega = lKeys.length >= 3 && lKeys.length >= rKeys.length
                && label === 'ACCEPT' && pfTier === 'yes';
+  var MEGA_COUNT_WORD = {{2:'two', 3:'three', 4:'four'}};
   var megaBanner = '';
   if (isMega) {{
-    // Mirror the strip spark: name my prize (positions headline, cats fallback) AND the cats my
-    // depth pieces pay them in (partnerGets = their weak spots), so it explains why they'd bite.
-    var mPrize = posList.length
-               ? 'a real upgrade at ' + andJoin(posList)
-               : (needFilled.length
-                  ? 'a jolt of ' + andJoin(needFilled.slice(0,3).map(function(c){{ return DATA.catLabels[c]||c; }}))
-                  : 'real difference-makers');
-    var mSend = andJoin(partnerGets.slice(0,3).map(function(c){{ return DATA.catLabels[c]||c; }}));
-    var mTail = mSend ? ' &mdash; you pay them in ' + mSend + ', right where they\'re thin.' : '.';
-    megaBanner = '<div class="megaline">&#128171; <b>Blockbuster!</b> Cash in '
-               + lKeys.length + ' depth piece' + (lKeys.length !== 1 ? 's' : '') + ' for '
-               + mPrize + mTail + '</div>';
+    // Mirrors the server's _mega_insight_text (fantasy/trades.py) so the hand-built banner
+    // reads in the same scouting-report voice as the strip spark / digest card: name EVERY
+    // incoming piece that clears the star bar (a consolidation often lands 2-3 real
+    // difference-makers, not just one), a quality/scarcity read off their scores, and what
+    // the rival gets out of it.
+    var mRanked = getArr.slice().sort(function(a,b){{ return b.tval - a.tval; }});
+    var mHeadliners = mRanked.filter(function(p){{ return p.score >= DATA.tune.megaStarScore; }})
+                              .slice(0, DATA.tune.megaStarCap);
+    if (!mHeadliners.length && mRanked.length) mHeadliners = mRanked.slice(0, 1);
+    var mWho = mHeadliners.length ? andJoin(mHeadliners.map(function(p){{ return p.name; }})) : 'a difference-maker';
+    var mQuality = 'a real difference-maker';
+    if (mHeadliners.length === 1) {{
+      var mh = mHeadliners[0], mNoun = mh.role !== 'hit' ? 'arm' : 'bat';
+      mQuality = mh.score >= 80 ? 'an elite ' + mNoun
+               : mh.score >= DATA.tune.megaStarScore ? 'a clear plus ' + mNoun : 'a steady ' + mNoun;
+    }} else if (mHeadliners.length > 1) {{
+      var mNouns = {{}}; mHeadliners.forEach(function(p){{ mNouns[p.role !== 'hit' ? 'arm' : 'bat'] = 1; }});
+      var mNounKeys = Object.keys(mNouns);
+      var mGroupNoun = mNounKeys.length === 1 ? mNounKeys[0] + 's' : 'difference-makers';
+      var mMinScore = Math.min.apply(null, mHeadliners.map(function(p){{ return p.score; }}));
+      var mTier = mMinScore >= 80 ? 'elite' : mMinScore >= DATA.tune.megaStarScore ? 'clear plus' : 'genuine';
+      mQuality = (MEGA_COUNT_WORD[mHeadliners.length] || String(mHeadliners.length)) + ' ' + mTier + ' ' + mGroupNoun;
+    }}
+    // Attribute the position/cat claim to what the NAMED headliners actually cover, not the
+    // package's aggregate posList/needFilled — a deal can credit a position/cat that a
+    // DIFFERENT, unnamed incoming piece fills (e.g. every headliner is a hitter, a throw-in
+    // arm fills K).
+    var mLead;
+    var mHeadlinerPos = [], mHeadlinerCats = [];
+    mHeadliners.forEach(function(p) {{
+      (p.tgroups || []).forEach(function(g) {{
+        if (posList.indexOf(g) >= 0 && mHeadlinerPos.indexOf(g) < 0) mHeadlinerPos.push(g);
+      }});
+      (p.tcats || []).forEach(function(c) {{
+        if (needFilled.indexOf(c) >= 0 && mHeadlinerCats.indexOf(c) < 0) mHeadlinerCats.push(c);
+      }});
+    }});
+    var mPlural = mHeadliners.length !== 1;
+    if (mHeadlinerPos.length) {{
+      var mScarce = mHeadlinerPos.some(function(p){{ return (DATA.posScarcity[p]||1.0) >= DATA.tune.megaScarceMult; }});
+      mLead = mWho + ' &mdash; ' + mQuality + (mScarce ? " at the league's thinnest position" : '')
+            + ' &mdash; finally end' + (mPlural ? '' : 's') + ' your carousel at ' + mHeadlinerPos.join(', ') + '.';
+    }} else if (mHeadlinerCats.length) {{
+      var mWhere = andJoin(mHeadlinerCats.slice(0,2).map(function(c){{ return DATA.catLabels[c]||c; }}));
+      mLead = mWho + ' &mdash; ' + mQuality + ' &mdash; bring' + (mPlural ? '' : 's') + ' the ' + mWhere + " boost your roster's been missing.";
+    }} else {{
+      // No named headliner personally owns a credited position or category (some other,
+      // unnamed piece in the package does) — never claim a stat they don't carry.
+      mLead = mWho + ' &mdash; ' + mQuality + ' &mdash; ' + (mPlural ? 'are' : 'is') + " simply better than what you're giving up.";
+    }}
+    var mCount = lKeys.length + ' spare part' + (lKeys.length !== 1 ? 's' : '') + ' out, '
+               + rKeys.length + ' real building block' + (rKeys.length !== 1 ? 's' : '') + ' in';
+    var mRival;
+    if (partnerGets.length) {{
+      var mRivalCats = andJoin(partnerGets.slice(0,3).map(function(c){{ return DATA.catLabels[c]||c; }}));
+      var mIsPitch = partnerGets.some(function(c){{ return ['ERA','WHIP','K','W','QS','SVHD','SV'].indexOf(c) >= 0; }});
+      mRival = partnerMeta.name + ' still leaves with the ' + mRivalCats + ' their '
+             + (mIsPitch ? 'staff' : 'lineup') + ' is bleeding';
+    }} else {{
+      mRival = partnerMeta.name + ' still walks away better off';
+    }}
+    megaBanner = '<div class="megaline">&#128171; <b>Blockbuster!</b> ' + mLead + ' '
+               + mCount + ', and ' + mRival + '.</div>';
   }}
   document.getElementById('mid').classList.toggle('midmega', isMega);
   vBox.innerHTML = '<span class="vpill" style="background:'+color+'">'+label+'</span>'
@@ -1715,22 +1818,29 @@ function loadDeal(el) {{
   var selR = document.getElementById('selR');
   if (partnerTk && DATA.teamKeys.indexOf(partnerTk) >= 0) selR.value = partnerTk;
   renderRoster('L'); renderRoster('R');
-  function pickByName(side, names) {{
-    if (!names) return;
-    var tk = document.getElementById(side === 'L' ? 'selL' : 'selR').value;
-    var pool = flatPool(tk);
-    names.split(',').forEach(function(nm) {{
-      nm = nm.trim().toLowerCase(); if (!nm) return;
-      for (var i=0;i<pool.length;i++)
-        if ((pool[i].name || '').toLowerCase() === nm) {{ toggle(side, pool[i].id); break; }}
-    }});
-  }}
   pickByName('L', giveNames);
   pickByName('R', getNames);
   var fb = document.getElementById('fitboard');
   if (fb) fb.open = false;   // fold the "who to trade with" board once a deal is loaded
   var cols = document.getElementById('cols');
   if (cols && cols.scrollIntoView) cols.scrollIntoView({{ behavior:'smooth', block:'start' }});
+}}
+
+// Resolves comma-separated player NAMES to picks on a side (used by loadDeal's "Build this"
+// AND preloadFromHash's deep link). Selection only — roster-column fold state (role sections,
+// hitter position sub-groups) is left exactly as the user has it; what the deal actually
+// contains is shown instead in each side's pinned "In this deal" box (renderDealPick, fired
+// automatically via toggle() -> recompute()), so there's nothing left to un-collapse here.
+function pickByName(side, names) {{
+  if (!names) return;
+  var tk = document.getElementById(side === 'L' ? 'selL' : 'selR').value;
+  var pool = flatPool(tk);
+  names.split(',').forEach(function(nm) {{
+    nm = nm.trim().toLowerCase(); if (!nm) return;
+    for (var i = 0; i < pool.length; i++) {{
+      if ((pool[i].name || '').toLowerCase() === nm) {{ toggle(side, pool[i].id); break; }}
+    }}
+  }});
 }}
 
 function initSide(side) {{
@@ -1759,28 +1869,18 @@ function preloadFromHash() {{
   if (params.partner && DATA.teamKeys.indexOf(params.partner) >= 0)
     document.getElementById('selR').value = params.partner;
   renderRoster('L'); renderRoster('R');
-  function pickByName(side, names) {{
-    if (!names) return;
-    var tk = document.getElementById(side === 'L' ? 'selL' : 'selR').value;
-    var pool = flatPool(tk);
-    names.split(',').forEach(function(nm){{
-      nm = nm.trim().toLowerCase(); if (!nm) return;
-      for (var i=0;i<pool.length;i++)
-        if ((pool[i].name||'').toLowerCase() === nm) {{ toggle(side, pool[i].id); break; }}
-    }});
-  }}
   pickByName('L', params.give);
   pickByName('R', params.get);
   return true;
 }}
 
-// The HOSTED build (GitHub Pages / pocket) opens fully folded — every roster role
-// section AND hitter position sub-group starts collapsed so the page is a short list
-// of headers you expand as you want, on ANY device. Keyed off DATA.refreshUrl (baked
-// only into the --refresh-url pocket build), so local desktop dev runs stay expanded.
-// Seeded BEFORE the first render; taps still toggle live.
-function pocketCollapseDefaults() {{
-  if (!DATA.refreshUrl) return;
+// Every build opens fully folded — every roster role section AND hitter position sub-group
+// starts collapsed so the page is a short list of headers you expand as you want. Local dev
+// runs used to stay expanded by default (keyed off DATA.refreshUrl, only baked into the
+// --refresh-url pocket build) but that made local previews look/behave differently from the
+// hosted page you actually use day-to-day, which was more confusing than useful — now both
+// match. Seeded BEFORE the first render; taps still toggle live.
+function collapseDefaults() {{
   ['L','R'].forEach(function(side) {{
     var cs = collapsed[side] || (collapsed[side] = {{}});
     ['hit','sp','rp'].forEach(function(role) {{ cs[role] = true; }});
@@ -1797,7 +1897,7 @@ function pocketCollapseDefaults() {{
   var rDefault = keys.find(function(k){{ return k !== DATA.myTeam; }}) || keys[0];
   teamOptions(document.getElementById('selL'), DATA.myTeam);
   teamOptions(document.getElementById('selR'), rDefault);
-  pocketCollapseDefaults();
+  collapseDefaults();
   initSide('L'); initSide('R');
   if (!preloadFromHash()) {{ renderRoster('L'); renderRoster('R'); recompute(); }}
   renderFitBoard();
