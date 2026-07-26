@@ -1611,7 +1611,7 @@ def get_matchup_dates(league) -> dict:
                     if not tid:
                         continue
                     team_win_games[tid] = team_win_games.get(tid, 0) + 1
-                    if gd > today_str:
+                    if gd >= today_str:
                         team_rem_games[tid] = team_rem_games.get(tid, 0) + 1
     except Exception:
         matchup_game_days    = period_days
