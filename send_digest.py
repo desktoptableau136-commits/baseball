@@ -2408,8 +2408,14 @@ def build_glossary_section():
                "<b>Hitters only</b> — a small diagonal arrow means the buy-low/sell-high call isn't just a season-level "
                "prediction, it's already showing up in his <i>recent</i> games (his recent AVG/SLG, weighted for small-"
                "sample size, still diverges from his season expected stats in the same direction). No arrow doesn't "
-               "mean the call is wrong — most of the time there's just no recent confirmation yet either way. Rare by "
-               "design; treat it as a stronger version of the same $/▼ signal, not a separate one."),
+               "mean the call is wrong — most of the time there's just no recent confirmation yet either way. When his "
+               "recent games are trending the <i>opposite</i> way instead, the badge stays plain but the hover text "
+               "says so — worth a second look before acting on the $/▼ call."),
+        _entry(f'&#8599; / &#8600;{_hit_badge("&#8599;", GREEN)}{_hit_badge("&#8600;", RED)}',
+               "<b>Hitters only</b> — a bare diagonal arrow with <i>no</i> $/▼ means his season aggregate hasn't moved "
+               "enough yet to trip the season-level buy-low/sell-high badge, but his recent games are <i>already</i> "
+               "trending that direction against his own expected stats. An early read — it can graduate to a full "
+               "$/▼ later once the season numbers catch up, or fade back to nothing if it was a short blip."),
         _entry(f'Injury (trade cards){_il_badge({"ESPN_Status": "TEN_DAY_DL"})}{_il_badge({"ESPN_Status": "SIXTY_DAY_DL"})}{_il_badge({"ESPN_Status": "DAY_TO_DAY"})}',
                "On a <b>Trade Radar</b>, <b>Pending Trades</b>, or <b>Trade Lab</b> player line, a red "
                "<b>IL-10 / IL-15 / IL-60 / OUT</b> (or orange <b>DTD</b>) chip flags an injured player. His "
