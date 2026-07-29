@@ -243,7 +243,7 @@ def build_data(snap, my_team):
 def _serialize(r, role, best_recent_h, best_recent_p, hit_pctile):
     """One JSON-safe player record. Badges + breakdown are pre-rendered HTML strings."""
     if role == "hit":
-        badges    = sd.hitter_badges(r, hit_pctile)
+        badges    = sd.hitter_badges(r, hit_pctile, idx_recent=best_recent_h)
         breakdown = sd._hitter_score_breakdown(r, best_recent_h, hit_pctile)
     elif role == "sp":
         # Season skill (QS / K+) first, then the risk flags (blowup ⚠ / regression $ ▼).

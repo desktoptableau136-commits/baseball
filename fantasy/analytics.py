@@ -364,7 +364,16 @@ def _badge_ctx_wrap(lines):
     return f'<div style="margin-top:6px;color:{MUTED};">{inner}</div>'
 
 
-def _hit_badge_context(row, hit_pctile=None, cap=None):
+# Confirmation arrows on the $/▼ badge: the season-level regression flag says a player *should*
+# revert (season actual vs season xBA/xSLG); hitter_recency_flag says whether that reversion has
+# ALREADY shown up in his recent games (AB-weighted regressed recent AVG/SLG vs the same season
+# xBA/xSLG anchor). Plain text glyphs (not emoji) so they inherit the chip's own GREEN/RED color
+# rather than carrying a fixed color of their own -- no new hue, palette stays single-meaning-per-hue.
+_CONFIRM_UP   = "&#8599;"  # ↗ suffix on $ when hitter_recency_flag == 'improving'
+_CONFIRM_DOWN = "&#8600;"  # ↘ suffix on ▼ when hitter_recency_flag == 'declining'
+
+
+def _hit_badge_context(row, hit_pctile=None, cap=None, idx_recent=None):
     """Explain whichever hitter badges `row` earns — SAME predicates, order and cap as
     hitter_badges (cap=None: every applicable badge) — so the tap-to-expand panel explains
     exactly the chips shown, no more."""
@@ -383,21 +392,31 @@ def _hit_badge_context(row, hit_pctile=None, cap=None):
     if avg > 0 and iso > 0 and xba > 0 and xslg > 0:
         slg = iso + avg; d_ba = xba - avg; d_slg = xslg - slg
         gap = f'xBA {xba:.3f} vs AVG {avg:.3f}, xSLG {xslg:.3f} vs SLG {slg:.3f}'
+        _rec = idx_recent.get(row.get("PlayerName", "")) if idx_recent else None
+        _rflag = hitter_recency_flag(row, _rec) if _rec else None
         if d_ba >= _XREG_BA and d_slg >= _XREG_SLG:
-            lines.append(f'{_hit_badge("$", GREEN)} under his Statcast expected stats ({gap}) '
-                         f'&mdash; positive regression likely (buy-low).')
+            confirmed = _rflag == "improving"
+            badge_txt = "$" + _CONFIRM_UP if confirmed else "$"
+            tail = " Confirmed by his recent games, not just predicted." if confirmed else ""
+            lines.append(f'{_hit_badge(badge_txt, GREEN)} under his Statcast expected stats ({gap}) '
+                         f'&mdash; positive regression likely (buy-low).{tail}')
         elif -d_ba >= _XREG_BA and -d_slg >= _XREG_SLG:
-            lines.append(f'{_hit_badge("&#9660;", RED)} over his Statcast expected stats ({gap}) '
-                         f'&mdash; regression risk (sell-high).')
+            confirmed = _rflag == "declining"
+            badge_txt = "&#9660;" + _CONFIRM_DOWN if confirmed else "&#9660;"
+            tail = " Confirmed by his recent games, not just predicted." if confirmed else ""
+            lines.append(f'{_hit_badge(badge_txt, RED)} over his Statcast expected stats ({gap}) '
+                         f'&mdash; regression risk (sell-high).{tail}')
     return _badge_ctx_wrap(lines[:cap])
 
 
-def hitter_badges(row, hit_pctile=None, cap=None, regression=True):
+def hitter_badges(row, hit_pctile=None, cap=None, regression=True, idx_recent=None):
     """Concatenated tactical badge HTML for a hitter row (priority PWR->SB->BUY/SELL; `cap=None`
     shows every applicable badge). `hit_pctile` is the league SB percentile pool
     (build_cat_percentiles) — when None, SB is skipped. `regression=False` drops the $/▼
     buy-low/sell-high chip — used by the trade cards, which render their own side-aware
-    directional version from `_tsell`/`_tbuy` and would otherwise show it twice."""
+    directional version from `_tsell`/`_tbuy` and would otherwise show it twice. `idx_recent`
+    (optional, the best_recent_h index) confirms the $/▼ call against hitter_recency_flag — see
+    _CONFIRM_UP/_CONFIRM_DOWN; omitted (default) renders exactly as before."""
     badges = []
 
     # PWR — power/HR threat (modeled per-game HR probability). Highest priority.
@@ -420,10 +439,20 @@ def hitter_badges(row, hit_pctile=None, cap=None, regression=True):
             slg = iso + avg
             d_ba, d_slg = xba - avg, xslg - slg
             _rt = f"xBA {xba:.3f} vs AVG {avg:.3f} · xSLG {xslg:.3f} vs SLG {slg:.3f}"
+            _rec = idx_recent.get(row.get("PlayerName", "")) if idx_recent else None
+            _rflag = hitter_recency_flag(row, _rec) if _rec else None
             if d_ba >= _XREG_BA and d_slg >= _XREG_SLG:
-                badges.append(_hit_badge("$", GREEN, _rt))
+                if _rflag == "improving":
+                    badges.append(_hit_badge("$" + _CONFIRM_UP, GREEN,
+                        _rt + " &mdash; confirmed: already trending up in recent games, not just a season-level prediction"))
+                else:
+                    badges.append(_hit_badge("$", GREEN, _rt))
             elif -d_ba >= _XREG_BA and -d_slg >= _XREG_SLG:
-                badges.append(_hit_badge("&#9660;", RED, _rt))
+                if _rflag == "declining":
+                    badges.append(_hit_badge("&#9660;" + _CONFIRM_DOWN, RED,
+                        _rt + " &mdash; confirmed: already cooling off in recent games, not just a season-level prediction"))
+                else:
+                    badges.append(_hit_badge("&#9660;", RED, _rt))
 
     return "".join(badges[:cap])
 
@@ -640,6 +669,29 @@ def _recent_form_line(rec, role, win, season_row=None):
     return html
 
 
+def _recency_trust_context(season_row, recent_row, tag):
+    """Muted tap-to-expand line judging whether a hot/cold recent stretch (already flagged
+    by _hitter_recent_form's tag) survives AB-weighted regression toward season xBA/xSLG --
+    the same 'small sample vs real signal' judgment _effective_era makes for pitchers,
+    applied to hitters. '' when no recent row, tag is steady, or the read isn't reliable."""
+    if not recent_row or tag not in ("hot", "warm", "cold", "cool"):
+        return ""
+    flag = hitter_recency_flag(season_row, recent_row)
+    if not flag:
+        return ""
+    ab, xba = _n(recent_row.get("AB")), _n(season_row.get("xBA"))
+    eff_avg = _effective_avg(season_row, recent_row)
+    if flag == "declining":
+        verdict, color = "decline looks partly real, not just small-sample variance", RED
+    elif flag == "improving":
+        verdict, color = "hot stretch looks like a real skill uptick, not just luck", GREEN
+    else:
+        verdict, color = "mostly small-sample noise &mdash; season skill level (xBA) still holds up", MUTED
+    return (f'<div style="margin-top:4px;color:{MUTED};font-size:12px;">'
+            f'<span style="color:{color};">Regressed ({int(ab)} AB)</span>: '
+            f'{_st(eff_avg)} AVG vs {_st(xba)} season xBA &mdash; {verdict}</div>')
+
+
 def _hitter_recent_form(r, idx_recent):
     """Season-vs-recent hitter Score comparison -- the ONE hot/cold read shared by the
     tap-to-expand header, _my_pos_summary, and the visible Recent Form column,
@@ -724,6 +776,7 @@ def _hitter_score_breakdown(r, idx_recent=None, hit_pctile=None):
         narr += f' Trimmed to {round(mult * 100)}% for thin playing time (few at-bats vs a regular).'
     html = (f'<b style="color:{TEXT};">{head}</b>'
             + _recent_form_line(rec, "hit", win, season_row=r)
+            + _recency_trust_context(r, rec, tag)
             + _archetype_line(_hitter_archetype(r, hit_pctile, season, tag))
             + f'<div style="margin-top:4px;">{narr}</div>')
     hrp = _n(r.get("HR_Probability"))
@@ -732,7 +785,7 @@ def _hitter_score_breakdown(r, idx_recent=None, hit_pctile=None):
         line = f'HR% {hrp * 100:.0f}% modeled per-game HR probability'
         line += f' ({drivers})' if drivers else ''
         html += f'<div style="margin-top:6px;color:{MUTED};">{line}</div>'
-    html += _hit_badge_context(r, hit_pctile)
+    html += _hit_badge_context(r, hit_pctile, idx_recent=idx_recent)
     html += _injury_context(r)
     return html
 

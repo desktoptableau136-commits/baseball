@@ -417,6 +417,24 @@ def _health_value_mult(r):
     return 1.0
 
 
+# Recency-trend discount on trade value (_tval). A hitter whose recent hot/cold stretch SURVIVES
+# AB-weighted regression toward his season xBA/xSLG (hitter_recency_flag == 'declining'/
+# 'improving') gets a mild value adjustment -- milder than the IL discount, since this is a
+# probabilistic trend read, not a confirmed absence. 'noise'/None -> 1.0 unchanged: the whole
+# point of 'noise' is the streak looks like luck, so season-level value already stands as-is.
+# Symmetric across both trade POVs (same _enrich_trade_player call, same as _health_value_mult) --
+# a player I'd acquire mid-slump is discounted the SAME amount a rival ships him at, so neither
+# side can exploit a one-sided read of the same signal.
+_RECENCY_TVAL_MULT = {"declining": 0.90, "improving": 1.08}
+
+
+def _recency_value_mult(r, recent_row):
+    """Trade-value multiplier from hitter_recency_flag. 1.0 (no-op) when there's no recent row,
+    the read isn't reliable (thin AB / missing xStats), or the flag is 'noise'."""
+    flag = hitter_recency_flag(r, recent_row) if recent_row else None
+    return _RECENCY_TVAL_MULT.get(flag, 1.0)
+
+
 def _il_strips_star(r):
     """True only for the SEVERE injury tiers (_IL_STAR_STRIP: 60-day IL / out for season) where a
     player genuinely loses 'untouchable star' status in trade talks — a rival WILL move a season-
@@ -456,7 +474,9 @@ def _enrich_trade_player(r, ptype, best_recent_p, best_recent_h, hit_pctile, pit
     else:
         r["_tscore"] = _score_p(r, best_recent_p)
         r["_tcats"]  = set(player_cat_strengths(r, pit_pctile, _FA_RP_CATS, set()))
-    _raw_val      = _trade_value(r, ptype, hit_pctile, pit_pctile)   # healthy trade value (pre-injury)
+    _raw_val      = _trade_value(r, ptype, hit_pctile, pit_pctile)   # scarcity-weighted, healthy, season value
+    if ptype == "hit":
+        _raw_val *= _recency_value_mult(r, best_recent_h.get(r.get("PlayerName")))
     r["_tval"]    = _raw_val * _health_value_mult(r)
     # Star-reach premium is computed off _tval_star: HEALTHY value for a short-term injury (a
     # 10-day-IL superstar is still a star a rival won't ship at par), the DISCOUNTED value only for
