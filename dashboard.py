@@ -449,7 +449,7 @@ def render_tv_games(ctx):
             gt  = sd._fmt_game_time_et(g.get("game_time_utc", ""))
             net = (g.get("national_tv") or [None])[0] or g.get("away_tv") or g.get("home_tv") or ""
             net = net.split(" Presented by")[0].strip()   # drop sponsor tail — compact tile
-            meta = gt + (f' &middot; {net}' if net else "")
+            meta = gt + (' (DH)' if item.get("dh") else '') + (f' &middot; {net}' if net else "")
             my_sp  = {sd._ascii_lower(p["name"]) for p in item["mine"] if p.get("is_sp")}
             opp_sp = {sd._ascii_lower(p["name"]) for p in item["opp"] if p.get("is_sp")}
             def _pn(nm):

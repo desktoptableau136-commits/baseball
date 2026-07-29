@@ -1878,6 +1878,8 @@ def _roster_suggestion(matchup, pitchers, hitters, fa_sp, fa_rp, fa_hit,
         snapshot, is what matters)."""
         if _on_il(cand):
             return False
+        if _is_protected(cand, my_norm):
+            return False
         cand_name = cand.get("PlayerName", "")
         for _, slots, ptype in POS_GROUPS:
             if not (_pos_tags(cand) & slots):
@@ -3136,7 +3138,16 @@ def _rank_todays_games(todays_games, my_key, opp_key, pin_favorite=True):
     always kept. When pin_favorite, favorite games sort ahead of everything regardless of
     score (the manager wants to see them first); within each tier, score desc then
     earliest first pitch. pin_favorite=False gives pure impact order (used by the Briefing
-    'tune in' teaser, which should name the true highest-overlap game)."""
+    'tune in' teaser, which should name the true highest-overlap game).
+
+    Doubleheader collapse: a real doubleheader gives the SAME two teams two distinct
+    gamePk rows on the same day, with identical roster overlap (same rosters play both
+    legs). Nothing upstream dedups these, and the favorite-team exemption above guarantees
+    BOTH legs survive the drop filter -- so a favorite team's doubleheader would otherwise
+    render as two duplicate-looking cards. Collapsed here (the one chokepoint every caller
+    -- the digest section, the dashboard tile, and the Briefing teaser -- routes through) by
+    team-pair: keep the higher-scoring leg (earliest first pitch on a tie), tag it "dh" so
+    the renderer can note a second game exists instead of silently hiding it."""
     ranked = []
     for g in (todays_games or []):
         fav = _is_favorite_game(g)
@@ -3158,7 +3169,23 @@ def _rank_todays_games(todays_games, my_key, opp_key, pin_favorite=True):
         def _val(players, side_mult):
             return sum((2 if p.get("is_sp") else 1) * side_mult for p in players)
         score = _val(mine, 2) + _val(opp, 1)   # my players weighted 2x
-        ranked.append({"g": g, "mine": mine, "opp": opp, "score": score, "fav": fav})
+        ranked.append({"g": g, "mine": mine, "opp": opp, "score": score, "fav": fav, "dh": False})
+
+    def _leg_key(it):
+        return (-it["score"], it["g"].get("game_time_utc", ""))   # higher score, then earlier first pitch
+
+    by_pair = {}
+    for item in ranked:
+        g = item["g"]
+        pair = frozenset((g.get("home_name", ""), g.get("away_name", "")))
+        best = by_pair.get(pair)
+        if best is None:
+            by_pair[pair] = item
+            continue
+        best["dh"] = item["dh"] = True   # a second leg exists -- tag belongs to the matchup
+        by_pair[pair] = min(best, item, key=_leg_key)
+    ranked = list(by_pair.values())
+
     ranked.sort(key=lambda x: ((not x["fav"]) if pin_favorite else False,
                                -x["score"], x["g"].get("game_time_utc", "")))
     return ranked
@@ -3223,6 +3250,8 @@ def build_todays_games_section(todays_games, my_team, opp_team, max_games=4,
         gt = _fmt_game_time_et(g.get("game_time_utc", ""))
         if gt:
             meta.append(f'<span style="color:{MUTED};">{gt}</span>')
+        if item.get("dh"):
+            meta.append(f'<span style="color:{MUTED};">(DH — Gm shown is the one counted above)</span>')
         tv = []
         nat = g.get("national_tv") or []
         if nat:
@@ -3571,12 +3600,13 @@ _GAMEPLAN_MIN_LEVERAGE = 8    # min swing leverage (win-the-week percentage poin
                               # toss-up cat to count as 🎯 Contest rather than ✋ Concede —
                               # a toss-up cat that barely moves the week isn't worth a move
 _GAMEPLAN_MAX_MOVES    = 3    # top-N ranked move cards
-_GAMEPLAN_DROP_SEASON_FLOOR = 35   # a move card's drop cost must have a SEASON score (not
+_GAMEPLAN_DROP_SEASON_FLOOR = 40   # a move card's drop cost must have a SEASON score (not
                               # the recent-blended one, which a single bad week can crater)
-                              # below this -- same "streamer-tier, not worth rostering" cutoff
-                              # as _FA_SP_MIN_SCORE. A rostered player scoring like a real
-                              # contributor, even mid-slump, is never fair collateral for an
-                              # FA add; below the floor is genuinely fringe/replaceable.
+                              # below this -- a bit above _FA_SP_MIN_SCORE's 35 "streamer-tier"
+                              # cutoff, widened slightly (session addendum) so a few more
+                              # genuinely-borderline bench bodies clear as safe collateral.
+                              # A rostered player scoring like a real contributor, even
+                              # mid-slump, is still never fair collateral for an FA add.
 _GAMEPLAN_WEEKLY_MOVE_CAP = 7 # reference only (this league's typical add/drop cadence,
                               # same number the FA-SP per-day cap rationale already cites)
                               # — NOT a live remaining-moves counter (no snapshot field
@@ -3740,6 +3770,7 @@ def build_game_plan(matchup, winprob_ctx, per_cat, winprob_rf, winprob_weeks,
         # hold -- so this applies unconditionally, not just to streamer-tagged moves.
         _droppable = [(r, s, k) for r, s, k in scored_drop
                       if not _active_role_pitcher(r)
+                      and not _is_protected(r, my_norm)
                       and _season_score_of(r, k) < _GAMEPLAN_DROP_SEASON_FLOOR]
 
         _used_drops = set()
@@ -3840,7 +3871,10 @@ def build_game_plan(matchup, winprob_ctx, per_cat, winprob_rf, winprob_weeks,
             tag_lbl, tag_col = ("hold", ACCENT) if hold else ("streamer", MUTED)
             # Resolve the drop BEFORE building the card. _take_drop only offers genuinely
             # fringe players (_droppable, built above) -- when slots_left covers the add, no
-            # drop is needed at all; otherwise skip the candidate rather than force a bad one.
+            # drop is needed at all. When neither an open slot nor a safe drop exists, the
+            # card still renders (the pickup idea is still worth surfacing -- ranked purely
+            # by matchup lift) with an advisory line instead of a specific drop, rather than
+            # disappearing entirely just because there's no fringe bench fat to spare.
             if slots_left > 0:
                 slots_left -= 1
                 drop_html = (f'<span style="color:{GREEN};font-size:11px;">&#10003; roster spot open '
@@ -3848,8 +3882,10 @@ def build_game_plan(matchup, winprob_ctx, per_cat, winprob_rf, winprob_weeks,
             else:
                 d = _take_drop(r)
                 if d is None:
-                    continue   # no safe drop for this candidate -- skip rather than force a bad one
-                drop_html = _render_drop(d)
+                    drop_html = (f'<span style="color:{MUTED};font-size:11px;">No safe drop right now '
+                                 f'&mdash; worth a manual look at your bench</span>')
+                else:
+                    drop_html = _render_drop(d)
             i = len(cards)
             pos_disp = _pos_disp(r)
             team_l = team_logo(r.get("Team"))

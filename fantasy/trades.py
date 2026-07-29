@@ -79,6 +79,37 @@ _TRADE_PER_TEAM_CAP = 2     # max cards per partner team (variety)
 _TEAM_PUNT_CATS  = {"Guerrero Warfare": {"SVHD"}}
 _TEAM_TARGET_POS = {"Guerrero Warfare": {"C", "SS"}}
 
+#   PROTECTED: named players who are never offered on the give side of a Trade Radar/
+#         megadeal package, and never picked as a suggested drop in the Weekly Game Plan or
+#         Week-at-a-Glance bullets. The existing value-based guards (_TRADE_MAX_VAL give
+#         ceiling, _GAMEPLAN_DROP_SEASON_FLOOR) already protect a true star MOST of the time,
+#         but aren't a hard guarantee -- a slump/injury value dip or a _tsell sell-high flag
+#         could in theory still surface one of these names. This is a belt-and-suspenders,
+#         name-based backstop for players the manager will just never actually move,
+#         regardless of what the value math says. Deliberately does NOT apply to
+#         _grade_pending_trades -- a REAL incoming trade offer touching one of these players
+#         still gets graded normally, since that's evaluating a rival's real proposal, not a
+#         system-generated suggestion.
+_TEAM_PROTECTED_PLAYERS = {
+    "Guerrero Warfare": {"Matt Olson", "Munetaka Murakami", "James Wood",
+                          "Jacob Misiorowski", "Jose Ramirez"},
+}
+
+
+def _is_protected(player_row_or_name, team_key):
+    """True when `player_row_or_name` (a snapshot row OR a plain PlayerName string) is on
+    `team_key`'s protected list (_TEAM_PROTECTED_PLAYERS), matched via the canonical
+    _name_key so an accent/suffix mismatch can't cause a silent miss. Teams with no entry
+    (every non-Guerrero-Warfare `--team` view) always return False."""
+    protected = _TEAM_PROTECTED_PLAYERS.get(team_key)
+    if not protected:
+        return False
+    name = player_row_or_name if isinstance(player_row_or_name, str) \
+        else (player_row_or_name.get("PlayerName", "") if player_row_or_name else "")
+    if not name:
+        return False
+    return _name_key(name) in {_name_key(n) for n in protected}
+
 
 def _set_trade_caps(max_cards=None, per_team_cap=None):
     """Facade-safe override hook for the Partner-Fit board's temporarily-raised caps.
@@ -685,7 +716,8 @@ def find_trades(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
         _give_ceil = _TRADE_FAIR_MAX_VAL if mode == "fair" else _TRADE_MAX_VAL
         out_pool = sorted([r for r in my_players
                            if (r["_tcats"] & send_cats) and (r["_tgroups"] & surplus_pos)
-                           and (r["_tval"] <= _give_ceil or r["_tsell"])],
+                           and (r["_tval"] <= _give_ceil or r["_tsell"])
+                           and not _is_protected(r, my_key)],
                           key=lambda r: -r["_tscore"])[:_TRADE_POOL_WIDTH]
         # Incoming: helps a category I need OR upgrades a thin position of mine.
         in_pool  = sorted([r for r in t_players if (r["_tcats"] & get_cats) or _fills_need_pos(r)],
@@ -768,6 +800,8 @@ def find_trades(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
             # give still can't pass (the win-win net_me gate).
             _pitch_surplus = bool(my_surplus & _PITCH_SURPLUS_CATS)
             def _mega_disposable(r):
+                if _is_protected(r, my_key):
+                    return False                              # named untouchable -- never ballast, regardless of value
                 if r["_tval"] > _give_ceil and not r.get("_tsell"):
                     return False                              # a piece I'd hold (too valuable, not a sell)
                 if r["_tval"] < _STAR_TVAL_FLOOR:

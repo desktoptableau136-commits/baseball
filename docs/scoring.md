@@ -124,15 +124,23 @@ every other matchup-dependent section's empty-state guard).
     everyday 3B (season score 66, blended down to 55 by a 0.465-OPS/7-day slump) got surfaced as the
     drop for a middling streaming SP. Fix: `_take_drop` now draws ONLY from `_droppable`, a
     pre-filtered pool requiring (a) SEASON score (`_season_score_of`, no recent blend) below
-    `_GAMEPLAN_DROP_SEASON_FLOOR` (35 — the same "streamer-tier, not worth rostering" cutoff as
-    `_FA_SP_MIN_SCORE`) and (b) not `_active_role_pitcher` (any current-season SVHD > 0 — protects a
+    `_GAMEPLAN_DROP_SEASON_FLOOR` (40 — a touch above `_FA_SP_MIN_SCORE`'s 35 "streamer-tier"
+    cutoff, widened slightly so a few more genuinely-borderline bench bodies clear as safe
+    collateral) and (b) not `_active_role_pitcher` (any current-season SVHD > 0 — protects a
     closer/setup arm that `rp_score`'s punt-saves weighting (~15% SVHD) can rank as "worst" despite
-    real save-role value). This applies to EVERY move, hold or streamer — a slump doesn't make a real
-    asset expendable for a durable upgrade either. **On a well-built roster this can legitimately
-    leave `_droppable` empty**, so `_take_drop` returns `None`, and the card-building loop `continue`s
-    past that candidate rather than force a bad trade — Part B can render fewer than
-    `_GAMEPLAN_MAX_MOVES` cards, or none at all with the empty-state note, and that's the CORRECT
-    behavior: no real bench fat to spare reads as no safe moves, not as license to cut a starter.
+    real save-role value) and (c) not on the team's `_TEAM_PROTECTED_PLAYERS` list (named
+    untouchables — see "Personal strategy overlays" in `docs/trades.md`; a belt-and-suspenders
+    backstop on top of the score floor). This applies to EVERY move, hold or streamer — a slump
+    doesn't make a real asset expendable for a durable upgrade either.
+  - **No safe drop ≠ no card (loosened from the original all-or-nothing gate).** On a well-built
+    roster `_droppable` can legitimately be empty, so `_take_drop` returns `None` — but rather than
+    skip the candidate outright, the card still renders (ranked purely by matchup lift) with an
+    advisory line ("No safe drop right now — worth a manual look at your bench") in place of a
+    specific drop. The original version `continue`d past the candidate entirely whenever no safe
+    drop existed, which could zero out Part B even when good adds existed; the advisory line
+    preserves the "never force a bad cut" guarantee while still surfacing the pickup idea. Part B
+    can still render fewer than `_GAMEPLAN_MAX_MOVES` cards, or the empty-state note, when there are
+    genuinely zero positive-lift candidates.
   - **`is_sunday`** (matchup ends today) suppresses Part B entirely (no move can swing today's
     closing matchup — same rationale as `_matchup_closing_note`) but Part A (final odds +
     contest/concede) still renders.
