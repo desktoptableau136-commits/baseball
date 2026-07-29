@@ -334,11 +334,15 @@ def build_lineup_efficiency(eff):
             f'Bench production was covered &mdash; every startable bat was in your lineup.</div>'
         )
 
-    # ── per-player bench leakage ──
+    # ── per-player bench leakage (2-col, height-balanced — card height grows with
+    #    len(days), so a naive blind pairing risks a waterfall; _balance_two_columns
+    #    greedily assigns by estimated weight instead) ──
+    bench_weighted = []
     for b in bench:
         slash = f"{b['H']}-{b['AB']}"
         tot = " &middot; ".join(f"{b[c]} {c}" for c in ("R", "HR", "RBI", "SB") if b[c])
-        parts.append(
+        days = b.get("days", [])
+        card = (
             f'<div style="background:{SURFACE};border:1px solid {BORDER};border-radius:6px;'
             f'padding:10px 14px;margin-bottom:8px;">'
             f'<div><span style="color:{TEXT};font-weight:700;font-size:13px;">{b["name"]}</span>'
@@ -349,10 +353,14 @@ def build_lineup_efficiency(eff):
                 f'<span style="color:{TEXT};">{d["line"]}</span>'
                 + (f' ({d["extra"]})' if d.get("extra") else '')
                 + f' <span style="color:{MUTED};">[{d["tag"]}]</span></div>'
-                for d in b.get("days", [])
+                for d in days
             )
             + '</div>'
         )
+        bench_weighted.append((1 + len(days), card))
+    if bench_weighted:
+        left, right = _balance_two_columns(bench_weighted)
+        parts.append(_two_col(left, right))
 
     # ── good starts left on the bench ──
     net_pit = eff.get("net_pit") or {}
@@ -367,9 +375,11 @@ def build_lineup_efficiency(eff):
             f'Net of the arm you\'d have benched to start him &mdash; counting stats that never '
             f'counted (ratios not netted).</div></div>'
         )
+    bench_sp_weighted = []
     for b in bench_sp:
         tot = " &middot; ".join(f"{b[c]} {c}" for c in ("K", "QS", "W") if b[c])
-        parts.append(
+        days = b.get("days", [])
+        card = (
             f'<div style="background:{SURFACE};border:1px solid {BORDER};border-radius:6px;'
             f'padding:10px 14px;margin-bottom:8px;">'
             f'<div><span style="color:{TEXT};font-weight:700;font-size:13px;">{b["name"]}</span>'
@@ -379,10 +389,14 @@ def build_lineup_efficiency(eff):
                 f'<span style="color:{YELLOW};">&rsaquo;</span> {d["date"]} '
                 f'<span style="color:{TEXT};">{d["line"]}</span>'
                 f' <span style="color:{MUTED};">[{d["tag"]}]</span></div>'
-                for d in b.get("days", [])
+                for d in days
             )
             + '</div>'
         )
+        bench_sp_weighted.append((1 + len(days), card))
+    if bench_sp_weighted:
+        left, right = _balance_two_columns(bench_sp_weighted)
+        parts.append(_two_col(left, right))
 
     # ── pitcher blowups that counted ──
     if blowups:
@@ -390,12 +404,13 @@ def build_lineup_efficiency(eff):
             f'<div style="color:{MUTED};font-size:11px;font-weight:700;text-transform:uppercase;'
             f'letter-spacing:.5px;margin:14px 0 6px;">Active-slot blowups (ER/WHIP counted)</div>'
         )
+        blowup_weighted = []
         for p in blowups:
             drop = ''
             if p.get("drop_when"):
                 drop = (f' <span style="color:{RED};font-weight:700;">dropped {p["drop_when"]}</span>'
                         f'<span style="color:{MUTED};"> &mdash; imploded then cut, damage already banked</span>')
-            parts.append(
+            card = (
                 f'<div style="background:{SURFACE};border:1px solid {BORDER};border-radius:6px;'
                 f'padding:9px 14px;margin-bottom:7px;">'
                 f'<span style="color:{TEXT};font-weight:700;font-size:12px;">{p["name"]}</span>'
@@ -403,6 +418,9 @@ def build_lineup_efficiency(eff):
                 f'{p["ip"]} IP, <span style="color:{RED};font-weight:700;">{p["er"]} ER</span>, '
                 f'{p["k"]} K (+{p["h"]} H, {p["bb"]} BB)</span>{drop}</div>'
             )
+            blowup_weighted.append((1, card))
+        left, right = _balance_two_columns(blowup_weighted)
+        parts.append(_two_col(left, right))
 
     # ── idle active hitters (wasted space) ──
     if idle:
@@ -410,14 +428,18 @@ def build_lineup_efficiency(eff):
             f'<div style="color:{MUTED};font-size:11px;font-weight:700;text-transform:uppercase;'
             f'letter-spacing:.5px;margin:14px 0 6px;">Idle &mdash; wasted active slots</div>'
         )
+        idle_weighted = []
         for p in idle:
-            parts.append(
+            card = (
                 f'<div style="background:{SURFACE};border:1px solid {BORDER};border-radius:6px;'
                 f'padding:9px 14px;margin-bottom:7px;">'
                 f'<span style="color:{TEXT};font-weight:700;font-size:12px;">{p["name"]}</span>'
                 f'<span style="color:{MUTED};font-size:11px;"> &nbsp;{p["reason"]} &nbsp;&mdash;&nbsp; '
                 f'an AB in only {p["played"]} of {p["active"]} games he was slotted active</span></div>'
             )
+            idle_weighted.append((1, card))
+        left, right = _balance_two_columns(idle_weighted)
+        parts.append(_two_col(left, right))
 
     return "".join(parts)
 
@@ -472,7 +494,7 @@ def build_league_scoreboard(all_prev_matchups, logos):
         score_b = f"{l_a}–{w_a}" + (f"–{t_a}" if t_a else "")
 
         # First column is the team label (logo + name + W–L–T); category headers follow.
-        header_cells = f'<th style="{th}text-align:left;padding-left:8px;min-width:130px;"></th>'
+        header_cells = f'<th style="{th}text-align:left;padding-left:8px;min-width:110px;"></th>'
         for i, cat in enumerate(_CAT_ORDER):
             lbl = _CAT_DISPLAY.get(cat, cat)
             sep = f"border-left:1px solid {BORDER};" if i == 6 else ""
@@ -509,11 +531,15 @@ def build_league_scoreboard(all_prev_matchups, logos):
         # Fixed layout + colgroup so every matchup card shares the SAME column
         # positions (label col + 12 equal cat cols) — otherwise each table sizes
         # its first column to its own team-name length and the axis drifts card-to-card.
-        colgroup = ('<colgroup><col style="width:150px;">'
+        # Label col + min-width trimmed from 150px/520px so a paired-up card (2-per-row,
+        # see build_league_scoreboard's final join) fits its ~515px column at the recap's
+        # 1100px shell width without tripping the overflow-x:auto wrapper's scrollbar —
+        # per-category column width barely changes (~30px either way).
+        colgroup = ('<colgroup><col style="width:110px;">'
                     + '<col>' * len(_CAT_ORDER) + '</colgroup>')
         cat_table = (
             f'<div style="overflow-x:auto;-webkit-overflow-scrolling:touch;">'
-            f'<table style="width:100%;border-collapse:collapse;min-width:520px;'
+            f'<table style="width:100%;border-collapse:collapse;min-width:460px;'
             f'table-layout:fixed;">'
             f'{colgroup}'
             f'<thead><tr>{header_cells}</tr></thead>'
@@ -530,10 +556,16 @@ def build_league_scoreboard(all_prev_matchups, logos):
             f'</div>'
         )
 
+    # Pair uniform matchup cards into rows of 2 to cut the section's vertical length
+    # roughly in half — safe to pair blindly since every card is the same 2-row/13-col
+    # table shape (no waterfall risk from uneven card heights, unlike Lineup Efficiency).
+    rows = [_two_col(blocks[i], blocks[i + 1] if i + 1 < len(blocks) else "")
+            for i in range(0, len(blocks), 2)]
+
     return (
         section_head(f"League Scoreboard — Matchup {week}",
                      "All 6 matchups \xb7 outlined value = category winner") +
-        "\n".join(blocks)
+        "\n".join(rows)
     )
 
 
@@ -662,6 +694,22 @@ def _two_col(left, right):
             f'</tr></table>'
         )
     return left or right or ""
+
+
+def _balance_two_columns(weighted_htmls):
+    """Greedily assign each (weight, html) block to whichever column currently has the
+    smaller running weight — approximates balanced visual height without reordering the
+    caller's given order (e.g. severity-sorted upstream data). Mirrors dashboard.py's
+    independent-column card packing for the same uneven-height-card problem (its STYLE
+    block manually buckets tiles into two flex columns so a short tile never leaves
+    whitespace beneath it), adapted here to this file's email-safe table markup."""
+    left, right, lw, rw = [], [], 0.0, 0.0
+    for w, html in weighted_htmls:
+        if lw <= rw:
+            left.append(html); lw += w
+        else:
+            right.append(html); rw += w
+    return "".join(left), "".join(right)
 
 
 def _performer_col(label, table_html, mt="12px"):
@@ -1716,7 +1764,7 @@ def build_recap(snap):
   </style>
 </head>
 <body style="margin:0;padding:16px;background:#060b18;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
-<div class="ew" style="max-width:760px;margin:0 auto;background:{BG};border:1px solid {BORDER};border-radius:8px;overflow:hidden;">
+<div class="ew" style="max-width:1100px;margin:0 auto;background:{BG};border:1px solid {BORDER};border-radius:8px;overflow:hidden;">
   {header}
   <div class="ew" style="padding:22px 26px;">{body}</div>
   <div style="text-align:center;padding:14px;color:{MUTED};font-size:11px;border-top:1px solid {BORDER};">
