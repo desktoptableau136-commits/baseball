@@ -369,8 +369,9 @@ def _badge_ctx_wrap(lines):
 # ALREADY shown up in his recent games (AB-weighted regressed recent AVG/SLG vs the same season
 # xBA/xSLG anchor). Plain text glyphs (not emoji) so they inherit the chip's own GREEN/RED color
 # rather than carrying a fixed color of their own -- no new hue, palette stays single-meaning-per-hue.
-_CONFIRM_UP   = "&#8599;"  # ↗ suffix on $ when hitter_recency_flag == 'improving'
-_CONFIRM_DOWN = "&#8600;"  # ↘ suffix on ▼ when hitter_recency_flag == 'declining'
+_CONFIRM_UP   = "&#8599;"  # ↗ suffix on $ when hitter_recency_flag == 'improving'; STANDALONE (no
+    # $/▼ prefix) when the season flag hasn't fired at all -- an early recency-only trend read.
+_CONFIRM_DOWN = "&#8600;"  # ↘ suffix on ▼ when hitter_recency_flag == 'declining'; STANDALONE same idea.
 
 
 def _hit_badge_context(row, hit_pctile=None, cap=None, idx_recent=None):
@@ -396,16 +397,32 @@ def _hit_badge_context(row, hit_pctile=None, cap=None, idx_recent=None):
         _rflag = hitter_recency_flag(row, _rec) if _rec else None
         if d_ba >= _XREG_BA and d_slg >= _XREG_SLG:
             confirmed = _rflag == "improving"
+            contradicted = _rflag == "declining"
             badge_txt = "$" + _CONFIRM_UP if confirmed else "$"
-            tail = " Confirmed by his recent games, not just predicted." if confirmed else ""
+            tail = (" Confirmed by his recent games, not just predicted." if confirmed
+                     else " Heads up: his recent games are trending the OTHER way (cooling) &mdash; worth watching." if contradicted
+                     else "")
             lines.append(f'{_hit_badge(badge_txt, GREEN)} under his Statcast expected stats ({gap}) '
                          f'&mdash; positive regression likely (buy-low).{tail}')
         elif -d_ba >= _XREG_BA and -d_slg >= _XREG_SLG:
             confirmed = _rflag == "declining"
+            contradicted = _rflag == "improving"
             badge_txt = "&#9660;" + _CONFIRM_DOWN if confirmed else "&#9660;"
-            tail = " Confirmed by his recent games, not just predicted." if confirmed else ""
+            tail = (" Confirmed by his recent games, not just predicted." if confirmed
+                     else " Heads up: his recent games are trending the OTHER way (heating up) &mdash; worth watching." if contradicted
+                     else "")
             lines.append(f'{_hit_badge(badge_txt, RED)} over his Statcast expected stats ({gap}) '
                          f'&mdash; regression risk (sell-high).{tail}')
+        elif _rflag == "improving":
+            lines.append(f'{_hit_badge(_CONFIRM_UP, GREEN)} trending up in recent games vs his own season '
+                         f'expected stats (xBA {xba:.3f}/xSLG {xslg:.3f}) &mdash; before it&rsquo;s shown up '
+                         f'enough in his season totals to trip a season-level buy signal. Early skill-trend '
+                         f'read, not yet a season call.')
+        elif _rflag == "declining":
+            lines.append(f'{_hit_badge(_CONFIRM_DOWN, RED)} trending down in recent games vs his own season '
+                         f'expected stats (xBA {xba:.3f}/xSLG {xslg:.3f}) &mdash; before it&rsquo;s shown up '
+                         f'enough in his season totals to trip a season-level sell signal. Early skill-trend '
+                         f'read, not yet a season call.')
     return _badge_ctx_wrap(lines[:cap])
 
 
@@ -415,8 +432,13 @@ def hitter_badges(row, hit_pctile=None, cap=None, regression=True, idx_recent=No
     (build_cat_percentiles) — when None, SB is skipped. `regression=False` drops the $/▼
     buy-low/sell-high chip — used by the trade cards, which render their own side-aware
     directional version from `_tsell`/`_tbuy` and would otherwise show it twice. `idx_recent`
-    (optional, the best_recent_h index) confirms the $/▼ call against hitter_recency_flag — see
-    _CONFIRM_UP/_CONFIRM_DOWN; omitted (default) renders exactly as before."""
+    (optional, the best_recent_h index) checks the $/▼ call against hitter_recency_flag — see
+    _CONFIRM_UP/_CONFIRM_DOWN. Three outcomes when the season $/▼ flag fires: recency AGREES
+    (arrow suffixed onto $/▼), recency DISAGREES (plain $/▼, tooltip flags the contradiction), or
+    no recent data (plain $/▼, unchanged). A FOURTH case fires with no season flag at all: when
+    hitter_recency_flag alone clears its threshold, a bare ↗/↘ chip renders standalone (no $/▼) —
+    an early recency-only trend read before the season aggregate has caught up. Omitting
+    `idx_recent` (default) renders exactly as before this feature existed."""
     badges = []
 
     # PWR — power/HR threat (modeled per-game HR probability). Highest priority.
@@ -445,14 +467,30 @@ def hitter_badges(row, hit_pctile=None, cap=None, regression=True, idx_recent=No
                 if _rflag == "improving":
                     badges.append(_hit_badge("$" + _CONFIRM_UP, GREEN,
                         _rt + " &mdash; confirmed: already trending up in recent games, not just a season-level prediction"))
+                elif _rflag == "declining":
+                    badges.append(_hit_badge("$", GREEN,
+                        _rt + " &mdash; heads up: his recent games are trending the OTHER way (cooling) &mdash; worth watching before acting on this"))
                 else:
                     badges.append(_hit_badge("$", GREEN, _rt))
             elif -d_ba >= _XREG_BA and -d_slg >= _XREG_SLG:
                 if _rflag == "declining":
                     badges.append(_hit_badge("&#9660;" + _CONFIRM_DOWN, RED,
                         _rt + " &mdash; confirmed: already cooling off in recent games, not just a season-level prediction"))
+                elif _rflag == "improving":
+                    badges.append(_hit_badge("&#9660;", RED,
+                        _rt + " &mdash; heads up: his recent games are trending the OTHER way (heating up) &mdash; worth watching before acting on this"))
                 else:
                     badges.append(_hit_badge("&#9660;", RED, _rt))
+            elif _rflag == "improving":
+                badges.append(_hit_badge(_CONFIRM_UP, GREEN,
+                    f"Recent games already trending up vs his own season xBA {xba:.3f}/xSLG {xslg:.3f} &mdash; "
+                    f"before it's shown up enough in his season totals to trip a season-level buy signal. "
+                    f"Early skill-trend read, not yet a season call."))
+            elif _rflag == "declining":
+                badges.append(_hit_badge(_CONFIRM_DOWN, RED,
+                    f"Recent games already trending down vs his own season xBA {xba:.3f}/xSLG {xslg:.3f} &mdash; "
+                    f"before it's shown up enough in his season totals to trip a season-level sell signal. "
+                    f"Early skill-trend read, not yet a season call."))
 
     return "".join(badges[:cap])
 
