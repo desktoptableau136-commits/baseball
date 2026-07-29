@@ -388,7 +388,7 @@ def _my_pos_summary(my_players, idx_recent, hit_pctile=None, limit=3):
     parts = []
     for r in my_players[:limit]:
         name = r.get("PlayerName", "")
-        tag_html = inj_tag(r) + hitter_badges(r, hit_pctile)
+        tag_html = inj_tag(r) + hitter_badges(r, hit_pctile, idx_recent=idx_recent)
         _, season, rs, _, tag = _hitter_recent_form(r, idx_recent)
         if rs > 0:
             score_html = f'<span style="color:{MUTED}">{season}|{rs}</span> {_FORM_EMOJI[tag]}'
@@ -849,7 +849,7 @@ def build_hot_cold_section(hitters, my_team, best_recent_h=None, hit_pctile=None
             _bd_uid("rhc", r["name"]), 7)
         rows_html += (
             f'<tr style="{bg}">'
-            f'<td style="{TD_S}font-weight:600;">{team_logo(r["team"])}{r["name"]}{r["inj"]}{hitter_badges(r["srow"], hit_pctile)}</td>'
+            f'<td style="{TD_S}font-weight:600;">{team_logo(r["team"])}{r["name"]}{r["inj"]}{hitter_badges(r["srow"], hit_pctile, idx_recent=best_recent_h)}</td>'
             f'<td style="{TDC}color:{MUTED};">{r["pos"]}</td>'
             f'<td style="{TDC}">{r["season_ops"]:.3f}</td>'
             f'<td style="{TDC}">{_hrp_cell(r["srow"])}</td>'
@@ -2404,6 +2404,12 @@ def build_glossary_section():
                "the read is xBA/xSLG vs actual AVG/SLG; for <b>pitchers</b> it's xERA vs ERA (measured relative to "
                "the league's typical xERA-vs-ERA offset, since xERA runs a bit high). Display-only — never changes "
                "a Score — and it powers the buy-low / sell-high timing in Trade Radar. <b>Hover</b> for the numbers."),
+        _entry(f'$&#8599; / ▼&#8600;{_hit_badge("$&#8599;", GREEN)}{_hit_badge("&#9660;&#8600;", RED)}',
+               "<b>Hitters only</b> — a small diagonal arrow means the buy-low/sell-high call isn't just a season-level "
+               "prediction, it's already showing up in his <i>recent</i> games (his recent AVG/SLG, weighted for small-"
+               "sample size, still diverges from his season expected stats in the same direction). No arrow doesn't "
+               "mean the call is wrong — most of the time there's just no recent confirmation yet either way. Rare by "
+               "design; treat it as a stronger version of the same $/▼ signal, not a separate one."),
         _entry(f'Injury (trade cards){_il_badge({"ESPN_Status": "TEN_DAY_DL"})}{_il_badge({"ESPN_Status": "SIXTY_DAY_DL"})}{_il_badge({"ESPN_Status": "DAY_TO_DAY"})}',
                "On a <b>Trade Radar</b>, <b>Pending Trades</b>, or <b>Trade Lab</b> player line, a red "
                "<b>IL-10 / IL-15 / IL-60 / OUT</b> (or orange <b>DTD</b>) chip flags an injured player. His "
@@ -3191,16 +3197,18 @@ def _rank_todays_games(todays_games, my_key, opp_key, pin_favorite=True):
     return ranked
 
 def build_todays_games_section(todays_games, my_team, opp_team, max_games=4,
-                               hit_rows=None, pit_rows=None, recent_era=None, hit_pctile=None):
+                               hit_rows=None, pit_rows=None, recent_era=None, hit_pctile=None,
+                               idx_recent=None):
     """The 'Today's MLB Games' panel — the real games worth tuning into because they
     carry the most of my and my opponent's rostered players. Returns '' when nothing
     qualifies (off-day / no overlap). Perspective is applied here from each involved
     player's FantasyTeam, so it works under --team for free. When the row lookups are
     passed (`hit_rows`/`pit_rows` = season YEAR row keyed by _badge_name_key, `recent_era`
-    = L15 ERA keyed the same, `hit_pctile` = the qualified-pool percentile index), each
-    involved player gets the SAME role-aware tactical badges as the rest of the digest —
-    hitters PWR/SB/$/▼ (`hitter_badges`), pitchers ⚠ (`blowup_badge`, self-gated to
-    startable arms) + $/▼ (`pitcher_regression_badge`)."""
+    = L15 ERA keyed the same, `hit_pctile` = the qualified-pool percentile index, `idx_recent`
+    = best_recent_h, confirms the hitter $/▼ against hitter_recency_flag), each involved player
+    gets the SAME role-aware tactical badges as the rest of the digest — hitters PWR/SB/$/▼
+    (`hitter_badges`), pitchers ⚠ (`blowup_badge`, self-gated to startable arms) + $/▼
+    (`pitcher_regression_badge`)."""
     my_key  = " ".join((my_team or "").split())
     opp_key = " ".join((opp_team or "").split())
     ranked = _rank_todays_games(todays_games, my_key, opp_key)
@@ -3216,7 +3224,7 @@ def build_todays_games_section(todays_games, my_team, opp_team, max_games=4,
                 return ""
             return blowup_badge(row, recent_era.get(key)) + pitcher_regression_badge(row)
         row = hit_rows.get(key)
-        return hitter_badges(row, hit_pctile) if row else ""
+        return hitter_badges(row, hit_pctile, idx_recent=idx_recent) if row else ""
 
     def _side(players, label, color):
         if not players:
@@ -3894,7 +3902,7 @@ def build_game_plan(matchup, winprob_ctx, per_cat, winprob_rf, winprob_weeks,
 
             badges = ""
             if role == "hit":
-                badges = hitter_badges(r, hit_pctile)
+                badges = hitter_badges(r, hit_pctile, idx_recent=best_recent_h)
                 bd = _hitter_score_breakdown(r, best_recent_h, hit_pctile)
                 score_val = _blend(r, hitter_score, best_recent_h)
             else:
@@ -4768,7 +4776,7 @@ def build_email(snap, override_team=None):
                 _bd_uid("fahit", r.get("PlayerName", "")), 12)
             rows += (
                 f'<tr style="{bg}">'
-                f'<td style="{TD_S}font-weight:600;">{team_logo(r.get("Team"))}{r.get("PlayerName","")}{inj_tag(r)}{hitter_badges(r, hit_pctile)}</td>'
+                f'<td style="{TD_S}font-weight:600;">{team_logo(r.get("Team"))}{r.get("PlayerName","")}{inj_tag(r)}{hitter_badges(r, hit_pctile, idx_recent=best_recent_h)}</td>'
                 f'<td style="{TDC}color:{MUTED};">{r.get("Position","")}</td>'
                 f'<td style="{TDC}">{v(r.get("R"), 0)}</td>'
                 f'<td style="{TDC}">{v(r.get("HR"), 0)}</td>'
@@ -5015,7 +5023,7 @@ def build_email(snap, override_team=None):
                 f'{team_logo(starter.get("Team"), 16)}'
                 f'<span style="font-weight:600;">{starter["PlayerName"]}</span>'
                 f'{inj_tag(starter)}'
-                f'{pitcher_regression_badge(starter) if _is_pit_pos else hitter_badges(starter, hit_pctile)}'
+                f'{pitcher_regression_badge(starter) if _is_pit_pos else hitter_badges(starter, hit_pctile, idx_recent=best_recent_h)}'
                 f' {_start_badge}'
                 f'{pos_stat_line(starter, p["pos"])}'
             )
@@ -5059,7 +5067,7 @@ def build_email(snap, override_team=None):
                 f'<span style="{"font-weight:600;" if upgrade else ""}'
                 f'color:{GREEN if upgrade else MUTED};">'
                 f'{top_fa["PlayerName"]}</span>'
-                f'{pitcher_regression_badge(top_fa) if _is_pit_pos else hitter_badges(top_fa, hit_pctile)}'
+                f'{pitcher_regression_badge(top_fa) if _is_pit_pos else hitter_badges(top_fa, hit_pctile, idx_recent=best_recent_h)}'
                 f' {_fa_badge}'
                 f'{"&nbsp;&#8593;" if upgrade else ""}'
                 f'{pos_stat_line(top_fa, p["pos"])}'
@@ -5235,7 +5243,7 @@ def build_email(snap, override_team=None):
         todays_games_section = build_todays_games_section(
             _tg_list, my_team, _opp_name,
             hit_rows=_tg_hit_rows, pit_rows=_tg_pit_rows,
-            recent_era=_tg_recent_era, hit_pctile=hit_pctile)
+            recent_era=_tg_recent_era, hit_pctile=hit_pctile, idx_recent=best_recent_h)
         # Teaser names the true highest-OVERLAP game (pin_favorite=False), not the pinned favorite.
         _ranked_tg = _rank_todays_games(_tg_list, " ".join(my_team.split()), " ".join(_opp_name.split()), pin_favorite=False)
         if _ranked_tg:

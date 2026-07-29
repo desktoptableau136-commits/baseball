@@ -647,6 +647,56 @@ def _effective_whip(r):
     return (whip * ip + target * _ERA_REG_PRIOR_IP) / (ip + _ERA_REG_PRIOR_IP)
 
 
+_HIT_REG_PRIOR_AB = 100.0  # recent-AB shrinkage strength (AB analog of _ERA_REG_PRIOR_IP)
+
+
+def _effective_avg(season_row, recent_row):
+    """Recent-window actual AVG regressed toward season xBA (skill estimate), AB-weighted --
+    same shrinkage pattern as _effective_era/_effective_whip. A small recent-AB sample is
+    pulled hard toward the luck-stripped season skill; a large recent sample lets the
+    recent AVG carry more weight."""
+    avg, ab = _n(recent_row.get("AVG")), _n(recent_row.get("AB"))
+    if avg <= 0 or ab <= 0:
+        return 0.0
+    target = _n(season_row.get("xBA")) or 0.250
+    return (avg * ab + target * _HIT_REG_PRIOR_AB) / (ab + _HIT_REG_PRIOR_AB)
+
+
+def _effective_slg(season_row, recent_row):
+    """Recent-window actual SLG regressed toward season xSLG, same shrinkage as _effective_avg."""
+    slg, ab = _n(recent_row.get("SLG")), _n(recent_row.get("AB"))
+    if slg <= 0 or ab <= 0:
+        return 0.0
+    target = _n(season_row.get("xSLG")) or 0.400
+    return (slg * ab + target * _HIT_REG_PRIOR_AB) / (ab + _HIT_REG_PRIOR_AB)
+
+
+_HIT_RECENCY_MIN_AB  = 15     # min recent AB so the read isn't 3-AB noise
+_HIT_RECENCY_GAP_BA  = 0.030  # effective-AVG vs xBA gap that still counts as "survives regression"
+_HIT_RECENCY_GAP_SLG = 0.050  # same for SLG
+
+
+def hitter_recency_flag(season_row, recent_row):
+    """Does a hitter's recent hot/cold stretch survive AB-weighted regression toward his
+    season xBA/xSLG skill level, or does shrinkage mostly erase it?
+    'declining'/'improving' = the recent direction survives regression (a real signal);
+    'noise' = shrinkage pulls the effective rate back near season skill (small-sample-driven);
+    None = recent AB below the reliability floor, or season xStats missing."""
+    ab = _n(recent_row.get("AB")) if recent_row else 0
+    if ab < _HIT_RECENCY_MIN_AB:
+        return None
+    xba, xslg = _n(season_row.get("xBA")), _n(season_row.get("xSLG"))
+    if xba <= 0 or xslg <= 0:
+        return None
+    gap_avg = _effective_avg(season_row, recent_row) - xba
+    gap_slg = _effective_slg(season_row, recent_row) - xslg
+    if gap_avg <= -_HIT_RECENCY_GAP_BA and gap_slg <= -_HIT_RECENCY_GAP_SLG:
+        return "declining"
+    if gap_avg >= _HIT_RECENCY_GAP_BA and gap_slg >= _HIT_RECENCY_GAP_SLG:
+        return "improving"
+    return "noise"
+
+
 def blowup_risk(r, recent_era=None):
     """0-100 skill-based blowup (disaster-start) risk for a starter — higher = lower floor.
     Combines baserunner traffic (WHIP), strikeout escape hatch (K%/whiff), effective run

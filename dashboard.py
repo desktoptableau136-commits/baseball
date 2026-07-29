@@ -428,7 +428,7 @@ def render_tv_games(ctx):
                 row = pit_rows.get(k)
                 return (sd.blowup_badge(row, rec_era.get(k)) + sd.pitcher_regression_badge(row)) if row else ""
             row = hit_rows.get(k)
-            return sd.hitter_badges(row, hit_pctile, cap=2) if row else ""
+            return sd.hitter_badges(row, hit_pctile, cap=2, idx_recent=ctx.get("best_recent_h")) if row else ""
 
         def _names(players, cap=3):
             if not players:
@@ -644,7 +644,7 @@ def render_hitting(ctx):
         col = _tag_color[tag]
         return (
             f'<div style="display:flex;justify-content:space-between;gap:5px;white-space:nowrap;padding:3.5px 0;border-bottom:1px solid {BORDER};">'
-            f'<span style="overflow:hidden;text-overflow:ellipsis;color:{TEXT};">{sd._FORM_EMOJI[tag]} {sd.team_logo(r.get("Team"), 14)}{r.get("PlayerName")}{sd.hitter_badges(r, ctx["hit_pctile"])} '
+            f'<span style="overflow:hidden;text-overflow:ellipsis;color:{TEXT};">{sd._FORM_EMOJI[tag]} {sd.team_logo(r.get("Team"), 14)}{r.get("PlayerName")}{sd.hitter_badges(r, ctx["hit_pctile"], idx_recent=ctx["best_recent_h"])} '
             f'<span style="color:{MUTED};font-size:10px;">{_pos(r)}</span></span>'
             f'<span style="flex:0 0 auto;"><span style="color:{col};font-weight:700;">{_fv(r_ops,3)}</span>'
             f'<span style="color:{MUTED};font-size:10px;"> ({d:+.0f})</span>{hr_s} {_mini_badge(sd._blend(r, sd.hitter_score, ctx["best_recent_h"]))}</span></div>'
@@ -676,7 +676,7 @@ def render_holes(ctx):
         wname = worst.get("PlayerName", "—") if worst else "—"
         wlogo = sd.team_logo(worst.get("Team"), 13) if worst else ""
         wsc = int(worst.get("_pscore", 0)) if worst else 0
-        wbadge = (sd.hitter_badges(worst, ctx["hit_pctile"]) if _hit_pos else sd.pitcher_regression_badge(worst)) if worst else ""
+        wbadge = (sd.hitter_badges(worst, ctx["hit_pctile"], idx_recent=ctx["best_recent_h"]) if _hit_pos else sd.pitcher_regression_badge(worst)) if worst else ""
         fa_s = ""
         if fa:
             fsc = int(fa.get("_pscore", 0))
@@ -685,7 +685,7 @@ def render_holes(ctx):
             # whose weakness belongs elsewhere. Matches the digest ↑ arrow (#60); the
             # worst→FA pairing still displays the drop target, only the green is honest.
             gain = fsc - (p.get("my_avg") or 0)
-            fbadge = sd.hitter_badges(fa, ctx["hit_pctile"]) if _hit_pos else sd.pitcher_regression_badge(fa)
+            fbadge = sd.hitter_badges(fa, ctx["hit_pctile"], idx_recent=ctx["best_recent_h"]) if _hit_pos else sd.pitcher_regression_badge(fa)
             fa_s = (f' &rarr; {sd.team_logo(fa.get("Team"), 13)}<span style="color:{GREEN if gain>0 else MUTED};">{fa.get("PlayerName")}</span>{fbadge} {_mini_badge(fsc)}')
         rows.append(
             f'<div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:2px 0;border-bottom:1px solid {BORDER};">'
@@ -889,7 +889,7 @@ def render_fa_radar(ctx):
                             badges=sd.pitcher_regression_badge(r)))
     parts.append(hdr("Hitters"))
     for r in ctx["fa_hit"][:2]:
-        parts.append(spline(r, r.get("_score", 0), f'{_fv(_n(r.get("OPS")),3)} OPS', badges=sd.hitter_badges(r, ctx["hit_pctile"])))
+        parts.append(spline(r, r.get("_score", 0), f'{_fv(_n(r.get("OPS")),3)} OPS', badges=sd.hitter_badges(r, ctx["hit_pctile"], idx_recent=ctx["best_recent_h"])))
     return _tile("Free-Agent Radar", "".join(parts), flex=1.2, sub="top available by score")
 
 
