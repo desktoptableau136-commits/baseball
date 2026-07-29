@@ -1378,17 +1378,19 @@ function needMult(p, meta) {{
 function sumEff(arr, meta) {{ var s = 0; arr.forEach(function(p) {{ s += (p.tval || 0) * needMult(p, meta); }}); return s; }}
 
 // One row in the "In this deal" recap — same look as a roster prow, but read-only (no
-// toggle/target/arb markers) and with the score-pill breakdown ALWAYS unfolded, since the
-// whole point is showing everything about a picked player without a second click.
-function dealPlayerRow(p) {{
+// select/target/arb markers). The score-pill breakdown starts COLLAPSED (a cleaner-looking
+// recap) and is tappable via openBd, same as a roster row, to expand on demand.
+function dealPlayerRow(p, side) {{
   var pos = (p.posTokens || []).map(function(t) {{ return '<span class="poschip">' + t + '</span>'; }}).join(' ');
   if (pos) pos = ' ' + pos;
+  var bid = 'bd-deal-' + side + '-' + p.id;
   return '<div class="prow sel">'
     + '<div class="prow-top">' + p.logo + '<span class="pname">' + p.name + '</span>' + pos + p.badges
-    + '<span class="pill" style="background:' + pillColor(p.score) + '">' + p.score + '</span>'
+    + '<span class="pill" style="background:' + pillColor(p.score) + '" '
+    + 'onclick="event.stopPropagation();openBd(\'' + bid + '\')">' + p.score + '</span>'
     + '</div>'
     + '<div class="pstat">' + p.stat + '</div>'
-    + '<div class="bd open">' + (p.breakdown || 'No breakdown.') + '</div>'
+    + '<div class="bd" id="' + bid + '">' + (p.breakdown || 'No breakdown.') + '</div>'
     + '</div>';
 }}
 
@@ -1410,7 +1412,7 @@ function renderDealPick(side) {{
     + '<span class="rolelbl">In this deal</span>'
     + '<span class="rolecount">' + keys.length + '</span>'
     + '</div>';
-  var body = fold ? '' : keys.map(function(k) {{ return dealPlayerRow(picked[side][k]); }}).join('');
+  var body = fold ? '' : keys.map(function(k) {{ return dealPlayerRow(picked[side][k], side); }}).join('');
   box.innerHTML = hdr + body;
 }}
 
