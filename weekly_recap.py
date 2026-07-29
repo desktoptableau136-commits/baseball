@@ -10,9 +10,11 @@ Skip refresh:   python weekly_recap.py --no-refresh
 """
 
 import json
+import random
 import re
 import subprocess
 import sys
+import zlib
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -137,6 +139,33 @@ def _ordinal(n):
     n = int(n)
     sfx = {1: "st", 2: "nd", 3: "rd"}.get(n % 10 if n % 100 not in (11, 12, 13) else 0, "th")
     return f"{n}{sfx}"
+
+
+def _seeded_rng(*parts):
+    """Deterministic per-item RNG for narrative phrasing variety — seeded from stable
+    data (week number, player name, a tag) via crc32, NOT the built-in hash() (which is
+    salted per-process). Same inputs -> same pick every run, so scripts/render_diff.py's
+    byte-for-byte regression check stays meaningful (re-running against an unchanged
+    snapshot must produce an unchanged file)."""
+    seed = zlib.crc32("|".join(str(p) for p in parts).encode("utf-8", "ignore"))
+    return random.Random(seed)
+
+
+def _pick(rng, choices):
+    return choices[rng.randrange(len(choices))]
+
+
+def _recap_pitcher_rank_key(r):
+    """K-first ranking for the recap's 'best pitcher' picks (rostered/FA pitcher of the
+    week, Top Performers ordering). K count dominates completely; ERA/WHIP only break
+    ties among pitchers with the same K total. Deliberately NOT the shared
+    fantasy.scoring.pitcher_score model (which still weighs ERA+WHIP ~2:1 over K) —
+    scoped to this recap's narrative only, at the user's request: a higher-K week beats
+    a lower-ERA week here even if the shared digest score would rank them the other way."""
+    k    = _n(r.get("K") or r.get("SO"))
+    era  = _n(r.get("ERA"))
+    whip = _n(r.get("WHIP"))
+    return (-k, era if era > 0 else 99.0, whip if whip > 0 else 9.0)
 
 
 _MLB_ABBREV_ESPN = {
@@ -393,18 +422,26 @@ def build_lineup_efficiency(eff):
     return "".join(parts)
 
 
+def _dedup_matchup_pairs(all_prev_matchups):
+    """One entry per real matchup (a pair of teams), not one per team's own view of it —
+    all_prev_matchups has an entry keyed per TEAM, so without this every matchup would be
+    counted twice (once from each side). Shared by build_league_scoreboard and the
+    commissioner-story 'Matchup of the Week' drama callout."""
+    seen, pairs = set(), []
+    for matchup in (all_prev_matchups or {}).values():
+        pair = tuple(sorted([matchup.get("my_team", ""), matchup.get("opp_team", "")]))
+        if pair not in seen:
+            seen.add(pair)
+            pairs.append(matchup)
+    return pairs
+
+
 def build_league_scoreboard(all_prev_matchups, logos):
     """All 6 matchups with full 12-category breakdown, one card each."""
     if not all_prev_matchups:
         return ""
 
-    # De-duplicate: keep one entry per pair (sort team names to pick canonical side)
-    seen, pairs = set(), []
-    for matchup in all_prev_matchups.values():
-        pair = tuple(sorted([matchup.get("my_team", ""), matchup.get("opp_team", "")]))
-        if pair not in seen:
-            seen.add(pair)
-            pairs.append(matchup)
+    pairs = _dedup_matchup_pairs(all_prev_matchups)
 
     # Guerrero Warfare's matchup first, rest sorted alphabetically
     my_key = " ".join(MY_TEAM.split())
@@ -733,10 +770,6 @@ def build_top_performers(recent_hitting, recent_pitching, hitters, pitchers, log
     def _is_fa(ft):
         return not ft or ft in ("Free Agent", "FA")
 
-    def _era_key(r):
-        e = _n(r.get("ERA"))
-        return e if e > 0 else 99.0
-
     # Hitters: min 10 AB
     enriched_h = [_enrich_h(r) for r in recent_hitting if _n(r.get("AB")) >= 10]
     rostered_h = sorted([r for r in enriched_h if not _is_fa(r["FantasyTeam"])],
@@ -744,12 +777,13 @@ def build_top_performers(recent_hitting, recent_pitching, hitters, pitchers, log
     fa_h       = sorted([r for r in enriched_h if _is_fa(r["FantasyTeam"])],
                         key=lambda r: -_n(r.get("OPS")))[:5]
 
-    # Pitchers: min 8 IP
+    # Pitchers: min 8 IP. Ranked K-first (see _recap_pitcher_rank_key) — matches the
+    # recap's Pitcher/FA-Pitcher of the Week picks so this table never contradicts them.
     enriched_p = [_enrich_p(r) for r in recent_pitching if _n(r.get("IP")) >= 8]
     rostered_p = sorted([r for r in enriched_p if not _is_fa(r["FantasyTeam"])],
-                        key=_era_key)[:10]
+                        key=_recap_pitcher_rank_key)[:10]
     fa_p       = sorted([r for r in enriched_p if _is_fa(r["FantasyTeam"])],
-                        key=_era_key)[:5]
+                        key=_recap_pitcher_rank_key)[:5]
 
     HIT_KEYS   = ["OPS", "HR", "RBI", "R", "SB"]
     HIT_LABELS = ["OPS", "HR", "RBI", "R", "SB"]
@@ -763,7 +797,7 @@ def build_top_performers(recent_hitting, recent_pitching, hitters, pitchers, log
     # Rostered — hitters and pitchers side by side to cut scrolling.
     ros_left  = _performer_col("Rostered Hitters — by OPS",
                                _performer_table(rostered_h, HIT_KEYS, HIT_LABELS))
-    ros_right = _performer_col("Rostered Pitchers — by ERA",
+    ros_right = _performer_col("Rostered Pitchers — by K",
                                _performer_table(rostered_p, PIT_KEYS, PIT_LABELS))
     if ros_left or ros_right:
         out += _two_col(ros_left, ros_right)
@@ -841,10 +875,138 @@ def build_standings_section(roto_rows, standings, logos):
 
 # ── COMMISSIONER'S STORY ──────────────────────────────────────────────────────
 
+def _matchup_margin(m):
+    """Category-record spread for a matchup (0-12): how lopsided it was, win-count-wise."""
+    return abs(int(m.get("wins") or 0) - int(m.get("losses") or 0))
+
+
+def _standout_category(m, biggest=True):
+    """The category decided by the largest (biggest=True, for a blowout) or smallest
+    nonzero (biggest=False, for a nailbiter) margin in a matchup, respecting
+    lower-is-better cats. Returns (label, my_val, opp_val) or None if no categories."""
+    scored = []
+    for c in m.get("categories") or []:
+        my_v, opp_v = _n(c.get("my_val")), _n(c.get("opp_val"))
+        gap = (opp_v - my_v) if c.get("lower_better") else (my_v - opp_v)
+        scored.append((abs(gap), c, my_v, opp_v))
+    if not scored:
+        return None
+    if biggest:
+        _, c, my_v, opp_v = max(scored, key=lambda t: t[0])
+    else:
+        pool = [t for t in scored if t[0] > 0] or scored
+        _, c, my_v, opp_v = min(pool, key=lambda t: t[0])
+    return _CAT_DISPLAY.get(c["cat"], c["cat"]), my_v, opp_v
+
+
+def _position_scarcity_clause(pos, first, rng):
+    """Shared position-scarcity flavor line for a premium defensive spot (C/SS/2B) —
+    reused by both the Hitter of the Week and FA Batter of the Week paragraphs."""
+    pos_tokens = set(re.split(r"[/,\s]+", pos.upper())) if pos else set()
+    premium = pos_tokens & {"C", "SS", "2B"}
+    if not premium:
+        return ""
+    pname = sorted(premium)[0]
+    facts = {
+        "C":  ["Mike Piazza holds the career OPS record for catchers at .922",
+               "Elite catcher offense is historically rare — Piazza's .922 career OPS is still the standard"],
+        "SS": ["Derek Jeter's career OPS was .838, considered elite for the position",
+               "Shortstop bats like this are unusual — Jeter's .838 career mark was considered elite for the position"],
+        "2B": ["Jeff Kent's career .855 OPS is the gold standard for second basemen",
+               "Second base production like this is rare — Jeff Kent's .855 career OPS is still the position's gold standard"],
+    }
+    fact = _pick(rng, facts.get(pname, [f"Elite {pname} production is exceptionally rare"] * 2))
+    return f"  {fact} — {first}'s week clears that bar."
+
+
+def _pitcher_benchmark_clauses(era, g, k, first, rng):
+    """Shared ERA-tier + multi-start + K-tier commentary, reused by both the rostered
+    Pitcher of the Week and the FA Pitcher of the Week paragraphs so the two ladders
+    aren't maintained twice."""
+    out = ""
+    if era <= 0 or era > 20:
+        out += _pick(rng, [
+            f"  Dominant from start to finish — best pitching performance among rostered arms this week.",
+            f"  A clean, no-damage week on the mound — nothing else on a roster came close.",
+        ])
+    elif era <= 0.50:
+        out += _pick(rng, [
+            f"  For context: Dutch Leonard set the all-time single-season ERA record in 1914 at 0.96, "
+            f"and Bob Gibson's legendary 1968 season — the one that prompted MLB to lower the mound — "
+            f"came in at 1.12.  {first}'s week came in below both.",
+            f"  A sub-0.50 ERA is below even the two lowest single-season marks in MLB history "
+            f"(Dutch Leonard's 0.96 in 1914, Bob Gibson's 1.12 in 1968) — {first} beat both over a single week.",
+        ])
+    elif era <= 1.00:
+        out += _pick(rng, [
+            f"  Bob Gibson's 1968 season is considered the greatest pitching season of the modern era — "
+            f"he finished at 1.12 ERA, won the Cy Young and MVP, and literally changed the rules of baseball.  "
+            f"A sub-1.00 week for {first} puts him below even that bar.",
+            f"  Sub-1.00 ERA for a week sits below Bob Gibson's legendary 1.12 mark from 1968 — "
+            f"the season MLB responded to by lowering the pitcher's mound.",
+        ])
+    elif era <= 1.80:
+        out += _pick(rng, [
+            f"  Jacob deGrom's back-to-back Cy Young seasons came in at 1.70 ERA (2018) and 2.43 (2019) — "
+            f"considered among the most dominant pitching stretches of the modern era.  "
+            f"{first}'s {era:.2f} week puts him squarely in that company.",
+            f"  {first}'s {era:.2f} week lines up with peak Jacob deGrom — his two Cy Young seasons "
+            f"sat at 1.70 (2018) and 2.43 (2019).",
+        ])
+    elif era <= 3.00:
+        out += _pick(rng, [
+            f"  In the modern run-scoring era, a sub-3.00 ERA over a full season earns Cy Young votes — "
+            f"the league ERA has hovered around 4.00-4.50 for most of the past decade.  "
+            f"{first} cleared that bar this week.",
+            f"  A sub-3.00 week is Cy Young-caliber pace — league ERA has sat around 4.00-4.50 "
+            f"most of the past decade, and {first} beat it comfortably.",
+        ])
+    else:
+        out += _pick(rng, [
+            f"  Best ERA among rostered pitchers this week and a steady presence out of the rotation.",
+            f"  Not a historic number, but the best ratio line on any roster this week.",
+        ])
+
+    if g >= 2:
+        out += _pick(rng, [
+            f"  The two-start week is the gift fantasy managers spend all spring drafting around — "
+            f"{first} delivered on both ends.",
+            f"  Two starts, no letdown — exactly the volume-plus-quality week a two-start slot promises "
+            f"and rarely delivers.",
+        ])
+
+    if k >= 20:
+        out += _pick(rng, [
+            f"  {k} strikeouts in a single week.  Roger Clemens struck out 20 batters in one game "
+            f"(April 29, 1986 against the Mariners) — the single-game record.  "
+            f"{first} nearly matched it across the full week.",
+            f"  {k} K in a week approaches Roger Clemens' single-GAME record of 20 (April 29, 1986) — "
+            f"{first} did it across several starts instead of one, which is its own kind of ridiculous.",
+        ])
+    elif k >= 15:
+        out += _pick(rng, [
+            f"  Nolan Ryan struck out 383 batters in 1973 — the all-time single-season record.  "
+            f"Spread across a 26-week season, that works out to roughly 15 per week.  "
+            f"{first}'s {k} K are right on that historic pace.",
+            f"  {first}'s {k} K this week track almost exactly with Nolan Ryan's record 383-K pace "
+            f"from 1973 (about 15 a week over a full season).",
+        ])
+    elif k >= 10:
+        out += _pick(rng, [
+            f"  The {k} strikeouts are a meaningful fantasy bonus — "
+            f"for reference, Sandy Koufax averaged about 10 K per 9 innings across his peak years (1962-1966), "
+            f"a rate that defined dominant pitching for a generation.",
+            f"  {k} K is a real fantasy bonus on top of the ratios — right around Sandy Koufax's peak-years "
+            f"rate (roughly 10 per 9 IP, 1962-1966).",
+        ])
+    return out
+
+
 def build_commissioner_story(roto, prev_week, recent_hitting, recent_pitching,
                               hitters, pitchers, standings, logos,
-                              weekly_results=None, snap_year=2026):
-    """Weekly highlights: roto winner · hitter/pitcher/FA of the week."""
+                              weekly_results=None, snap_year=2026, all_prev_matchups=None):
+    """Weekly highlights: roto winner · hitter/pitcher/FA-batter/FA-pitcher of the week ·
+    league-wide Matchup of the Week drama callout."""
 
     # Enrichment lookups — mirror build_top_performers pattern
     h_exact, h_keyed = {}, {}
@@ -905,27 +1067,25 @@ def build_commissioner_story(roto, prev_week, recent_hitting, recent_pitching,
         winner_team  = best.get("Team", "")
         winner_score = float(best.get("Roto_Score") or 0)
 
-    # ── Hitter / Pitcher / FA of the week ────────────────────────────────────
-    def _era_key(r):
-        e = _n(r.get("ERA"))
-        return e if e > 0 else 99.0
-
+    # ── Hitter / Pitcher / FA-batter / FA-pitcher of the week ────────────────
     enriched_h = [_enrich_h(r) for r in recent_hitting  if _n(r.get("AB")) >= 10]
     enriched_p = [_enrich_p(r) for r in recent_pitching if _n(r.get("IP")) >=  8]
 
     rostered_h = sorted([r for r in enriched_h if not _is_fa(r["FantasyTeam"])],
                         key=lambda r: -_n(r.get("OPS")))
+    # K-first ranking (see _recap_pitcher_rank_key) — matches Top Performers so the
+    # recap never picks a different "best pitcher" in two places.
     rostered_p = sorted([r for r in enriched_p if not _is_fa(r["FantasyTeam"])],
-                        key=_era_key)
+                        key=_recap_pitcher_rank_key)
     fa_h       = sorted([r for r in enriched_h if  _is_fa(r["FantasyTeam"])],
                         key=lambda r: -_n(r.get("OPS")))
+    fa_p       = sorted([r for r in enriched_p if  _is_fa(r["FantasyTeam"])],
+                        key=_recap_pitcher_rank_key)
 
-    potw_hit = rostered_h[0] if rostered_h else None
-    potw_pit = rostered_p[0] if rostered_p else None
-    fa_potw  = fa_h[0]       if fa_h       else None
-
-    if not any([winner_team, potw_hit, potw_pit, fa_potw]):
-        return ""
+    potw_hit     = rostered_h[0] if rostered_h else None
+    potw_pit     = rostered_p[0] if rostered_p else None
+    fa_potw_bat  = fa_h[0]       if fa_h       else None
+    fa_potw_pit  = fa_p[0]       if fa_p       else None
 
     # ── Prose helpers ─────────────────────────────────────────────────────────
     def _b(text, color=None):
@@ -995,9 +1155,39 @@ def build_commissioner_story(roto, prev_week, recent_hitting, recent_pitching,
 
         stand_note = f", who sit at #{wstand} overall" if wstand else ""
         suffix = "  That's us!" if mine else ""
+        rng_ro = _seeded_rng(prev_week, winner_team, "roto_open")
 
-        sent = (f"Congrats to {_b(winner_team, wcolor)}{stand_note}, "
-                f"for winning Matchup {prev_week} with {_b(f'{winner_score:.1f}')} roto points.{suffix}")
+        sorted_week = sorted(week_rows, key=lambda r: -float(r.get("Roto_Score") or 0))
+        margin = None
+        if len(sorted_week) > 1:
+            margin = winner_score - float(sorted_week[1].get("Roto_Score") or 0)
+
+        if margin is not None and margin >= 8:
+            sent = _pick(rng_ro, [
+                f"Congrats to {_b(winner_team, wcolor)}{stand_note} for running away with "
+                f"Matchup {prev_week} — {_b(f'{winner_score:.1f}')} roto points, "
+                f"{margin:.1f} clear of 2nd place.{suffix}",
+                f"{_b(winner_team, wcolor)}{stand_note} didn't just win Matchup {prev_week}, "
+                f"they lapped the field: {_b(f'{winner_score:.1f}')} points, "
+                f"{margin:.1f} ahead of the runner-up.{suffix}",
+            ])
+        elif margin is not None and margin <= 2:
+            sent = _pick(rng_ro, [
+                f"Congrats to {_b(winner_team, wcolor)}{stand_note} for surviving Matchup "
+                f"{prev_week} by the thinnest of margins — {_b(f'{winner_score:.1f}')} roto "
+                f"points, just {margin:.1f} ahead of 2nd place.{suffix}",
+                f"{_b(winner_team, wcolor)}{stand_note} held on for the Matchup {prev_week} "
+                f"roto win, edging 2nd place by only {margin:.1f} point"
+                f"{'s' if margin != 1 else ''}.{suffix}",
+            ])
+        else:
+            sent = _pick(rng_ro, [
+                f"Congrats to {_b(winner_team, wcolor)}{stand_note}, "
+                f"for winning Matchup {prev_week} with {_b(f'{winner_score:.1f}')} roto points.{suffix}",
+                f"{_b(winner_team, wcolor)}{stand_note} took Matchup {prev_week} outright, "
+                f"posting {_b(f'{winner_score:.1f}')} roto points.{suffix}",
+            ])
+
         if led_cats:
             sent += (f"  They led the league in {', '.join(led_cats[:3])}"
                      + (" and more" if len(led_cats) > 3 else "") + " this week.")
@@ -1021,45 +1211,71 @@ def build_commissioner_story(roto, prev_week, recent_hitting, recent_pitching,
         pos_str  = f"{pos} " if pos else ""
         team_str = f" ({_b(ft, ACCENT if mine else MUTED)})" if ft else ""
 
+        rng_h = _seeded_rng(prev_week, name, "hit_potw")
+
         sent = f"The fantasy position player of the matchup was {pos_str}{_b(name, nc)}{team_str}."
         if slash and cnts:
             sent += f"  {first} slashed {_b(slash)} with {cnts}."
 
+        if len(rostered_h) > 1:
+            gap = ops - _n(rostered_h[1].get("OPS"))
+            if gap > 0:
+                sent += f"  That topped the next-best rostered OPS by {gap:.3f}."
+
         # Named benchmarks
         if ops >= 1.100:
-            sent += (f"  Barry Bonds holds the all-time single-season OPS record at 1.422 (2004) — "
-                     f"his four-year run from 2001-2004 averaged 1.368.  A {_fmt_ops(ops)} week "
-                     f"puts {first} in that same area code, at least for seven days.")
+            sent += _pick(rng_h, [
+                f"  Barry Bonds holds the all-time single-season OPS record at 1.422 (2004) — "
+                f"his four-year run from 2001-2004 averaged 1.368.  A {_fmt_ops(ops)} week "
+                f"puts {first} in that same area code, at least for seven days.",
+                f"  A {_fmt_ops(ops)} week lands in Barry Bonds' territory — his all-time-record "
+                f"1.422 OPS season (2004) came off a four-year run that averaged 1.368.",
+            ])
         elif ops >= 1.000:
-            sent += (f"  Babe Ruth's career OPS of 1.164 is the highest in baseball history.  "
-                     f"A 1.000+ OPS over a full season has happened fewer than 50 times ever — "
-                     f"{first} did it in a week.")
+            sent += _pick(rng_h, [
+                f"  Babe Ruth's career OPS of 1.164 is the highest in baseball history.  "
+                f"A 1.000+ OPS over a full season has happened fewer than 50 times ever — "
+                f"{first} did it in a week.",
+                f"  A 1.000+ OPS over a full season has happened fewer than 50 times in "
+                f"MLB history — {first} matched that bar for a single week.",
+            ])
         elif ops >= 0.950:
-            sent += (f"  Shohei Ohtani's 2021 AL MVP season ended at .965 OPS — "
-                     f"one of the best marks in the game over a full year.  "
-                     f"{first}'s {_fmt_ops(ops)} week lands right in that territory.")
+            sent += _pick(rng_h, [
+                f"  Shohei Ohtani's 2021 AL MVP season ended at .965 OPS — "
+                f"one of the best marks in the game over a full year.  "
+                f"{first}'s {_fmt_ops(ops)} week lands right in that territory.",
+                f"  {first}'s {_fmt_ops(ops)} week sits right alongside Shohei Ohtani's .965 "
+                f"OPS from his unanimous 2021 AL MVP season.",
+            ])
         elif ops >= 0.900:
-            sent += (f"  A .900 OPS over a full season is All-Star caliber at almost any position — "
-                     f"Mike Trout's career mark is .994.  {first} cleared the bar for the week.")
+            sent += _pick(rng_h, [
+                f"  A .900 OPS over a full season is All-Star caliber at almost any position — "
+                f"Mike Trout's career mark is .994.  {first} cleared the bar for the week.",
+                f"  {first} cleared .900 OPS for the week — full-season All-Star territory "
+                f"(Mike Trout's career mark sits at .994).",
+            ])
         else:
-            sent += f"  {first} led all rostered hitters in OPS and delivered at the right time."
+            sent += _pick(rng_h, [
+                f"  {first} led all rostered hitters in OPS and delivered at the right time.",
+                f"  Not a historic number, but the best line on any roster this week — "
+                f"and it came at the right time.",
+            ])
 
-        # Position scarcity
-        pos_tokens = set(re.split(r"[/,\s]+", pos.upper())) if pos else set()
-        premium = pos_tokens & {"C", "SS", "2B"}
-        if premium:
-            pname = sorted(premium)[0]
-            facts = {"C": "Mike Piazza holds the career OPS record for catchers at .922",
-                     "SS": "Derek Jeter's career OPS was .838, considered elite for the position",
-                     "2B": "Jeff Kent's career .855 OPS is the gold standard for second basemen"}
-            sent += f"  {facts.get(pname, f'Elite {pname} production is exceptionally rare')} — {first}'s week clears that bar."
+        sent += _position_scarcity_clause(pos, first, rng_h)
 
         # HR note
         if hr >= 4:
-            sent += (f"  The {hr} home runs alone would be a productive week for most hitters — "
-                     f"{first} treated them as a side dish.")
+            sent += _pick(rng_h, [
+                f"  The {hr} home runs alone would be a productive week for most hitters — "
+                f"{first} treated them as a side dish.",
+                f"  {hr} homers in a week is a full month's power output for most hitters, "
+                f"packed into seven days.",
+            ])
         elif hr >= 2:
-            sent += f"  The {hr} HR added a power bonus on top of an already elite slash line."
+            sent += _pick(rng_h, [
+                f"  The {hr} HR added a power bonus on top of an already elite slash line.",
+                f"  {hr} HR on top of that slash line is the kind of week that swings a category.",
+            ])
         paras.append(sent)
 
     # Pitcher of the week
@@ -1094,51 +1310,19 @@ def build_commissioner_story(roto, prev_week, recent_hitting, recent_pitching,
         sent = f"The fantasy pitcher of the matchup was {_b(name, nc)}{team_str}.  {g_str}{first} posted{ratio}"
         sent += f" across {', '.join(stats)}." if stats else "."
 
-        # Named ERA benchmarks
-        if era <= 0 or era > 20:
-            sent += f"  Dominant from start to finish — best pitching performance among rostered arms this week."
-        elif era <= 0.50:
-            sent += (f"  For context: Dutch Leonard set the all-time single-season ERA record in 1914 at 0.96, "
-                     f"and Bob Gibson's legendary 1968 season — the one that prompted MLB to lower the mound — "
-                     f"came in at 1.12.  {first}'s week came in below both.")
-        elif era <= 1.00:
-            sent += (f"  Bob Gibson's 1968 season is considered the greatest pitching season of the modern era — "
-                     f"he finished at 1.12 ERA, won the Cy Young and MVP, and literally changed the rules of baseball.  "
-                     f"A sub-1.00 week for {first} puts him below even that bar.")
-        elif era <= 1.80:
-            sent += (f"  Jacob deGrom's back-to-back Cy Young seasons came in at 1.70 ERA (2018) and 2.43 (2019) — "
-                     f"considered among the most dominant pitching stretches of the modern era.  "
-                     f"{first}'s {era:.2f} week puts him squarely in that company.")
-        elif era <= 3.00:
-            sent += (f"  In the modern run-scoring era, a sub-3.00 ERA over a full season earns Cy Young votes — "
-                     f"the league ERA has hovered around 4.00-4.50 for most of the past decade.  "
-                     f"{first} cleared that bar this week.")
-        else:
-            sent += f"  Best ERA among rostered pitchers this week and a steady presence out of the rotation."
+        if len(rostered_p) > 1:
+            k_gap = k - int(_n(rostered_p[1].get("K") or rostered_p[1].get("SO") or 0))
+            if k_gap > 0:
+                sent += (f"  That was {k_gap} more strikeout{'s' if k_gap != 1 else ''} than "
+                         f"the next-best rostered arm this week.")
 
-        # Multi-start bonus
-        if g >= 2:
-            sent += (f"  The two-start week is the gift fantasy managers spend all spring drafting around — "
-                     f"{first} delivered on both ends.")
-
-        # Named K benchmarks
-        if k >= 20:
-            sent += (f"  {k} strikeouts in a single week.  Roger Clemens struck out 20 batters in one game "
-                     f"(April 29, 1986 against the Mariners) — the single-game record.  "
-                     f"{first} nearly matched it across the full week.")
-        elif k >= 15:
-            sent += (f"  Nolan Ryan struck out 383 batters in 1973 — the all-time single-season record.  "
-                     f"Spread across a 26-week season, that works out to roughly 15 per week.  "
-                     f"{first}'s {k} K are right on that historic pace.")
-        elif k >= 10:
-            sent += (f"  The {k} strikeouts are a meaningful fantasy bonus — "
-                     f"for reference, Sandy Koufax averaged about 10 K per 9 innings across his peak years (1962-1966), "
-                     f"a rate that defined dominant pitching for a generation.")
+        rng_p = _seeded_rng(prev_week, name, "pit_potw")
+        sent += _pitcher_benchmark_clauses(era, g, k, first, rng_p)
         paras.append(sent)
 
-    # Best available FA
-    if fa_potw:
-        h     = fa_potw
+    # Best available FA — batter
+    if fa_potw_bat:
+        h     = fa_potw_bat
         name  = h.get("PlayerName", "")
         pos   = h.get("Position", "")
         slash = _slash(h)
@@ -1146,28 +1330,121 @@ def build_commissioner_story(roto, prev_week, recent_hitting, recent_pitching,
         ops   = _n(h.get("OPS"))
         first = name.split()[0]
         pos_str = f"{pos} " if pos else ""
+        rng_fah = _seeded_rng(prev_week, name, "fa_bat")
 
-        sent = f"The top available player of the matchup was {pos_str}{_b(name)}."
+        sent = f"The top available bat of the matchup was {pos_str}{_b(name)}."
         if slash and cnts:
             sent += f"  {first} slashed {_b(slash)} with {cnts}."
 
         if ops >= 0.950:
-            sent += (f"  A {_fmt_ops(ops)} OPS from a waiver wire pickup is an indictment of every manager "
-                     f"who passed.  If {first} is still available in your league, this is a mandatory add.")
+            sent += _pick(rng_fah, [
+                f"  A {_fmt_ops(ops)} OPS out of the free-agent pool is a genuine outlier — "
+                f"if {first} is still there, that's as close to a free win as this league offers.",
+                f"  That kind of production sitting unclaimed almost never happens — "
+                f"{first} is worth a look before someone else notices.",
+            ])
         elif ops >= 0.900:
-            sent += (f"  Posting .900+ OPS while sitting unclaimed is the kind of thing that haunts managers "
-                     f"at the end of the season.  Check availability now.")
+            sent += _pick(rng_fah, [
+                f"  A .900+ OPS from a free agent is a real find — worth checking availability now.",
+                f"  Production like that rarely lasts long on the wire — {first} is worth a claim "
+                f"while he's still out there.",
+            ])
         elif ops >= 0.800:
-            sent += (f"  Solid production for a player still available — the kind of depth piece that "
-                     f"separates playoff teams from the bubble.")
+            sent += _pick(rng_fah, [
+                f"  Solid production for a player still available — the kind of depth piece that "
+                f"separates playoff teams from the bubble.",
+                f"  A dependable line for a free agent — the kind of depth add that matters over "
+                f"a full season.",
+            ])
         else:
-            sent += f"  Top available bat this week — if the roster spot is there, {first} is the call."
+            sent += _pick(rng_fah, [
+                f"  Top available bat this week — if the roster spot is there, {first} is the call.",
+                f"  Best of a thin free-agent week — worth a look if there's a bench spot open.",
+            ])
 
-        pos_tokens = set(re.split(r"[/,\s]+", pos.upper())) if pos else set()
-        if pos_tokens & {"C", "SS", "2B"}:
-            pname = sorted(pos_tokens & {"C", "SS", "2B"})[0]
-            sent += f"  {pname} production at this level on the wire almost never happens — don't sleep on it."
+        sent += _position_scarcity_clause(pos, first, rng_fah)
         paras.append(sent)
+
+    # Best available FA — pitcher
+    if fa_potw_pit:
+        p     = fa_potw_pit
+        name  = p.get("PlayerName", "")
+        era   = _n(p.get("ERA"))
+        whip  = _n(p.get("WHIP"))
+        ip    = _n(p.get("IP"))
+        g     = int(_n(p.get("G")))
+        k     = int(_n(p.get("SO") or p.get("K") or 0))
+        first = name.split()[0]
+        g_str = f"In {g} appearance{'s' if g != 1 else ''}, " if g else ""
+
+        stats = []
+        if ip: stats.append(f"{ip:.1f} IP")
+        if k:  stats.append(f"{k} K")
+        ratio = ""
+        if era > 0 and whip > 0:
+            ratio = f" a {_b(f'{era:.2f}')} ERA and {_b(f'{whip:.2f}')} WHIP"
+        elif era > 0:
+            ratio = f" a {_b(f'{era:.2f}')} ERA"
+
+        sent = f"The top available arm of the matchup was {_b(name)}.  {g_str}{first} posted{ratio}"
+        sent += f" across {', '.join(stats)}." if stats else "."
+
+        rng_fap = _seeded_rng(prev_week, name, "fa_pit")
+        sent += _pitcher_benchmark_clauses(era, g, k, first, rng_fap)
+        sent += _pick(rng_fap, [
+            "  Still sitting on the wire — a rare find for a bare pitching staff.",
+            "  A line like that shouldn't stay unclaimed long — worth a streaming look.",
+        ])
+        paras.append(sent)
+
+    # ── Matchup of the Week (league-wide drama) ──────────────────────────────
+    matchup_pairs = _dedup_matchup_pairs(all_prev_matchups)
+    if matchup_pairs:
+        blowout_m = max(matchup_pairs, key=_matchup_margin)
+        closest_m = min(matchup_pairs, key=_matchup_margin)
+        rng_mw = _seeded_rng(prev_week, "matchup_of_week")
+        mw_sents = []
+
+        if _matchup_margin(blowout_m) >= 6:
+            bw, bl = int(blowout_m.get("wins") or 0), int(blowout_m.get("losses") or 0)
+            b_winner = blowout_m.get("my_team", "") if bw > bl else blowout_m.get("opp_team", "")
+            b_loser  = blowout_m.get("opp_team", "") if bw > bl else blowout_m.get("my_team", "")
+            b_score  = f"{max(bw, bl)}-{min(bw, bl)}"
+            cat_str = ""
+            standout = _standout_category(blowout_m, biggest=True)
+            if standout:
+                label, my_v, opp_v = standout
+                winner_is_my = (b_winner == blowout_m.get("my_team", ""))
+                w_val, l_val = (my_v, opp_v) if winner_is_my else (opp_v, my_v)
+                cat_str = f", including a {_fmt_cat(w_val, label)}-{_fmt_cat(l_val, label)} gap in {label}"
+            mw_sents.append(_pick(rng_mw, [
+                f"Matchup of the Week goes to the wreckage: {_b(b_winner)} demolished "
+                f"{_b(b_loser)} {b_score} in categories{cat_str}.",
+                f"No contest this week — {_b(b_winner)} ran over {_b(b_loser)} {b_score}{cat_str}.",
+            ]))
+
+        if _matchup_margin(closest_m) <= 1 and closest_m is not blowout_m:
+            cw, cl = int(closest_m.get("wins") or 0), int(closest_m.get("losses") or 0)
+            ct = int(closest_m.get("ties") or 0)
+            c_a, c_b = closest_m.get("my_team", ""), closest_m.get("opp_team", "")
+            score_str = f"{cw}-{cl}" + (f"-{ct}" if ct else "")
+            cat_str = ""
+            standout = _standout_category(closest_m, biggest=False)
+            if standout:
+                label, my_v, opp_v = standout
+                cat_str = f" — {label} came down to {_fmt_cat(my_v, label)} vs {_fmt_cat(opp_v, label)}"
+            mw_sents.append(_pick(rng_mw, [
+                f"The closest matchup of the week was {_b(c_a)} vs {_b(c_b)}, "
+                f"decided {score_str}{cat_str}.",
+                f"{_b(c_a)} and {_b(c_b)} went down to the wire, splitting categories "
+                f"{score_str}{cat_str}.",
+            ]))
+
+        if mw_sents:
+            paras.append("  ".join(mw_sents))
+
+    if not paras:
+        return ""
 
     # ── Sidebar stat cards ────────────────────────────────────────────────────
     def _card(label, label_color, name, logo, stat_lines):
@@ -1244,8 +1521,8 @@ def build_commissioner_story(roto, prev_week, recent_hitting, recent_pitching,
         sidebar_cards.append(_card("Pitcher of the Matchup", ACCENT,
                                    name + _mlb_logo(mlb), logo, stat_lines))
 
-    if fa_potw:
-        h     = fa_potw
+    if fa_potw_bat:
+        h     = fa_potw_bat
         name  = h.get("PlayerName", "")
         mlb   = h.get("MLBTeam", "")
         slash = _slash(h)
@@ -1256,7 +1533,24 @@ def build_commissioner_story(roto, prev_week, recent_hitting, recent_pitching,
         stat_lines = []
         if slash: stat_lines.append(slash)
         if cnts_parts: stat_lines.append(" \xb7 ".join(cnts_parts))
-        sidebar_cards.append(_card("Best Available", YELLOW,
+        sidebar_cards.append(_card("Best Available Bat", YELLOW,
+                                   name + _mlb_logo(mlb), "", stat_lines))
+
+    if fa_potw_pit:
+        p     = fa_potw_pit
+        name  = p.get("PlayerName", "")
+        mlb   = p.get("MLBTeam", "")
+        era   = _n(p.get("ERA"))
+        whip  = _n(p.get("WHIP"))
+        ip    = _n(p.get("IP"))
+        k     = int(_n(p.get("K") or p.get("SO") or 0))
+        stat_lines = []
+        if era > 0 and whip > 0:
+            stat_lines.append(f"{era:.2f} ERA \xb7 {whip:.2f} WHIP")
+        ip_line = f"{ip:.1f} IP" if ip else ""
+        if k: ip_line += f" \xb7 {k} K"
+        if ip_line: stat_lines.append(ip_line)
+        sidebar_cards.append(_card("Best Available Arm", YELLOW,
                                    name + _mlb_logo(mlb), "", stat_lines))
 
     # ── Assemble two-column layout ────────────────────────────────────────────
@@ -1278,7 +1572,7 @@ def build_commissioner_story(roto, prev_week, recent_hitting, recent_pitching,
     return (
         anchor +
         section_head(f"Matchup {prev_week} Highlights",
-                     "Roto winner \xb7 player of the matchup \xb7 best available") +
+                     "Roto winner \xb7 player of the matchup \xb7 best available bat/arm \xb7 matchup of the week") +
         f'<div style="background:{SURFACE};border-left:3px solid {YELLOW}88;'
         f'border-radius:0 6px 6px 0;padding:14px 20px;margin-bottom:6px;">'
         f'<table style="width:100%;border-collapse:collapse;"><tr>'
@@ -1383,6 +1677,7 @@ def build_recap(snap):
             roto, prev_week, prev_week_hitting, prev_week_pitching,
             hitters, pitchers, standings, logos,
             weekly_results=weekly_results, snap_year=snap_year,
+            all_prev_matchups=all_prev,
         ),
         _sec_anchor,
         build_my_matchup(prev_matchup, logos),
