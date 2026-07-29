@@ -994,13 +994,16 @@ def _swing_cat_chip(cat, before, after):
             f'style="display:inline-block;font-size:11px;font-weight:700;color:{col};'
             f'vertical-align:middle;">&#8593;{lbl}</span>')
 
-def _cats_cell(row, pctile, cats, need_cats, swing=None, td_style=None):
+def _cats_cell(row, pctile, cats, need_cats, swing=None, td_style=None, wrap=False):
     """<td> of category chips a FA helps. Season-strength cats render neutral (SILVER); when
     a `swing` tuple (cat, before, after) is present that category leads as a highlighted
     _swing_cat_chip (the one contested cat his pickup most moves) — deduped against the
     strength list, and shown even when it isn't itself a season strength. Full odds live in
     the score-dropdown breakdown (_winprob_context). `td_style` overrides the cell style so
-    the compacted FA-SP table can pass its tighter `_tdc`."""
+    the compacted FA-SP table can pass its tighter `_tdc`. `wrap=True` drops the default
+    `white-space:nowrap` — needed once a table gives this column a fixed/capped width (nowrap
+    + a narrow fixed column just forces the browser to blow the column back out to fit the
+    text, squeezing every column beside it; see the FA Hitters colgroup)."""
     tds = td_style or TDC
     strong = player_cat_strengths(row, pctile, cats, need_cats)
     swing_cat = swing[0] if swing else None
@@ -1014,7 +1017,8 @@ def _cats_cell(row, pctile, cats, need_cats, swing=None, td_style=None):
     if not chips:
         return f'<td style="{tds}color:{MUTED};">—</td>'
     inner = '<span style="color:#334155;"> · </span>'.join(chips)
-    return f'<td style="{tds}white-space:nowrap;">{inner}</td>'
+    ws = "" if wrap else "white-space:nowrap;"
+    return f'<td style="{tds}{ws}">{inner}</td>'
 
 # ── TRADE RADAR ───────────────────────────────────────────────────────────────
 # Cross-team trade finder tilted to MY advantage. The rival accepts because the deal
@@ -4825,14 +4829,27 @@ def build_email(snap, override_team=None):
                 f'<td style="{TDC}">{v(r.get("SB"), 0)}</td>'
                 f'<td style="{TDC}">{v(r.get("OPS"), 3)}</td>'
                 f'<td style="{TDC}">{_hrp_cell(r)}</td>'
-                f'{_cats_cell(r, hit_pctile, _FA_HIT_CATS, need_cats, swing=_wd_hit)}'
+                f'{_cats_cell(r, hit_pctile, _FA_HIT_CATS, need_cats, swing=_wd_hit, wrap=True)}'
                 + recent_form_cell(r, "hit", best_recent_h) +
                 f'<td style="{TDC}">{_cell}</td>'
                 f'</tr>'
                 f'{_bdrow}'
             )
+        # Fixed layout + colgroup: without it, the Cats cell's nowrap chip text (up to 3
+        # chips, e.g. "↑HR · RBI · OPS") forces the browser to blow that column out wide in
+        # auto layout, squeezing Hitter/Pos narrow. Hitter gets the lion's share; Cats gets a
+        # capped width and wraps (`_cats_cell(..., wrap=True)`) instead of forcing overflow.
+        _fa_hit_colgroup = (
+            '<colgroup>'
+            '<col style="width:22%;"><col style="width:5%;"><col style="width:5%;">'
+            '<col style="width:5%;"><col style="width:5%;"><col style="width:5%;">'
+            '<col style="width:6%;"><col style="width:6%;"><col style="width:15%;">'
+            '<col style="width:12%;"><col style="width:6%;"><col style="width:8%;">'
+            '</colgroup>'
+        )
         table = (
-            f'<table style="width:100%;border-collapse:collapse;margin-bottom:0;font-size:13px;">'
+            f'<table style="width:100%;border-collapse:collapse;margin-bottom:0;font-size:13px;table-layout:fixed;">'
+            f'{_fa_hit_colgroup}'
             f'<thead><tr>'
             f'<th style="{TH_S}">Hitter</th>'
             f'<th style="{TH_S}text-align:center;">Pos</th>'
