@@ -3342,17 +3342,52 @@ def prepare_scoring(pitchers, hitters):
     compute_position_scarcity(hitters, hit_pctile)   # positional-scarcity scale → _POS_SCARCITY (hitter _tval)
     return hit_pctile, pit_pctile
 
+def _rekey_to_canonical(rows, canon_rows):
+    """Re-key a recent-stats pull (e.g. FanGraphs `recent_hitting`/`recent_pitching`, which
+    has its own name spelling) so a player is ALSO reachable under the CANONICAL PlayerName
+    spelling used everywhere else (from `canon_rows` — the hitters/pitchers pool, FantasyPros
+    format) when the two names differ only by accent/suffix/punctuation (_name_key). Exact
+    forms are always kept; the fallback only ADDS a canonical-name entry, never overwrites
+    one. Same exact-match-first, single-mapping-only safety invariant as
+    fetch_data.merge_on_name — a key is trusted only when it maps to exactly one player on
+    BOTH sides, so real name-twins (e.g. the several MLB "Luis Garcia"s) are never guessed."""
+    out = {r["PlayerName"]: r for r in rows if r.get("PlayerName")}
+    left_keys, right_keys = {}, {}
+    for r in rows:
+        nm = r.get("PlayerName")
+        if nm:
+            left_keys.setdefault(_name_key(nm), set()).add(nm)
+    for r in canon_rows:
+        nm = r.get("PlayerName")
+        if nm:
+            right_keys.setdefault(_name_key(nm), set()).add(nm)
+    for k, left_names in left_keys.items():
+        if not k or len(left_names) != 1:
+            continue                                   # ambiguous on the recent-stats side
+        right_names = right_keys.get(k)
+        if not right_names or len(right_names) != 1:
+            continue                                   # missing/ambiguous on the canonical side
+        canon_nm = next(iter(right_names))
+        if canon_nm not in out:
+            out[canon_nm] = out[next(iter(left_names))]
+    return out
+
+
 def build_recent_indexes(pitchers, hitters, recent_pitching, recent_hitting):
     """Per-window name→row indexes plus the best-available-recent cascade.
     Returns a dict with p7/p15/p30, h7/h15/h30 (FantasyPros short windows),
     rec_p/rec_h (pybaseball Baseball Ref recents), and best_recent_p/best_recent_h
     (30d > 15d > 7d > Baseball Ref — later dicts win in the merge). Baseball Ref
-    pitcher rows get the K/IP + IP_per_G fields pitcher_score expects."""
+    pitcher rows get the K/IP + IP_per_G fields pitcher_score expects. rec_h/rec_p are
+    re-keyed onto the canonical PlayerName spelling (`_rekey_to_canonical`) — otherwise a
+    player whose FanGraphs-sourced name differs from FantasyPros' by an accent/suffix
+    silently can't be found by any downstream `idx_recent.get(row["PlayerName"])` lookup,
+    even though the recent-window data for him actually exists."""
     def _idx(rows, ds):
         return {r["PlayerName"]: r for r in rows
                 if int(r.get("Dataset", 0) or 0) == ds and r.get("PlayerName")}
-    rec_h = {r["PlayerName"]: r for r in recent_hitting  if r.get("PlayerName")}
-    rec_p = {r["PlayerName"]: r for r in recent_pitching if r.get("PlayerName")}
+    rec_h = _rekey_to_canonical(recent_hitting,  hitters)
+    rec_p = _rekey_to_canonical(recent_pitching, pitchers)
     rec_p_fp = {}
     for name, r in rec_p.items():
         ip = _n(r.get("IP")); k = _n(r.get("K")); g = _n(r.get("G"))
