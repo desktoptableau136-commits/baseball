@@ -697,6 +697,19 @@ def hitter_recency_flag(season_row, recent_row):
     return "noise"
 
 
+def _rec_avg_slg_str(recent_row):
+    """Format a hitter's RAW recent-window AVG/SLG for a confirmation-arrow (↗/↘) tooltip, or
+    '' when unavailable. The confirmation prose says a hot/cold stretch is 'already showing up
+    in recent games' but names only the season xBA/xSLG anchor -- this surfaces the actual
+    recent number that's beating (or missing) it, since that's the whole point of the arrow."""
+    if not recent_row:
+        return ""
+    avg, slg = _n(recent_row.get("AVG")), _n(recent_row.get("SLG"))
+    if avg <= 0 or slg <= 0:
+        return ""
+    return f"recent AVG {avg:.3f}/SLG {slg:.3f}"
+
+
 def blowup_risk(r, recent_era=None):
     """0-100 skill-based blowup (disaster-start) risk for a starter — higher = lower floor.
     Combines baserunner traffic (WHIP), strikeout escape hatch (K%/whiff), effective run
@@ -805,6 +818,18 @@ _CONFIRM_UP   = "&#8599;"  # ↗ suffix when the recency flag == 'improving'; ST
 _CONFIRM_DOWN = "&#8600;"  # ↘ suffix on a solid ▼ when the recency flag == 'declining'; STANDALONE same idea.
 
 
+def _rec_era_str(recent_row):
+    """Format a pitcher's RAW recent-window ERA for a confirmation-arrow (↗/↘) tooltip, or ''
+    when unavailable. Pitcher analog of _rec_avg_slg_str -- the actual recent number the
+    confirmation prose refers to but doesn't name."""
+    if not recent_row:
+        return ""
+    era = _n(recent_row.get("ERA"))
+    if era <= 0:
+        return ""
+    return f"recent ERA {era:.2f}"
+
+
 _PIT_RECENCY_MIN_IP   = 8     # min recent IP so a pitcher ERA read isn't 1-2 shaky starts of
                               # noise (IP analog of _HIT_RECENCY_MIN_AB)
 _PIT_RECENCY_PRIOR_IP = 25.0  # recent-IP shrinkage strength toward season xERA when checking
@@ -894,25 +919,30 @@ def pitcher_regression_badge(row, idx_recent=None):
         xera = _n(row.get("xERA"))
         if xera <= 0:
             return ""
+        rec_s = _rec_era_str(rec)
         if rflag == "improving":
             return _hit_badge(_CONFIRM_UP, GREEN,
-                               f"Recent games already trending better than his season {xera:.2f} xERA "
-                               "&mdash; before it's shown up enough in his season ERA to trip a "
-                               "season-level buy signal. Early skill-trend read, not yet a season call.")
+                               f"Recent games already trending better than his season {xera:.2f} xERA"
+                               + (f" ({rec_s})" if rec_s else "") + " &mdash; before it's shown up enough "
+                               "in his season ERA to trip a season-level buy signal. Early skill-trend "
+                               "read, not yet a season call.")
         if rflag == "declining":
             return _hit_badge(_CONFIRM_DOWN, RED,
-                               f"Recent games already trending worse than his season {xera:.2f} xERA "
-                               "&mdash; before it's shown up enough in his season ERA to trip a "
-                               "season-level sell signal. Early skill-trend read, not yet a season call.")
+                               f"Recent games already trending worse than his season {xera:.2f} xERA"
+                               + (f" ({rec_s})" if rec_s else "") + " &mdash; before it's shown up enough "
+                               "in his season ERA to trip a season-level sell signal. Early skill-trend "
+                               "read, not yet a season call.")
         return ""
     era, xera = _n(row.get("ERA")), _n(row.get("xERA"))
     gap = f"ERA {era:.2f} vs xERA {xera:.2f}"
     if flag == "buy":
         return _hit_badge("$", GREEN, gap + " &mdash; ERA above expected, positive regression likely (buy-low)")
     if rflag == "declining":
+        rec_s = _rec_era_str(rec)
         return _hit_badge("&#9660;" + _CONFIRM_DOWN, RED,
-                           gap + " &mdash; confirmed: already worsening in his recent games, "
-                                 "not just a season-level prediction. Regression risk (sell-high).")
+                           gap + " &mdash; confirmed: already worsening in his recent games"
+                           + (f" ({rec_s})" if rec_s else "") + ", not just a season-level prediction. "
+                           "Regression risk (sell-high).")
     tail = (" Heads up: his recent games are trending the OTHER way (improving) &mdash; worth watching."
             if rflag == "improving" else "")
     return _hit_badge("&#9661;", RED, gap + " &mdash; ERA below expected, regression risk (sell-high)." + tail)

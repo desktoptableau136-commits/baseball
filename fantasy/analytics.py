@@ -390,11 +390,13 @@ def _hit_badge_context(row, hit_pctile=None, cap=None, idx_recent=None):
         gap = f'xBA {xba:.3f} vs AVG {avg:.3f}, xSLG {xslg:.3f} vs SLG {slg:.3f}'
         _rec = idx_recent.get(row.get("PlayerName", "")) if idx_recent else None
         _rflag = hitter_recency_flag(row, _rec) if _rec else None
+        _recs = _rec_avg_slg_str(_rec)
         if d_ba >= _XREG_BA and d_slg >= _XREG_SLG:
             confirmed = _rflag == "improving"
             contradicted = _rflag == "declining"
             badge_txt = "$" + _CONFIRM_UP if confirmed else "$"
-            tail = (" Confirmed by his recent games, not just predicted." if confirmed
+            tail = ((f" Confirmed by his recent games ({_recs}), not just predicted." if _recs
+                      else " Confirmed by his recent games, not just predicted.") if confirmed
                      else " Heads up: his recent games are trending the OTHER way (cooling) &mdash; worth watching." if contradicted
                      else "")
             lines.append(f'{_hit_badge(badge_txt, GREEN)} under his Statcast expected stats ({gap}) '
@@ -403,21 +405,24 @@ def _hit_badge_context(row, hit_pctile=None, cap=None, idx_recent=None):
             confirmed = _rflag == "declining"
             contradicted = _rflag == "improving"
             badge_txt = "&#9660;" + _CONFIRM_DOWN if confirmed else "&#9661;"
-            tail = (" Confirmed by his recent games, not just predicted." if confirmed
+            tail = ((f" Confirmed by his recent games ({_recs}), not just predicted." if _recs
+                      else " Confirmed by his recent games, not just predicted.") if confirmed
                      else " Heads up: his recent games are trending the OTHER way (heating up) &mdash; worth watching." if contradicted
                      else "")
             lines.append(f'{_hit_badge(badge_txt, RED)} over his Statcast expected stats ({gap}) '
                          f'&mdash; regression risk (sell-high).{tail}')
         elif _rflag == "improving":
-            lines.append(f'{_hit_badge(_CONFIRM_UP, GREEN)} trending up in recent games vs his own season '
-                         f'expected stats (xBA {xba:.3f}/xSLG {xslg:.3f}) &mdash; before it&rsquo;s shown up '
-                         f'enough in his season totals to trip a season-level buy signal. Early skill-trend '
-                         f'read, not yet a season call.')
+            lines.append(f'{_hit_badge(_CONFIRM_UP, GREEN)} trending up in recent games'
+                         + (f' ({_recs})' if _recs else '') +
+                         f' vs his own season expected stats (xBA {xba:.3f}/xSLG {xslg:.3f}) &mdash; before '
+                         f'it&rsquo;s shown up enough in his season totals to trip a season-level buy signal. '
+                         f'Early skill-trend read, not yet a season call.')
         elif _rflag == "declining":
-            lines.append(f'{_hit_badge(_CONFIRM_DOWN, RED)} trending down in recent games vs his own season '
-                         f'expected stats (xBA {xba:.3f}/xSLG {xslg:.3f}) &mdash; before it&rsquo;s shown up '
-                         f'enough in his season totals to trip a season-level sell signal. Early skill-trend '
-                         f'read, not yet a season call.')
+            lines.append(f'{_hit_badge(_CONFIRM_DOWN, RED)} trending down in recent games'
+                         + (f' ({_recs})' if _recs else '') +
+                         f' vs his own season expected stats (xBA {xba:.3f}/xSLG {xslg:.3f}) &mdash; before '
+                         f'it&rsquo;s shown up enough in his season totals to trip a season-level sell signal. '
+                         f'Early skill-trend read, not yet a season call.')
     return _badge_ctx_wrap(lines[:cap])
 
 
@@ -458,10 +463,12 @@ def hitter_badges(row, hit_pctile=None, cap=None, regression=True, idx_recent=No
             _rt = f"xBA {xba:.3f} vs AVG {avg:.3f} · xSLG {xslg:.3f} vs SLG {slg:.3f}"
             _rec = idx_recent.get(row.get("PlayerName", "")) if idx_recent else None
             _rflag = hitter_recency_flag(row, _rec) if _rec else None
+            _recs = _rec_avg_slg_str(_rec)
             if d_ba >= _XREG_BA and d_slg >= _XREG_SLG:
                 if _rflag == "improving":
                     badges.append(_hit_badge("$" + _CONFIRM_UP, GREEN,
-                        _rt + " &mdash; confirmed: already trending up in recent games, not just a season-level prediction"))
+                        _rt + " &mdash; confirmed: already trending up in recent games"
+                        + (f" ({_recs})" if _recs else "") + ", not just a season-level prediction"))
                 elif _rflag == "declining":
                     badges.append(_hit_badge("$", GREEN,
                         _rt + " &mdash; heads up: his recent games are trending the OTHER way (cooling) &mdash; worth watching before acting on this"))
@@ -470,7 +477,8 @@ def hitter_badges(row, hit_pctile=None, cap=None, regression=True, idx_recent=No
             elif -d_ba >= _XREG_BA and -d_slg >= _XREG_SLG:
                 if _rflag == "declining":
                     badges.append(_hit_badge("&#9660;" + _CONFIRM_DOWN, RED,
-                        _rt + " &mdash; confirmed: already cooling off in recent games, not just a season-level prediction"))
+                        _rt + " &mdash; confirmed: already cooling off in recent games"
+                        + (f" ({_recs})" if _recs else "") + ", not just a season-level prediction"))
                 elif _rflag == "improving":
                     badges.append(_hit_badge("&#9661;", RED,
                         _rt + " &mdash; heads up: his recent games are trending the OTHER way (heating up) &mdash; worth watching before acting on this"))
@@ -478,12 +486,14 @@ def hitter_badges(row, hit_pctile=None, cap=None, regression=True, idx_recent=No
                     badges.append(_hit_badge("&#9661;", RED, _rt))
             elif _rflag == "improving":
                 badges.append(_hit_badge(_CONFIRM_UP, GREEN,
-                    f"Recent games already trending up vs his own season xBA {xba:.3f}/xSLG {xslg:.3f} &mdash; "
+                    f"Recent games already trending up vs his own season xBA {xba:.3f}/xSLG {xslg:.3f}"
+                    + (f" &mdash; {_recs}" if _recs else "") + " &mdash; "
                     f"before it's shown up enough in his season totals to trip a season-level buy signal. "
                     f"Early skill-trend read, not yet a season call."))
             elif _rflag == "declining":
                 badges.append(_hit_badge(_CONFIRM_DOWN, RED,
-                    f"Recent games already trending down vs his own season xBA {xba:.3f}/xSLG {xslg:.3f} &mdash; "
+                    f"Recent games already trending down vs his own season xBA {xba:.3f}/xSLG {xslg:.3f}"
+                    + (f" &mdash; {_recs}" if _recs else "") + " &mdash; "
                     f"before it's shown up enough in his season totals to trip a season-level sell signal. "
                     f"Early skill-trend read, not yet a season call."))
 
@@ -521,6 +531,7 @@ def _pitcher_badge_context(row, idx_recent=None):
     flag = pitcher_regression_flag(row)
     rec = idx_recent.get(row.get("PlayerName", "")) if idx_recent else None
     rflag = pitcher_recency_flag(row, rec) if rec else None
+    rec_s = _rec_era_str(rec)
     if not flag:
         xera = _n(row.get("xERA"))
         if xera <= 0 or rflag not in ("improving", "declining"):
@@ -528,12 +539,14 @@ def _pitcher_badge_context(row, idx_recent=None):
         verb = "better" if rflag == "improving" else "worse"
         signal = "buy" if rflag == "improving" else "sell"
         line = (f'{pitcher_regression_badge(row, idx_recent)} Recent games already trending {verb} than his '
-                f'season {xera:.2f} xERA &mdash; before it&rsquo;s shown up enough in his season ERA to trip '
+                f'season {xera:.2f} xERA' + (f' ({rec_s})' if rec_s else '') +
+                ' &mdash; before it&rsquo;s shown up enough in his season ERA to trip '
                 f'a season-level {signal} signal. Early skill-trend read, not yet a season call.')
         return _badge_ctx_wrap([line])
     era, xera = _n(row.get("ERA")), _n(row.get("xERA"))
     if flag == "sell":
-        confirmed_tail = (" Already confirmed by his recent games, not just a season-level prediction."
+        confirmed_tail = ((f" Already confirmed by his recent games ({rec_s}), not just a season-level prediction."
+                            if rec_s else " Already confirmed by his recent games, not just a season-level prediction.")
                            if rflag == "declining" else "")
         line = (f'{pitcher_regression_badge(row, idx_recent)} ERA {era:.2f} is running below his '
                 f'{xera:.2f} xERA &mdash; getting lucky, regression risk (sell-high).{confirmed_tail}')
