@@ -28,7 +28,7 @@ from pathlib import Path
 
 import send_digest as sd
 from send_digest import (
-    BG, SURFACE, SURFACE2, BORDER, TEXT, MUTED, ACCENT, GREEN, RED, YELLOW, PURPLE,
+    BG, SURFACE, SURFACE2, BORDER, TEXT, MUTED, ACCENT, GREEN, RED, YELLOW, PURPLE, LIME,
     YEAR, MY_TEAM, _n, _is_sp,
 )
 
@@ -101,6 +101,16 @@ def _pos_tokens(r, role):
         elif p in _POS_ORDER:
             norm.add(p)
     return [p for p in _POS_ORDER if p in norm]
+
+
+def _fit_pos_disp(r):
+    """Compact position label for a Partner-Fit / Blockbuster board player chip: normalized
+    position tokens for a hitter (OF variants collapsed, e.g. '1B/OF'), usage role for a
+    pitcher (SP/RP) since raw `Position` is just 'P'. Works on any enriched trade-engine row
+    (`_tptype` is set by `_enrich_trade_player` on both the get and give side)."""
+    if r.get("_tptype") == "hit":
+        return "/".join(_pos_tokens(r, "hit")) or str(r.get("Position") or "").strip()
+    return "SP" if _is_sp(r) else "RP"
 
 
 def _stat_line(r, role):
@@ -392,11 +402,13 @@ def build_partner_fit(pitchers, hitters, roto, team_keys, ranks, n,
                     # breaks even). A good-for-me-only deal drops to REACH ("worth a shot").
                     rival_gains = _n(best.get("net_them")) >= sd._TRADE_RIVAL_GAIN_MIN
                     words, tier = _fit_deal_words(vp, ac, rival_gains)
-                    get = [{"name": p.get("PlayerName", ""),
+                    get = [{"name": p.get("PlayerName", ""), "pos": _fit_pos_disp(p),
                             "tags": _fit_get_tags([p], my_needs)} for p in best["ins"]]
+                    give = [{"name": p.get("PlayerName", ""), "pos": _fit_pos_disp(p)}
+                            for p in best["outs"]]
                     records.append({
                         "team": rival, "tier": tier,
-                        "get": get, "give": [p.get("PlayerName", "") for p in best["outs"]],
+                        "get": get, "give": give,
                         "verdict": words,
                         # Name only the cats the players I'd ACTUALLY send cover for them (the deal's
                         # own send_cats), not the roster-wide surplus∩needs intersection — so the
@@ -446,8 +458,10 @@ def build_megadeal_board(pitchers, hitters, roto, team_keys, ranks, n,
                                   limit=2, pos_data_by_team=pos_data_by_team)
         recs = []
         for d in deals:
-            get = [{"name": p.get("PlayerName", ""), "tags": _fit_get_tags([p], my_needs)}
-                   for p in d["ins"]]
+            get = [{"name": p.get("PlayerName", ""), "pos": _fit_pos_disp(p),
+                    "tags": _fit_get_tags([p], my_needs)} for p in d["ins"]]
+            give = [{"name": p.get("PlayerName", ""), "pos": _fit_pos_disp(p)}
+                    for p in d["outs"]]
             # "Why it's a blockbuster" spark — a scouting-report read shared verbatim with the
             # digest Trade Radar card (fantasy/trades._mega_insight_text, re-exported through sd)
             # so the two surfaces can't drift in voice: names the headliner, a quality/scarcity
@@ -455,7 +469,7 @@ def build_megadeal_board(pitchers, hitters, roto, team_keys, ranks, n,
             spark = sd._mega_insight_text(d)
             recs.append({
                 "team": d["team"], "tier": "MEGA",
-                "get": get, "give": [p.get("PlayerName", "") for p in d["outs"]],
+                "get": get, "give": give,
                 "verdict": "Blockbuster win-win — you give depth, get fewer-but-better.",
                 "spark": spark,
                 # Cats the players I'd ACTUALLY send cover for them (the deal's own send_cats).
@@ -476,7 +490,7 @@ def build_html(data):
                       TEXT=TEXT, MUTED=MUTED, ACCENT=ACCENT, GREEN=GREEN, RED=RED, YELLOW=YELLOW,
                       PURPLE=PURPLE)
     js = _JS.format(GREEN=GREEN, RED=RED, YELLOW=YELLOW, ACCENT=ACCENT,
-                    MUTED=MUTED, TEXT=TEXT, BORDER=BORDER, SURFACE2=SURFACE2, PURPLE=PURPLE)
+                    MUTED=MUTED, TEXT=TEXT, BORDER=BORDER, SURFACE2=SURFACE2, PURPLE=PURPLE, LIME=LIME)
     my_name = _disp(data["myTeam"])
     fresh_label, fresh_color = _freshness(data.get("refreshed", ""))
     refresh_btn = ('<button id="refreshBtn" class="refreshbtn" onclick="doRefresh()">'
@@ -748,6 +762,7 @@ details#vdetail[open] > summary::before {{ content:'\\25BC'; }}
 .fbdeal {{ font-size:13.5px; line-height:1.5; }}
 .fbget {{ font-size:8.5px; font-weight:800; letter-spacing:.4px; color:{GREEN}; background:rgba(34,197,94,.14); border-radius:4px; padding:1px 5px; margin-right:5px; vertical-align:middle; }}
 .fbdeal b {{ font-weight:700; }}
+.fbpos {{ font-size:9px; font-weight:800; border:1px solid; border-radius:4px; padding:0 4px; margin-left:4px; vertical-align:middle; }}
 .fbgive {{ color:{MUTED}; font-size:12.5px; margin-top:2px; }}
 .fbgv {{ font-size:8.5px; font-weight:800; letter-spacing:.4px; color:{RED}; background:rgba(239,68,68,.11); border-radius:4px; padding:1px 5px; margin-right:5px; vertical-align:middle; text-transform:uppercase; }}
 .fbverdict {{ font-size:12px; font-weight:700; margin-top:8px; }}
@@ -1758,20 +1773,34 @@ var FIT_TIER = {{ BEST:['{GREEN}','BEST TARGET'], REACH:['{YELLOW}','WORTH A SHO
 function escAttr(s) {{ return String(s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }}
 // Human list join, mirror of the server's _and_join: [] -> '', [C] -> 'C', [C,SS] -> 'C and SS'.
 function andJoin(xs) {{ xs = xs || []; if (xs.length <= 1) return xs[0] || ''; if (xs.length === 2) return xs[0] + ' and ' + xs[1]; return xs.slice(0,-1).join(', ') + ' and ' + xs[xs.length-1]; }}
+// Position chip beside a fit-board player name. LIME + bold when `needSet` (the POV team's
+// thin positions) contains one of the player's slots -- same hue as the digest/roster "upgrades
+// your thin {{pos}}" chip, so a need-filling position reads the same way everywhere.
+function posChip(pos, needSet) {{
+  if (!pos) return '';
+  var isNeed = !!needSet && pos.split('/').some(function(p) {{ return needSet.indexOf(p) >= 0; }});
+  var col = isNeed ? '{LIME}' : '{MUTED}';
+  return '<span class="fbpos" style="color:' + col + ';border-color:' + col + '">' + pos + '</span>';
+}}
 
-function fitCard(r) {{
+function fitCard(r, needSet) {{
   var t = FIT_TIER[r.tier] || FIT_TIER.SLIM, col = t[0], lbl = t[1];
   var meta = DATA.teamsMeta[r.team] || {{ name:r.team }};
   var head = '<div class="fbchead"><span class="fbvchip" style="color:' + col + ';border-color:' + col + '">'
            + lbl + '</span><span class="fbteam">' + meta.name + '</span>';
   if (r.tier === 'BEST' || r.tier === 'REACH' || r.tier === 'MEGA') {{
-    var giveNames = (r.give || []).join(',');
+    var giveNames = (r.give || []).map(function(g) {{ return g.name; }}).join(',');
     var getNames  = (r.get || []).map(function(g) {{ return g.name; }}).join(',');
     head += '<span class="fbbuild" data-partner="' + escAttr(r.team) + '" data-give="' + escAttr(giveNames)
           + '" data-get="' + escAttr(getNames) + '" onclick="loadDeal(this)">Build this &#9654;</span></div>';
-    var getParts = (r.get || []).map(function(g) {{ return '<b>' + g.name + '</b>'; }}).join(' + ');
+    var getParts = (r.get || []).map(function(g) {{
+      return '<b>' + g.name + '</b>' + posChip(g.pos, needSet);
+    }}).join(' + ');
+    var giveParts = (r.give || []).map(function(g) {{
+      return g.name + posChip(g.pos, null);
+    }}).join(' + ');
     var deal = '<div class="fbdeal"><span class="fbget">Get</span> ' + getParts
-             + '<div class="fbgive"><span class="fbgv">for</span> ' + (r.give || []).join(' + ') + '</div></div>';
+             + '<div class="fbgive"><span class="fbgv">for</span> ' + giveParts + '</div></div>';
     var vcol = (r.tier === 'BEST' || r.tier === 'MEGA') ? '{GREEN}' : '{YELLOW}';
     var verdict = '<div class="fbverdict" style="color:' + vcol + '">' + r.verdict + '</div>';
     var why = '';
@@ -1804,13 +1833,14 @@ function renderFitBoard() {{
     if (pos.length)   bits.push('thin at <b class="w">' + pos.join(', ') + '</b>');
     hEl.innerHTML = (meta.name || myTk) + (bits.length ? ' &middot; ' + bits.join(' &middot; ') : '');
   }}
+  var needSet = Object.keys(meta.need_pos || {{}});
   var recs = (DATA.partnerFit || {{}})[myTk] || [];
   var list = document.getElementById('fblist');
-  if (list) list.innerHTML = recs.map(fitCard).join('') || '<div class="empty">No rivals.</div>';
+  if (list) list.innerHTML = recs.map(function(r) {{ return fitCard(r, needSet); }}).join('') || '<div class="empty">No rivals.</div>';
   // Consolidation megadeal strip (above the per-rival board) — shown only when a win-win exists.
   var megas = (DATA.megaDeals || {{}})[myTk] || [];
   var ml = document.getElementById('megalist'), mw = document.getElementById('megawrap');
-  if (ml) ml.innerHTML = megas.map(fitCard).join('');
+  if (ml) ml.innerHTML = megas.map(function(r) {{ return fitCard(r, needSet); }}).join('');
   if (mw) mw.style.display = megas.length ? '' : 'none';
 }}
 
