@@ -349,7 +349,7 @@ def _pulse_cell(c, ctx, my_avgs, opp_avgs, my_std, opp_std, elapsed_frac, remain
             proj_res = "W" if pm_r > po_r else ("T" if pm_r == po_r else "L")
         sm, so = my_std.get(cat), opp_std.get(cat)
         sigma = math.sqrt(sm * sm + so * so) if (sm is not None and so is not None) else (_CLOSE_THRESH.get(cat, 1) or 1)
-        p_win, _ = _cat_win_prob(pm, po, cat, sigma, remaining_frac)
+        p_win, p_tie = _cat_win_prob(pm, po, cat, sigma, remaining_frac)
         win_pct = round(p_win * 100)
 
     is_close = win_pct is not None and (proj_res == "T" or _TOSSUP_LO <= win_pct <= _TOSSUP_HI)
@@ -389,7 +389,8 @@ def _pulse_cell(c, ctx, my_avgs, opp_avgs, my_std, opp_std, elapsed_frac, remain
         f'<div style="width:{pct:.0f}%;height:100%;background:{bar_c};border-radius:2px;"></div></div>'
         f'</div>'
     )
-    return html, is_close
+    cat_prob = (p_win, p_tie) if win_pct is not None else None
+    return html, is_close, cat_prob
 
 
 def render_tv_games(ctx):
@@ -493,7 +494,7 @@ def render_category_pulse(ctx):
         _pulse_cell(c, ctx, my_avgs, opp_avgs, my_std, opp_std, elapsed_frac, remaining_frac, has_proj)
         for c in matchup["categories"]
     ]
-    cells = "".join(h for h, _ in rendered)
+    cells = "".join(h for h, _, _ in rendered)
     grid = (
         f'<div class="pulse-grid" style="display:grid;grid-template-columns:repeat(4,1fr);gap:4px;height:100%;'
         f'grid-auto-rows:1fr;">{cells}</div>'
@@ -507,9 +508,20 @@ def render_category_pulse(ctx):
     # projected tie) — the SAME source as the per-card flag, so the count and the
     # visible bolts always agree (matches the digest's close_flags summary). NOT the
     # margin-based classify_categories "tossup" tier, which disagrees with the cards.
-    close = sum(1 for _, ic in rendered if ic)
+    close = sum(1 for _, ic, _ in rendered if ic)
     sub = (f'{cw}W&middot;{cl}L&middot;{ct}T &rarr; proj {pw}-{pl}-{pt}'
            + (f' &middot; &#9889;{close}' if close else ''))
+    # 🎯 Win the week — same margin-DP joint the digest's Category Pulse chip uses
+    # (sd._matchup_win_prob), fed the SAME per-cell (p_win, p_tie) pairs so the
+    # dashboard number can't disagree with the digest's. Appended to the existing
+    # subtitle string (no new row) to respect the zero-scroll/1440x900 constraint.
+    cat_probs = [cp for _, _, cp in rendered if cp]
+    if cat_probs:
+        win_week, _tie_week, _loss_week = sd._matchup_win_prob(cat_probs)
+        wk_pct = round(win_week * 100)
+        wk_col = GREEN if wk_pct > 55 else (RED if wk_pct < 45 else TEXT)
+        sub += (f' &middot; &#127919; <span style="color:{wk_col};font-weight:700;">'
+                f'{wk_pct}%</span> week')
     return _tile(f"Category Pulse", grid, flex=1.6, sub=sub)
 
 

@@ -1135,6 +1135,65 @@ def _cat_win_prob(pm, po, cat, sigma, remaining_frac):
     p_tie  = max(0.0, 1.0 - p_win - p_loss)
     return p_win, p_tie
 
+def _matchup_win_prob(cat_probs):
+    """cat_probs: list of (p_win, p_tie) per category. Returns (P_win_week, P_tie_week,
+    P_loss_week) via an exact DP over the category-margin D = (#won) - (#lost). Winning
+    the MATCHUP means winning more categories than the opponent (D > 0) -- this combines
+    the 12 independent per-category win probabilities (already calibrated by
+    _cat_win_prob) into the one number that actually decides the week. Small (13-state)
+    DP, stdlib math only -- no simulation needed.
+
+    HONESTY NOTE: categories aren't truly independent (a strong pitching week correlates
+    K/QS/W/ERA/WHIP), so this joint is mildly overconfident at the tails -- the same
+    independence assumption the shipped per-cat model already makes, partially
+    self-corrected by the per-cat sigma inflation (_WINPROB_SIGMA_INFLATE) that already
+    pulls per-cat probs off the extremes. Ship as 'modeled odds', never a guarantee."""
+    dist = {0: 1.0}
+    for p_win, p_tie in cat_probs:
+        p_loss = max(0.0, 1.0 - p_win - p_tie)
+        nd = {}
+        for d, pr in dist.items():
+            nd[d + 1] = nd.get(d + 1, 0.0) + pr * p_win
+            nd[d]     = nd.get(d,     0.0) + pr * p_tie
+            nd[d - 1] = nd.get(d - 1, 0.0) + pr * p_loss
+        dist = nd
+    p_w = sum(pr for d, pr in dist.items() if d > 0)
+    p_l = sum(pr for d, pr in dist.items() if d < 0)
+    return p_w, dist.get(0, 0.0), p_l
+
+def _matchup_swing(cat_probs_by_cat):
+    """{cat: (p_win, p_tie)} -> {cat: leverage}. Leverage = how much winning-the-week odds
+    move if THIS category alone flips from a sure win to a sure loss, holding every other
+    category's odds fixed -- the swing-sensitivity read that tells you which toss-ups are
+    worth spending a move on (feeds the Weekly Game Plan contest/concede read). Near-zero
+    for a category that's already locked or already conceded (forcing it W vs L barely
+    changes an outcome that was never in doubt); largest for genuine coin-flip cats."""
+    cats = list(cat_probs_by_cat.keys())
+    out = {}
+    for target in cats:
+        probs_w = [(1.0, 0.0) if c == target else cat_probs_by_cat[c] for c in cats]
+        probs_l = [(0.0, 0.0) if c == target else cat_probs_by_cat[c] for c in cats]
+        pw, _, _ = _matchup_win_prob(probs_w)
+        pl, _, _ = _matchup_win_prob(probs_l)
+        out[target] = pw - pl
+    return out
+
+def _winprob_joint(winprob_ctx, winprob_rf):
+    """Thin adapter: loops winprob_ctx ({cat: (pm, po, sigma)}, built once in build_email
+    via _winprob_ctx -- the SAME projection/sigma setup build_category_pulse's cards use),
+    calls the calibrated _cat_win_prob per category, and returns both the matchup-level
+    joint tuple and the per-category (p_win, p_tie) map. Because it's fed the identical
+    ctx/remaining_frac as the Category Pulse cards, the joint can never disagree with what
+    the reader sees on the cards. ((0.5, 0.0, 0.5), {}) when there's no usable context."""
+    if not winprob_ctx:
+        return (0.5, 0.0, 0.5), {}
+    per_cat = {}
+    for cat, (pm, po, sigma) in winprob_ctx.items():
+        p_win, p_tie = _cat_win_prob(pm, po, cat, sigma, winprob_rf)
+        per_cat[cat] = (p_win, p_tie)
+    joint = _matchup_win_prob(list(per_cat.values()))
+    return joint, per_cat
+
 def _project(current, avg, elapsed_frac, cat):
     """Project end-of-week value from current accumulated stat and historical weekly avg."""
     remaining = 1.0 - elapsed_frac
@@ -1183,6 +1242,38 @@ def _winprob_ctx(matchup, weekly_avgs=None, weekly_std=None, remaining_proj=None
 _PICKUP_WINDELTA_MIN  = 4    # min percentage-point win% gain to surface a pickup chip
 _PICKUP_CONTESTED_MAX = 60   # only surface a cat I'm not already winning comfortably (before% <)
 
+def _pickup_contrib(cand_row, role, remaining_frac, today_str, week_end_str, weeks_played=None):
+    """Per-category production delta a free-agent pickup would add to MY remaining
+    projected total this matchup, role-aware. Returns {cat: delta} (empty when the
+    candidate contributes nothing this week). Extracted from pickup_win_delta so
+    _move_win_delta (the Weekly Game Plan's matchup-level move ranking) shares the exact
+    same contribution math — a move's flagged category and its ranked matchup-lift can
+    never disagree about what the add actually produces.
+      - SP  (role 'sp'):  remaining K/QS/W from actual remaining starts × per-start rate
+            (same as compute_pit_proj) — the most accurate case.
+      - RP  (role 'rp'):  remaining SVHD from his season SV+H per matchup-week × remaining_frac.
+      - hit (role 'hit'): remaining R/HR/RBI/SB from each season stat per matchup-week × remaining_frac.
+    RP/hit need `weeks_played` (matchup-weeks the season totals span); SP does not."""
+    if role == "sp":
+        ns = _starts_this_week(cand_row, today_str, week_end_str)
+        if ns <= 0:
+            return {}
+        gs   = _n(cand_row.get("GS")); k = _n(cand_row.get("K"))
+        ip_g = _n(cand_row.get("IP_per_G")); kip = _n(cand_row.get("K/IP") or cand_row.get("KIP"))
+        k_ps  = (k / gs) if gs > 0 else (ip_g * kip if ip_g > 0 and kip > 0 else 5)
+        qs_ps = (qs_probability(cand_row) or 0) / 100.0
+        w_ps  = (_n(cand_row.get("ESPN_W") or cand_row.get("W")) / gs) if gs > 0 else 0.12
+        return {"K": ns * k_ps, "QS": ns * qs_ps, "W": ns * w_ps}
+    if role in ("rp", "hit") and weeks_played and weeks_played > 0:
+        rf = max(remaining_frac, 0.0)
+        if role == "rp":
+            svhd = _n(cand_row.get("ESPN_SVHD")) or _n(cand_row.get("SVHD"))
+            return {"SVHD": (svhd / weeks_played) * rf}
+        # hit — boost cats only (B_SO is a strikeout cat a bat HURTS, so skip it)
+        return {c: (_n(cand_row.get(c)) / weeks_played) * rf
+                for c in ("R", "HR", "RBI", "SB")}
+    return {}
+
 def pickup_win_delta(cand_row, ctx, remaining_frac, today_str, week_end_str,
                      ptype=None, weeks_played=None):
     """The single contested category a free-agent pickup most improves my win% in —
@@ -1199,26 +1290,10 @@ def pickup_win_delta(cand_row, ctx, remaining_frac, today_str, week_end_str,
     if not ctx:
         return None
     role = ptype or ("sp" if _is_sp(cand_row) else None)
-    contrib = {}
-    if role == "sp":
-        ns = _starts_this_week(cand_row, today_str, week_end_str)
-        if ns <= 0:
-            return None
-        gs   = _n(cand_row.get("GS")); k = _n(cand_row.get("K"))
-        ip_g = _n(cand_row.get("IP_per_G")); kip = _n(cand_row.get("K/IP") or cand_row.get("KIP"))
-        k_ps  = (k / gs) if gs > 0 else (ip_g * kip if ip_g > 0 and kip > 0 else 5)
-        qs_ps = (qs_probability(cand_row) or 0) / 100.0
-        w_ps  = (_n(cand_row.get("ESPN_W") or cand_row.get("W")) / gs) if gs > 0 else 0.12
-        contrib = {"K": ns * k_ps, "QS": ns * qs_ps, "W": ns * w_ps}
-    elif role in ("rp", "hit") and weeks_played and weeks_played > 0:
-        rf = max(remaining_frac, 0.0)
-        if role == "rp":
-            svhd = _n(cand_row.get("ESPN_SVHD")) or _n(cand_row.get("SVHD"))
-            contrib = {"SVHD": (svhd / weeks_played) * rf}
-        else:   # hit — boost cats only (B_SO is a strikeout cat a bat HURTS, so skip it)
-            contrib = {c: (_n(cand_row.get(c)) / weeks_played) * rf
-                       for c in ("R", "HR", "RBI", "SB")}
-    else:
+    if role not in ("sp", "rp", "hit"):
+        return None
+    contrib = _pickup_contrib(cand_row, role, remaining_frac, today_str, week_end_str, weeks_played)
+    if not contrib:
         return None
     best = None
     for cat, dc in contrib.items():
@@ -1233,6 +1308,44 @@ def pickup_win_delta(cand_row, ctx, remaining_frac, today_str, week_end_str,
                 and (best is None or (a - b) > best[3]):
             best = (cat, b, a, a - b)
     return best[:3] if best else None
+
+def _move_win_delta(cand_row, role, winprob_ctx, per_cat, remaining_frac,
+                    today_str, week_end_str, weeks_played=None):
+    """The Weekly Game Plan's matchup-LEVEL ranking signal — distinct from
+    pickup_win_delta's single-category chip. Folds the candidate's _pickup_contrib deltas
+    into a COPY of `per_cat` (the {cat: (p_win, p_tie)} map from _winprob_joint — never
+    mutated, so the ranking can't drift from the win-the-week chip the reader already
+    sees), adjusting only the affected categories' p_win via the calibrated
+    _cat_win_prob, then reruns _matchup_win_prob on the copy. Returns the candidate's
+    single most matchup-improving category as
+    (best_cat, cat_before_pct, cat_after_pct, week_before_pct, week_after_pct), or None
+    when the candidate doesn't move any category with real production this week.
+    Unlike pickup_win_delta, this does NOT gate on _PICKUP_WINDELTA_MIN/_CONTESTED_MAX —
+    a candidate whose only production lands in an already-locked or already-conceded cat
+    naturally yields ~0 matchup lift and sorts itself out; the caller ranks by lift."""
+    if not winprob_ctx or not per_cat:
+        return None
+    contrib = _pickup_contrib(cand_row, role, remaining_frac, today_str, week_end_str, weeks_played)
+    if not contrib:
+        return None
+    week_before, _, _ = _matchup_win_prob(list(per_cat.values()))
+    best = None
+    for cat, dc in contrib.items():
+        c = winprob_ctx.get(cat)
+        base = per_cat.get(cat)
+        if not c or not base or dc <= 0:
+            continue
+        pm, po, sigma = c
+        p0_win, p0_tie = base
+        p1_win, _ = _cat_win_prob(pm + dc, po, cat, sigma, remaining_frac)
+        cat_copy = dict(per_cat)
+        cat_copy[cat] = (p1_win, p0_tie)
+        week_after, _, _ = _matchup_win_prob(list(cat_copy.values()))
+        lift = week_after - week_before
+        if best is None or lift > best[5]:
+            best = (cat, round(p0_win * 100), round(p1_win * 100),
+                    round(week_before * 100), round(week_after * 100), lift)
+    return best[:5] if best else None
 
 def _winprob_context(wd):
     """Score-dropdown breakdown line explaining the pickup win-% swing surfaced in the Cats
@@ -1327,6 +1440,8 @@ def build_category_pulse(matchup, weekly_avgs=None, days_elapsed=None, remaining
     has_proj = bool(my_avgs and opp_avgs)
     proj_results = []
     close_flags  = []   # per-card toss-up flag (win% in the _TOSSUP band) → summary count
+    cat_probs    = []   # per-card (p_win, p_tie) → fed once into _matchup_win_prob for the
+                         # 🎯 Win-the-week chip, so it can never disagree with the cards
 
     def _card(c):
         cat   = c["cat"]
@@ -1384,8 +1499,9 @@ def build_category_pulse(matchup, weekly_avgs=None, days_elapsed=None, remaining
             sm, so = my_std.get(cat), opp_std.get(cat)
             sigma = math.sqrt(sm * sm + so * so) if (sm is not None and so is not None) \
                     else (_CLOSE_THRESH.get(cat, 1) or 1)
-            p_win, _ = _cat_win_prob(pm, po, cat, sigma, remaining_frac)
+            p_win, p_tie = _cat_win_prob(pm, po, cat, sigma, remaining_frac)
             win_pct = round(p_win * 100)
+            cat_probs.append((p_win, p_tie))
 
             proj_html = (
                 f'<div style="margin-top:4px;color:{MUTED};font-size:9px;">'
@@ -1504,6 +1620,21 @@ def build_category_pulse(matchup, weekly_avgs=None, days_elapsed=None, remaining
             f'<span style="color:{pl_col};font-weight:600;">{proj_l}L</span>'
             f'<span style="color:{MUTED};margin:0 4px;">·</span>'
             f'<span style="color:{TEXT}88;font-weight:600;">{proj_t}T</span>'
+        )
+
+    # 🎯 Win the week — the 12 per-card win probabilities collapsed into ONE number via
+    # the exact margin DP (_matchup_win_prob). Reuses cat_probs collected above during
+    # the card loop (no recomputation), so it can never disagree with the cards. Colored
+    # to the outcome; see docs/scoring.md for the "how to read this" note.
+    if cat_probs:
+        win_week, _tie_week, _loss_week = _matchup_win_prob(cat_probs)
+        wk_pct = round(win_week * 100)
+        wk_col = GREEN if wk_pct > 55 else (RED if wk_pct < 45 else TEXT)
+        summary += (
+            f'<span style="color:{MUTED};margin:0 6px;font-size:11px;">·</span>'
+            f'<span style="font-size:12px;">&#127919;</span>'
+            f'<span style="color:{MUTED};font-size:11px;"> Win the week: </span>'
+            f'<span style="color:{wk_col};font-weight:800;">{wk_pct}%</span>'
         )
 
     return (
@@ -2297,6 +2428,31 @@ def build_glossary_section():
                "model as the Category Pulse cards; only shown when he'd move a category you're not already winning "
                "comfortably."),
 
+        _subhead("Weekly Game Plan"),
+        _entry("&#127919; Win the week",
+               "The 12 per-category win probabilities (same calibrated model as the Category Pulse % chips) "
+               "collapsed into <b>one</b> number: the odds you take more categories than your opponent this "
+               "matchup. 50% = genuine coin flip; true 100%/0% is rare (12 categories means near-certainty in "
+               "almost all of them), so a great week realistically reads &asymp;90%, not 100% &mdash; that's "
+               "expected, not a bug. Categories aren't perfectly independent (a strong pitching week correlates "
+               "K/QS/W/ERA/WHIP), so treat it as a well-calibrated <i>modeled</i> odds, not a guarantee. Shown "
+               "on the Category Pulse summary, in The Briefing, atop the Weekly Game Plan, and on the dashboard."),
+        _entry("&#128274; Locked &middot; &#127919; Contest &middot; &#9995; Concede",
+               "The Weekly Game Plan's category triage: <b>Locked</b> = win odds &ge; 85%, already yours, no "
+               "action needed. <b>Contest</b> = a real toss-up where winning it would meaningfully swing the "
+               "week (its <i>leverage</i> &mdash; how much the week's odds move if it flips from a sure win to a "
+               "sure loss &mdash; clears the bar) &mdash; these are the categories worth spending a move on, "
+               "ranked most-decisive first. <b>Concede</b> = win odds &le; 15% <i>or</i> a toss-up that barely "
+               "moves the week either way &mdash; not worth chasing."),
+        _entry(f"&#9312;&ndash;&#9314; Ranked moves &middot; streamer / hold tag",
+               "Up to 3 FA pickups (from the same pools as FA Starting Pitchers / Relief Pitchers / Hitters &mdash; "
+               "never a player those tables don't also list), ranked by how much they lift your <b>Win-the-week</b> "
+               "odds, not just a single category. Each card shows the add, the drop it costs (or a free roster "
+               "spot), and the before&rarr;after odds for both the category and the whole week. The right-aligned "
+               "tag reads <b>hold</b> when the add is a durable season-quality upgrade over your starter at that "
+               "spot, else <b>streamer</b> (a short-term volume/form play &mdash; an SP added for this week's "
+               "start(s), or a bat riding a hot recent window)."),
+
         _subhead("Pending trades"),
         _entry(f'Verdict{_verdict_pill("ACCEPT", GREEN)}&nbsp;{_verdict_pill("COUNTER", YELLOW)}&nbsp;{_verdict_pill("DECLINE", RED)}',
                "On a real trade offer made <b>to you</b>, the lean: <b>ACCEPT</b> (green) = you win the value, or "
@@ -2786,7 +2942,7 @@ def _brief_cat_list(cats, limit=3):
 
 def render_briefing(my_team, today, matchup, classification, starts, today_str,
                     week_end_str, sr_emerging, alerts, my_row, n_teams, tune_in="",
-                    pending_incoming=None):
+                    pending_incoming=None, win_week_pct=None):
     """Short, skimmable inline email body ("The Briefing"). Returns an HTML string."""
     my_team = " ".join((my_team or "").split())    # collapse ESPN's double-space for display
     # %-d is not portable (Windows), so build the day number by hand.
@@ -2938,7 +3094,10 @@ def render_briefing(my_team, today, matchup, classification, starts, today_str,
         f'text-transform:uppercase;margin-bottom:3px;">This matchup{opp_str}</div>'
         f'<div style="font-size:15px;color:{mc};font-weight:700;">{mk} {cw}–{cl}–{ct} '
         f'<span style="color:{MUTED};font-weight:400;font-size:13px;">now · '
-        f'{verb} {pw}–{pl}–{ptt}</span></div>'
+        f'{verb} {pw}–{pl}–{ptt}'
+        + (f' · &#127919; <span style="color:{GREEN if win_week_pct > 55 else (RED if win_week_pct < 45 else MUTED)};font-weight:700;">'
+           f'{win_week_pct}%</span> to win the week' if win_week_pct is not None else '')
+        + '</span></div>'
         + (f'<div style="font-size:12.5px;color:#cbd5e1;margin-top:4px;line-height:1.5;">{matchup_prose}</div>' if matchup_prose else "")
         + '</div>'
         # Season
@@ -3397,6 +3556,369 @@ def _matchup_closing_note(is_final_day):
         f'</div>'
     )
 
+# ── Weekly Game Plan (Win-the-Week odds + ranked moves) ──────────────────────────
+# See docs/scoring.md for the joint-probability model. Part A classifies every category
+# as Locked / Contest / Concede from the calibrated per-cat win% + swing leverage
+# (_matchup_swing); Part B ranks FA candidates (from the ALREADY-BUILT fa_sp/fa_rp/fa_hit
+# pools, so the plan can only ever recommend a player the FA tables also list) by the
+# MATCHUP-level win% lift adding them buys (_move_win_delta), not their single-category
+# swing. Both parts reuse the same per_cat map build_category_pulse's 🎯 chip is built
+# from, so the section can't disagree with the number the reader already saw above it.
+
+_GAMEPLAN_LOCK_PCT     = 85   # cat win% >= this -> 🔒 Locked (already yours, no action)
+_GAMEPLAN_CONCEDE_PCT  = 15   # cat win% <= this -> ✋ Concede (don't spend a move here)
+_GAMEPLAN_MIN_LEVERAGE = 8    # min swing leverage (win-the-week percentage points) for a
+                              # toss-up cat to count as 🎯 Contest rather than ✋ Concede —
+                              # a toss-up cat that barely moves the week isn't worth a move
+_GAMEPLAN_MAX_MOVES    = 3    # top-N ranked move cards
+_GAMEPLAN_DROP_SEASON_FLOOR = 35   # a move card's drop cost must have a SEASON score (not
+                              # the recent-blended one, which a single bad week can crater)
+                              # below this -- same "streamer-tier, not worth rostering" cutoff
+                              # as _FA_SP_MIN_SCORE. A rostered player scoring like a real
+                              # contributor, even mid-slump, is never fair collateral for an
+                              # FA add; below the floor is genuinely fringe/replaceable.
+_GAMEPLAN_WEEKLY_MOVE_CAP = 7 # reference only (this league's typical add/drop cadence,
+                              # same number the FA-SP per-day cap rationale already cites)
+                              # — NOT a live remaining-moves counter (no snapshot field
+                              # tracks weekly transaction usage), so the subtitle names it
+                              # as a budget reference, never a claimed "N left" count.
+
+def build_game_plan(matchup, winprob_ctx, per_cat, winprob_rf, winprob_weeks,
+                    pitchers, hitters, fa_sp, fa_rp, fa_hit, pos_data,
+                    my_team, today_str, week_end_str, is_sunday=False,
+                    league_active_roster_max=26, league_il_roster_max=2,
+                    best_recent_p=None, best_recent_h=None, hit_pctile=None):
+    """The Weekly Game Plan: a contest/concede category read (Part A) plus up to
+    _GAMEPLAN_MAX_MOVES ranked FA move cards (Part B), each showing the matchup-win-%
+    it buys. '' when there's no live matchup or no usable win-prob context (mirrors the
+    other matchup-dependent sections' guard)."""
+    if not matchup or not per_cat:
+        return ""
+
+    # ---- Part A: contest / concede read ---------------------------------------
+    swing = _matchup_swing(per_cat)
+    locked, contest, concede = [], [], []
+    for cat, (p_win, _p_tie) in per_cat.items():
+        pct = p_win * 100
+        lev = swing.get(cat, 0.0) * 100
+        if pct >= _GAMEPLAN_LOCK_PCT:
+            locked.append(cat)
+        elif pct <= _GAMEPLAN_CONCEDE_PCT or lev < _GAMEPLAN_MIN_LEVERAGE:
+            concede.append(cat)
+        else:
+            contest.append(cat)
+    contest.sort(key=lambda c: -swing.get(c, 0.0))          # most-decisive toss-up first
+    locked.sort(key=lambda c: -per_cat[c][0])
+    concede.sort(key=lambda c: per_cat[c][0])
+
+    def _chip_list(cats, color):
+        if not cats:
+            return f'<span style="color:{MUTED};">&mdash;</span>'
+        return " &middot; ".join(
+            f'<span style="color:{color};font-weight:700;">{_CAT_LABELS_MAP.get(c, c)}</span>'
+            for c in cats)
+
+    win_week, _tie_week, _loss_week = _matchup_win_prob(list(per_cat.values()))
+    wk_pct = round(win_week * 100)
+    wk_col = GREEN if wk_pct > 55 else (RED if wk_pct < 45 else TEXT)
+
+    strip = (
+        f'<div style="background:{SURFACE};border:1px solid {BORDER};border-radius:8px;'
+        f'padding:12px 14px;margin-bottom:14px;">'
+        f'<div style="font-size:13px;margin-bottom:10px;">'
+        f'<span style="font-size:14px;">&#127919;</span> '
+        f'<span style="color:{MUTED};">Win the week: </span>'
+        f'<span style="color:{wk_col};font-weight:800;">{wk_pct}%</span>'
+        f'</div>'
+        f'<table style="width:100%;border-collapse:collapse;font-size:11.5px;"><tr>'
+        f'<td style="width:34%;vertical-align:top;padding-right:8px;">'
+        f'<div style="color:{GREEN};font-weight:700;text-transform:uppercase;font-size:9px;'
+        f'letter-spacing:.5px;margin-bottom:4px;">&#128274; Locked</div>{_chip_list(locked, GREEN)}</td>'
+        f'<td style="width:33%;vertical-align:top;padding:0 8px;border-left:1px solid {BORDER};'
+        f'border-right:1px solid {BORDER};">'
+        f'<div style="color:{YELLOW};font-weight:700;text-transform:uppercase;font-size:9px;'
+        f'letter-spacing:.5px;margin-bottom:4px;">&#127919; Contest</div>{_chip_list(contest, YELLOW)}</td>'
+        f'<td style="width:33%;vertical-align:top;padding-left:8px;">'
+        f'<div style="color:{MUTED};font-weight:700;text-transform:uppercase;font-size:9px;'
+        f'letter-spacing:.5px;margin-bottom:4px;">&#9995; Concede</div>{_chip_list(concede, MUTED)}</td>'
+        f'</tr></table></div>'
+    )
+
+    # ---- Part B: top-N ranked moves, by MATCHUP-level win% lift -----------------
+    cards_html = ""
+    if not is_sunday:
+        my_norm  = " ".join(my_team.split())
+        full_pit = [r for r in pitchers
+                    if " ".join((r.get("FantasyTeam") or "").split()) == my_norm
+                    and int(r.get("Dataset", 0) or 0) == YEAR]
+        full_hit = [r for r in hitters
+                    if " ".join((r.get("FantasyTeam") or "").split()) == my_norm
+                    and int(r.get("Dataset", 0) or 0) == YEAR]
+
+        def _pos_tags(r):
+            pos_str = (r.get("Position") or "").upper()
+            return {p.strip() for p in pos_str.replace("/", ",").split(",") if p.strip()}
+
+        def _pos_groups_of(r):
+            tags = _pos_tags(r)
+            return {label for label, slots, _ in POS_GROUPS if tags & slots}
+
+        def _pos_disp(r):
+            parts = [p.strip() for p in str(r.get("Position") or "").split(",")
+                     if p.strip() and p.strip().upper() != "P"]
+            return ", ".join(parts) or str(r.get("Position") or "")
+
+        pos_by_label = {p.get("pos"): p for p in (pos_data or [])}
+        surplus_groups = set()
+        for p in (pos_data or []):
+            if p.get("ptype") != "hit":
+                continue
+            n = p.get("n_teams") or 12
+            rank = p.get("rank") or n
+            third = max(1, round(n / 3.0))
+            if rank <= third:
+                surplus_groups.add(p.get("pos"))
+
+        def _in_surplus(r):
+            return bool(_pos_groups_of(r) & surplus_groups)
+
+        # Drop pool -- worst-score-first, surplus preferred, transaction-aware, IL-safe.
+        # Same PATTERN as _roster_suggestion's _take_drop/_used_drops (own instance here
+        # so this section's picks can't collide with each other, mirroring how that
+        # helper dedupes a drop across its own two bullets).
+        drop_pit = [r for r in full_pit
+                    if r.get("PSP_Date", "1999-01-01") in ("1999-01-01", "")
+                    or r.get("PSP_Date", "9999-99-99") > week_end_str]
+        scored_drop = sorted(
+            [(r, _score_p(r, best_recent_p), "pit")             for r in drop_pit] +
+            [(r, _blend(r, hitter_score, best_recent_h), "hit")  for r in full_hit],
+            key=lambda x: x[1]
+        )
+
+        def _can_drop(cand, pending_add=None):
+            if _on_il(cand):
+                return False
+            cand_name = cand.get("PlayerName", "")
+            for _, slots, ptype in POS_GROUPS:
+                if not (_pos_tags(cand) & slots):
+                    continue
+                pool = full_pit if ptype == "pit" else full_hit
+                healthy_others = [
+                    rr for rr in pool
+                    if rr.get("PlayerName") != cand_name
+                    and _is_healthy(rr)
+                    and (_pos_tags(rr) & slots)
+                ]
+                if pending_add is not None and (_pos_tags(pending_add) & slots):
+                    healthy_others.append(pending_add)
+                if not healthy_others:
+                    return False
+            return True
+
+        def _active_role_pitcher(r):
+            """A rostered arm with real current-season saves/holds. rp_score deliberately
+            DE-EMPHASIZES SVHD (~15%, the punt-saves build — see docs/scoring.md), so a
+            genuine closer/setup arm can still read as the 'worst score' in scored_drop
+            while being a valuable roster piece the reader would never actually cut. Always
+            excluded from the drop pool below, regardless of tag."""
+            return (_n(r.get("ESPN_SVHD")) or _n(r.get("SVHD"))) > 0
+
+        def _season_score_of(r, kind):
+            """SEASON-only score (no recent blend) for the droppability floor below. The
+            visible Score badge is 65/35 season/recent, so a single brutal recent week
+            (a stretch of 0-fers, a rough 3-start run) can crater it enough to make a real
+            rostered asset look like the 'worst' player -- that's a false read for THIS
+            purpose (who is safe to actually cut), even though the blended number is the
+            right one for ranking/display everywhere else."""
+            return _score_p(r) if kind == "pit" else hitter_score(r)
+
+        # A Game Plan drop candidate must be genuinely fringe: SEASON score below
+        # _GAMEPLAN_DROP_SEASON_FLOOR (the same "streamer-tier, not worth rostering" cutoff
+        # already used for FA SP -- _FA_SP_MIN_SCORE) AND not an active save/hold-role arm.
+        # A rostered player who merely LOOKS worst because of a cold recent week (or a
+        # punt-saves-discounted closer) is not fair collateral for ANY add, streamer or
+        # hold -- so this applies unconditionally, not just to streamer-tagged moves.
+        _droppable = [(r, s, k) for r, s, k in scored_drop
+                      if not _active_role_pitcher(r)
+                      and _season_score_of(r, k) < _GAMEPLAN_DROP_SEASON_FLOOR]
+
+        _used_drops = set()
+
+        def _take_drop(pending_add=None):
+            order = [r for r, _, _ in sorted(
+                [(r, s, k) for r, s, k in _droppable if _can_drop(r, pending_add)],
+                key=lambda x: (0 if _in_surplus(x[0]) else 1, x[1]))]
+            for r in order:
+                if r.get("PlayerName") not in _used_drops:
+                    _used_drops.add(r.get("PlayerName"))
+                    return r
+            return None
+
+        my_all_occupants = {(r.get("PlayerName"), r.get("Team")) for r in full_pit + full_hit}
+        my_il_occupants = {(r.get("PlayerName"), r.get("Team"))
+                            for r in full_pit + full_hit if _on_il(r)}
+        il_slots_used = min(len(my_il_occupants), league_il_roster_max)
+        slots_left = max(0, league_active_roster_max - (len(my_all_occupants) - il_slots_used))
+
+        def _render_drop(d):
+            surplus_tag = (f' <span style="color:{MUTED};font-size:10px;">[surplus]</span>'
+                           if _in_surplus(d) else '')
+            return (f'Drop <span style="color:{TEXT};font-weight:600;">{d.get("PlayerName","")}'
+                    f'</span><span style="color:{MUTED};"> ({_pos_disp(d)})</span>{surplus_tag}')
+
+        def _is_hold(cand, role):
+            """hold = the add's SEASON blended score beats my starter quality at his
+            position (pos_data[pos]['my_avg']) by >= _UPGRADE_MARGIN -- a durable
+            upgrade, not just this week's start(s)/recent-form spike. Otherwise streamer."""
+            if role in ("sp", "rp"):
+                season_score = _score_p(cand, best_recent_p)
+                entry = pos_by_label.get("SP" if role == "sp" else "RP")
+                my_avg = entry.get("my_avg", 0) if entry else 0
+                return (season_score - my_avg) >= _UPGRADE_MARGIN
+            season_score = _blend(cand, hitter_score, best_recent_h)
+            best_lever = -999
+            for g in _pos_groups_of(cand):
+                entry = pos_by_label.get(g)
+                if entry:
+                    best_lever = max(best_lever, season_score - entry.get("my_avg", 0))
+            return best_lever >= _UPGRADE_MARGIN
+
+        def _move_line(cand, role, best_cat):
+            if role == "sp":
+                dates = cand.get("PSP_Dates") or []
+                hva_l = cand.get("PSP_HomeVAways") or []
+                upcoming = [d for d in dates if today_str <= d <= week_end_str]
+                day_txt = ""
+                if upcoming:
+                    d0 = upcoming[0]
+                    idx0 = dates.index(d0) if d0 in dates else -1
+                    ha = hva_l[idx0] if 0 <= idx0 < len(hva_l) else (cand.get("PSP_HomeVAway") or "")
+                    try:
+                        day_lbl = datetime.strptime(d0, "%Y-%m-%d").strftime("%a")
+                    except Exception:
+                        day_lbl = d0[5:]
+                    sep, abbrev = "", ""
+                    if ha and " " in ha:
+                        sep, full = ha.split(" ", 1)
+                        abbrev = _FULLNAME_TO_ABBREV.get(full, "")
+                    day_txt = f'for his {day_lbl}' + (f' {sep} {abbrev}' if abbrev else '') + ' start'
+                pv = _proj_line_vals(cand)
+                line = _proj_line_html(cand)
+                return f'<span style="color:{MUTED};font-size:11px;">{day_txt}</span> &middot; {line}' \
+                       if day_txt else line
+            if role == "rp":
+                svhd = _n(cand.get("ESPN_SVHD")) or _n(cand.get("SVHD"))
+                return f'<span style="color:{MUTED};font-size:11px;">{int(svhd)} SV+HLD this season</span>'
+            val = _n(cand.get(best_cat))
+            dec = 3 if best_cat == "OPS" else 0
+            lbl = _CAT_LABELS_MAP.get(best_cat, best_cat)
+            return f'<span style="color:{MUTED};font-size:11px;">{val:.{dec}f} {lbl} this season</span>'
+
+        locked_set = set(locked)
+        candidates = [(r, "sp") for r in fa_sp] + [(r, "rp") for r in fa_rp] + [(r, "hit") for r in fa_hit]
+        scored = []
+        for r, role in candidates:
+            res = _move_win_delta(r, role, winprob_ctx, per_cat, winprob_rf,
+                                  today_str, week_end_str, weeks_played=winprob_weeks)
+            if not res:
+                continue
+            best_cat, cb, ca, wb, wa = res
+            if best_cat in locked_set:
+                continue   # already yours -- a spurious "+0%" card, skip (no filter needed otherwise)
+            lift = wa - wb
+            if lift <= 0:
+                continue
+            scored.append((lift, r, role, best_cat, cb, ca, wb, wa))
+        scored.sort(key=lambda x: -x[0])
+
+        _CIRCLED = ["①", "②", "③", "④", "⑤"]
+        cards = []
+        for (lift, r, role, best_cat, cb, ca, wb, wa) in scored:
+            if len(cards) >= _GAMEPLAN_MAX_MOVES:
+                break
+            hold = _is_hold(r, role)
+            tag_lbl, tag_col = ("hold", ACCENT) if hold else ("streamer", MUTED)
+            # Resolve the drop BEFORE building the card. _take_drop only offers genuinely
+            # fringe players (_droppable, built above) -- when slots_left covers the add, no
+            # drop is needed at all; otherwise skip the candidate rather than force a bad one.
+            if slots_left > 0:
+                slots_left -= 1
+                drop_html = (f'<span style="color:{GREEN};font-size:11px;">&#10003; roster spot open '
+                             f'&mdash; no drop needed</span>')
+            else:
+                d = _take_drop(r)
+                if d is None:
+                    continue   # no safe drop for this candidate -- skip rather than force a bad one
+                drop_html = _render_drop(d)
+            i = len(cards)
+            pos_disp = _pos_disp(r)
+            team_l = team_logo(r.get("Team"))
+            add_line = _move_line(r, role, best_cat)
+            cat_lbl = _CAT_LABELS_MAP.get(best_cat, best_cat)
+
+            badges = ""
+            if role == "hit":
+                badges = hitter_badges(r, hit_pctile)
+                bd = _hitter_score_breakdown(r, best_recent_h, hit_pctile)
+                score_val = _blend(r, hitter_score, best_recent_h)
+            else:
+                pv = _proj_line_vals(r)
+                if pv:
+                    ip_g, er, k = pv
+                    if _proj_is_qs(ip_g, er):
+                        badges += qs_badge(ip_g, er, r)
+                    if k >= 5:
+                        badges += k5_badge(k, r)
+                if role == "sp":
+                    badges += blowup_badge(r) + pitcher_regression_badge(r)
+                bd = _pitcher_score_breakdown(r, best_recent_p)
+                score_val = _score_p(r, best_recent_p)
+            uid = _bd_uid("gp", r.get("PlayerName", "")) if bd else None
+            score_html, reveal = _trade_score_reveal(int(round(score_val)), bd, uid)
+
+            num = _CIRCLED[i] if i < len(_CIRCLED) else str(i + 1)
+            cards.append(
+                f'<div style="background:{SURFACE};border:1px solid {BORDER};border-radius:8px;'
+                f'padding:10px 14px;margin-bottom:10px;">'
+                f'<div style="font-size:11.5px;color:{ACCENT};font-weight:800;margin-bottom:5px;">'
+                f'{num} +{round(lift)}% {cat_lbl} odds</div>'
+                f'<div style="font-size:12.5px;">Add {team_l}'
+                f'<span style="color:{TEXT};font-weight:700;">{r.get("PlayerName","")}</span> '
+                f'<span style="color:{MUTED};">({pos_disp})</span> {score_html}{badges}</div>'
+                f'<div style="margin-top:2px;">{add_line}</div>'
+                f'<div style="margin-top:6px;font-size:12px;">{drop_html}'
+                f'<span style="float:right;color:{tag_col};font-size:9.5px;font-weight:700;'
+                f'text-transform:uppercase;border:1px solid {tag_col};border-radius:3px;'
+                f'padding:1px 6px;">{tag_lbl}</span></div>'
+                f'<div style="margin-top:6px;font-size:11px;color:{MUTED};clear:both;'
+                f'border-top:1px solid {BORDER};padding-top:6px;">'
+                f'&#8594; lifts your <span style="color:{TEXT};">{cat_lbl}</span> win '
+                f'{cb}% &#8594; {ca}%, matchup {wb}% &#8594; <span style="color:{TEXT};font-weight:700;">{wa}%</span>'
+                f'</div>{reveal}</div>'
+            )
+        if cards:
+            cards_html = "".join(cards)
+        else:
+            # Same card weight/border as an actual move card (not a stray trailing line)
+            # so Part B reads as an intentional, labeled answer -- "no moves cleared the
+            # bar" -- rather than content that silently went missing.
+            cards_html = (
+                f'<div style="background:{SURFACE};border:1px solid {BORDER};border-radius:8px;'
+                f'padding:12px 14px;margin-bottom:18px;text-align:center;">'
+                f'<div style="font-size:12.5px;color:{TEXT};font-weight:700;">'
+                f'&#128269; No moves clear the bar</div>'
+                f'<div style="font-size:11px;color:{MUTED};margin-top:4px;line-height:1.4;">'
+                f'Every candidate&rsquo;s cost was a real rostered player, not fringe bench depth '
+                f'&mdash; check back as starts/waivers firm up.</div>'
+                f'</div>'
+            )
+
+    sub = (f'Final odds for the week &mdash; too late for a move to swing it'
+           if is_sunday else
+           f'up to {_GAMEPLAN_MAX_MOVES} ranked moves &middot; weekly add/drop budget ~{_GAMEPLAN_WEEKLY_MOVE_CAP}')
+
+    return section_head("Weekly Game Plan", sub) + strip + cards_html
+
 def build_email(snap, override_team=None):
     my_team       = override_team if override_team else snap.get("my_team", MY_TEAM)
     pitchers      = snap.get("pitchers", [])
@@ -3477,6 +3999,10 @@ def build_email(snap, override_team=None):
     # Matchup-weeks the season totals span (completed weeks + fraction of the current) — the
     # per-week denominator for the RP/hitter marginal-win% estimate (pickup_win_delta).
     winprob_weeks = max(1.0, (current_week_num or 1) - winprob_rf)
+    # Joint win-the-week probability + per-category (p_win, p_tie) map — built ONCE here
+    # from the SAME winprob_ctx as everything else above, so the Category Pulse 🎯 chip,
+    # the Briefing line, and the Weekly Game Plan can never disagree with each other.
+    winprob_joint, winprob_percat = _winprob_joint(winprob_ctx, winprob_rf)
 
     # Category classification (used by the pickup steering AND the FA "Cats" column).
     # Computed here (before the FA tables) so need_cats is available to them.
@@ -4730,7 +5256,16 @@ def build_email(snap, override_team=None):
         build_pitcher_hot_cold_section(pitchers, my_team, best_recent_p),         # 8
         build_hot_cold_section(hitters, my_team, best_recent_h, hit_pctile),  # 9
     ] if p)
+    game_plan = build_game_plan(
+        matchup, winprob_ctx, winprob_percat, winprob_rf, winprob_weeks,
+        pitchers, hitters, fa_sp, fa_rp, fa_hit, pos_data,
+        my_team, today_str, week_end_str, is_sunday=is_sunday,
+        league_active_roster_max=league_active_roster_max,
+        league_il_roster_max=league_il_roster_max,
+        best_recent_p=best_recent_p, best_recent_h=best_recent_h, hit_pctile=hit_pctile,
+    )
     transactions_band = "\n".join(p for p in [
+        game_plan,                                                                        # 10a Weekly Game Plan (win-the-week odds + ranked moves)
         _matchup_closing_note(today_str == week_end_str),                                 # end-of-matchup: pickups can't swing today's closing matchup
         pending_section,                                                                  # 10b Pending Trades (real offers — Accept/Counter/Decline)
         fa_sp_section,                                                                    # 11
@@ -4766,6 +5301,7 @@ def build_email(snap, override_team=None):
             sr_emerging=_sr_emerging, alerts=alerts, my_row=my_row,
             n_teams=len(standings), tune_in=_tune_in,
             pending_incoming=incoming_pending,
+            win_week_pct=(round(winprob_joint[0] * 100) if winprob_percat else None),
         )
     except Exception as _e:
         print(f"  WARNING: briefing build failed ({_e}); body falls back to full digest.")

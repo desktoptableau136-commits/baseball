@@ -22,6 +22,126 @@ Returns `{cat: (proj_res, tier)}` reusing Category Pulse's projection math (`_pr
 - **Pitcher projections (K, QS, W)** use actual remaining starts × per-start rate (`pit_proj`, passed as `build_category_pulse(remaining_proj=pit_proj)`), not weekly averages. **Hitter counting cats (R/HR/RBI/SB/B_SO)** are ALSO projected schedule-aware via `compute_hit_proj` (below) — `weekly_avg × team_hit_sched_frac`, the team's roster-weighted fraction of window bat-games still to come — and merged into the same `pit_proj` dict (`pit_proj.update(compute_hit_proj(...))`) so `classify_categories`/`build_category_pulse` both pick it up. **OPS (rate cat) still uses the `_project` rate blend over `compute_weekly_avgs`** — only the 5 hitter *counting* cats moved off the league-wide time fraction.
 - **Win-probability (`_cat_win_prob` + `compute_weekly_std`):** each card's `WIN %` chip is colored to `proj_res`; ⚡ replaces it on toss-ups. `compute_weekly_std(roto, week)` → per-team/per-cat stddev (needs ≥ 2 completed weeks), threaded into `build_category_pulse(weekly_std=…)`. `_cat_win_prob(pm, po, cat, sigma, remaining_frac)` → `(p_win, p_tie)` via normal-CDF (`math.erf`): `edge` direction-adjusted for `_LOWER_BETTER`; `sigma = sqrt(my_std² + opp_std²)` (falls back to `_CLOSE_THRESH[cat]`) **× `_WINPROB_SIGMA_INFLATE` (1.5)**; counting-cat uncertainty × `remaining_frac`; tie band `0.5·10^-dec`. Display-only — `classify_categories` untouched, summary record stays point-estimate `→ proj`. **`_WINPROB_SIGMA_INFLATE` calibration:** `backtest_winprob.py` (walk-forward over ~10k historical category matchups) found the raw std-of-weekly-values understates the true margin spread → the model was materially **over-confident** (a stated 90%+ won ~73%, ECE 7.4 pts) because the raw std treats a team's historical mean as its true level, ignoring mean uncertainty (roster/role churn). 1.5× pulls ECE to ~2.8 (under the ~3-pt well-calibrated bar); applied INSIDE `_cat_win_prob` so digest + dashboard agree. The pre-week optimum is ~1.9× but that would over-widen mid/late-week (banked stats cut real uncertainty; counting cats already taper via `remaining_frac`) — re-run the backtest to see the residual-k sweep if retuning. Only the shown Win%/⚡ changes, never a projected W/L/T verdict.
 
+### Win-the-Week odds + swing leverage (`_matchup_win_prob` / `_matchup_swing` / `_winprob_joint`)
+Combines the 12 independent per-category `_cat_win_prob` outputs into ONE number: the probability of
+winning more categories than the opponent this matchup. Co-located with `_cat_win_prob` in
+send_digest.py (~line 1140).
+- **The math is an exact DP, not a simulation.** `_matchup_win_prob(cat_probs)` takes a list of
+  `(p_win, p_tie)` pairs and convolves the category-margin distribution `D = (#won) − (#lost)`:
+  each category shifts `D` by +1 (prob `p_win`), 0 (`p_tie`), or −1 (`p_loss = 1 − p_win − p_tie`).
+  13 integer states (−12…+12), so the whole thing is a handful of dict operations — no numpy, no
+  Monte Carlo. Returns `(P_win_week, P_tie_week, P_loss_week)`.
+- **`_matchup_swing(cat_probs_by_cat)`** — `{cat: (p_win, p_tie)}` → `{cat: leverage}`. Leverage =
+  `P(win week | cat forced to a sure win)` − `P(win week | cat forced to a sure loss)`, everything
+  else held fixed. Near-zero for an already-locked or already-conceded category (forcing it W vs L
+  barely changes an outcome that was never in doubt); largest for genuine coin-flip categories —
+  exactly the ones worth spending a roster move on. 12 cheap re-runs of the same DP.
+- **`_winprob_joint(winprob_ctx, winprob_rf)`** — the adapter every consumer actually calls. Loops
+  the `winprob_ctx` dict (`{cat: (pm, po, sigma)}`, already built once in `build_email` via
+  `_winprob_ctx` — the SAME projection/sigma setup `build_category_pulse`'s cards use), runs the
+  calibrated `_cat_win_prob` per category, and returns `(joint_tuple, per_cat_map)`. Because it's fed
+  the identical context as the cards, the joint number can **never disagree** with what the reader
+  sees on the Category Pulse grid. `build_email` builds this ONCE (`winprob_joint`, `winprob_percat`)
+  right after `winprob_weeks`; every consumer (the 🎯 chip, the Briefing line, `build_game_plan`, the
+  dashboard) reads that single result — nobody recomputes it per-render.
+- **Independence caveat (ship "modeled odds," not a guarantee):** categories aren't truly
+  independent — a strong pitching week correlates K/QS/W/ERA/WHIP — so the joint is mildly
+  overconfident at the tails, same assumption the shipped per-cat model already makes. Partially
+  self-correcting: the per-cat sigmas are already inflated by `_WINPROB_SIGMA_INFLATE` (1.5,
+  calibrated against `backtest_winprob.py`), which pulls per-cat probabilities off the extremes
+  before they ever reach the joint. A future refinement could model block correlation (pitching cats
+  as one correlated group, hitting cats as another) instead of treating all 12 as independent; not
+  done for v1 — flagged here as the known next step if the tails prove materially off in practice.
+- **How to read the number (drives ALL user-facing copy):** 50% = genuine coin flip. True 100%/0% is
+  rare — 12 categories means you need to be near-certain in almost all of them to reach an extreme,
+  so a great week realistically reads ~90%, not 100%; that's correct behavior, not a bug. There's
+  always a small tie slice (`P(win)+P(tie)+P(loss)=100%`); the shown chip is the WIN share only.
+- **Display sites, all reading the SAME `winprob_joint`/`winprob_percat`:** the Category Pulse
+  summary line's 🎯 chip (`build_category_pulse` collects each card's `(p_win, p_tie)` into
+  `cat_probs` during its own card loop — a SEPARATE, redundant call to `_matchup_win_prob` on the
+  identical inputs, not a second data source, so it can't drift even though it isn't literally the
+  same Python call as `build_email`'s `winprob_joint`); The Briefing's "This matchup" line
+  (`render_briefing(win_week_pct=...)`); the Weekly Game Plan header (below); and the dashboard's
+  Category Pulse tile subtitle (`dashboard._pulse_cell` returns each cell's `(p_win, p_tie)` as a
+  third tuple element, `render_category_pulse` collects them and calls `sd._matchup_win_prob`
+  directly — same pattern, dashboard has no `build_email` context to import).
+
+### The Weekly Game Plan (`build_game_plan`)
+A digest section (top of the TRANSACTIONS band) that turns the win-prob machinery into a coach's
+read instead of a report. Two parts, both gated on `matchup` + a non-empty `winprob_percat` (mirrors
+every other matchup-dependent section's empty-state guard).
+- **Part A — contest/concede strip.** Every category lands in exactly one bucket, from
+  `winprob_percat` + `_matchup_swing`:
+  - **🔒 Locked** (`p_win% >= _GAMEPLAN_LOCK_PCT` = 85) — already yours, no action.
+  - **🎯 Contest** — a real toss-up (not locked, not conceded) whose leverage clears
+    `_GAMEPLAN_MIN_LEVERAGE` (8 win-the-week percentage points) — genuinely worth a move, sorted
+    most-decisive-first.
+  - **✋ Concede** (`p_win% <= _GAMEPLAN_CONCEDE_PCT` = 15, OR a toss-up whose leverage is below the
+    minimum) — don't spend a move chasing it; it either can't be won or winning it barely moves the
+    week.
+  - This is a **separate taxonomy from `classify_categories`'s `tossup`/`leaning` tiers** — that
+    function classifies a category's own closeness (margin-based); this one classifies whether the
+    category is worth ACTING on, using leverage against the whole week. Don't conflate the two or
+    reuse one's thresholds for the other.
+- **Part B — up to `_GAMEPLAN_MAX_MOVES` (3) ranked move cards.** Candidates come ONLY from the
+  already-built `fa_sp`/`fa_rp`/`fa_hit` pools passed in from `build_email` (never rebuilt), so the
+  plan can't recommend a player the FA tables don't also list. Ranking is by **matchup-level lift**
+  (`_move_win_delta`), not a single category's swing:
+  - **`_pickup_contrib(cand_row, role, remaining_frac, today_str, week_end_str, weeks_played)`** →
+    `{cat: delta}` — the role-aware remaining-production estimate, extracted out of
+    `pickup_win_delta` (the FA-table "Cats" column's swing chip) so both the chip and the Game Plan
+    ranking share the exact same contribution math and can't disagree about what an add actually
+    produces. SP uses actual remaining starts × per-start rate; RP/hit rate-pace the season total by
+    `weeks_played` × `remaining_frac`. `pickup_win_delta` now calls this helper (its own
+    gating/return shape is unchanged — verify with `render_diff.py check`).
+  - **`_move_win_delta(cand_row, role, winprob_ctx, per_cat, remaining_frac, today_str,
+    week_end_str, weeks_played)`** → `(best_cat, cat_before%, cat_after%, week_before%, week_after%)`
+    or `None`. Folds `_pickup_contrib`'s deltas into a COPY of `per_cat` (never mutates the shared
+    map — the same one the 🎯 chip reads), recomputing only the affected category's `p_win` via
+    `_cat_win_prob`, then reruns `_matchup_win_prob` on the copy. Unlike `pickup_win_delta`, this does
+    **not** gate on `_PICKUP_WINDELTA_MIN`/`_PICKUP_CONTESTED_MAX` — a candidate whose only
+    production lands in an already-locked/conceded category naturally yields ~0 matchup lift and
+    sorts itself out; `build_game_plan` additionally skips any candidate whose `best_cat` is in the
+    Locked set outright (avoids a spurious "+0%" card).
+  - **`streamer` vs `hold` tag:** `hold` when the candidate's SEASON blended score beats my starter
+    quality at his position (`pos_data[pos]["my_avg"]`, the same top-K-starter average
+    `_roster_suggestion`'s BAT bullet uses) by `>= _UPGRADE_MARGIN` — a durable upgrade. Otherwise
+    `streamer` (an SP picked up for this week's start(s), or a bat whose edge is this week/recent-form
+    only). Concrete rule, no fuzziness — see `_is_hold` inside `build_game_plan`.
+  - **Drop selection** mirrors `_roster_suggestion`'s `_take_drop`/`_used_drops` PATTERN (surplus
+    positions preferred, transaction-aware via a `pending_add` coverage check, IL-slot-safe) but is
+    its OWN local instance inside `build_game_plan` — not literally shared state with
+    `_roster_suggestion` (that function's surplus definition also folds in bench-leakage
+    `lineup_eff`, which the Game Plan doesn't thread through). The dedupe guarantee ("two cards never
+    suggest dropping the same player") holds WITHIN the Game Plan's own cards via its own
+    `_used_drops`; it does not cross-dedupe against the separate Week-at-a-Glance bullets.
+  - **Droppability floor — never surface a real rostered asset as a move's cost (session addendum,
+    caught in review).** The FIRST version picked a drop by worst BLENDED score (65% season / 35%
+    recent) across the whole roster, same as `_roster_suggestion`. That's wrong for THIS purpose: a
+    single brutal recent week (a 0-for-a-lot stretch, a couple of bad starts) can crater a real
+    starter's blended score enough that the algorithm reads him as the "worst" player on the roster
+    and offers him up as the cost of a throwaway streamer — confirmed in testing when a legitimate
+    everyday 3B (season score 66, blended down to 55 by a 0.465-OPS/7-day slump) got surfaced as the
+    drop for a middling streaming SP. Fix: `_take_drop` now draws ONLY from `_droppable`, a
+    pre-filtered pool requiring (a) SEASON score (`_season_score_of`, no recent blend) below
+    `_GAMEPLAN_DROP_SEASON_FLOOR` (35 — the same "streamer-tier, not worth rostering" cutoff as
+    `_FA_SP_MIN_SCORE`) and (b) not `_active_role_pitcher` (any current-season SVHD > 0 — protects a
+    closer/setup arm that `rp_score`'s punt-saves weighting (~15% SVHD) can rank as "worst" despite
+    real save-role value). This applies to EVERY move, hold or streamer — a slump doesn't make a real
+    asset expendable for a durable upgrade either. **On a well-built roster this can legitimately
+    leave `_droppable` empty**, so `_take_drop` returns `None`, and the card-building loop `continue`s
+    past that candidate rather than force a bad trade — Part B can render fewer than
+    `_GAMEPLAN_MAX_MOVES` cards, or none at all with the empty-state note, and that's the CORRECT
+    behavior: no real bench fat to spare reads as no safe moves, not as license to cut a starter.
+  - **`is_sunday`** (matchup ends today) suppresses Part B entirely (no move can swing today's
+    closing matchup — same rationale as `_matchup_closing_note`) but Part A (final odds +
+    contest/concede) still renders.
+- **`_GAMEPLAN_WEEKLY_MOVE_CAP` (7) is a reference constant only** — the same "7 moves/week" figure
+  already cited as rationale for the FA-SP per-day display cap — NOT a live remaining-moves counter.
+  No snapshot field tracks weekly transaction usage (ESPN's `recent_activity()` pull isn't a reliable
+  per-team-per-week count), so the section subtitle names it for budget CONTEXT only and never claims
+  an exact "N moves left."
+
 ### HR% (`_hrp_cell`)
 `HR_Probability` (`fetch_data.compute_hr_probability` from barrel%, hard-hit%, launch angle, HR/AB, xwOBA, ISO, recent HR streak; ≈ 0.05–0.31 modeled per-game HR prob) → color-coded `HR%` column in Hitter Recent Form + FA Hitters via `_hrp_cell(row)`, hover `title` = drivers. Green ≥ 20%, yellow ≥ 14%. Takes the full row (Hitter Recent Form stashes the season row as `srow`). **Measures power SKILL, not availability** — must NOT gate on `ESPN_Status` (an earlier gate zeroed out Judge/Trout/Buxton). Returns 0.0 → "—" only when no usable signal. `ISO = SLG − AVG` (FP omits it).
 
