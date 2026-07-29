@@ -364,14 +364,9 @@ def _badge_ctx_wrap(lines):
     return f'<div style="margin-top:6px;color:{MUTED};">{inner}</div>'
 
 
-# Confirmation arrows on the $/▼ badge: the season-level regression flag says a player *should*
-# revert (season actual vs season xBA/xSLG); hitter_recency_flag says whether that reversion has
-# ALREADY shown up in his recent games (AB-weighted regressed recent AVG/SLG vs the same season
-# xBA/xSLG anchor). Plain text glyphs (not emoji) so they inherit the chip's own GREEN/RED color
-# rather than carrying a fixed color of their own -- no new hue, palette stays single-meaning-per-hue.
-_CONFIRM_UP   = "&#8599;"  # ↗ suffix on $ when hitter_recency_flag == 'improving'; STANDALONE (no
-    # $/▼ prefix) when the season flag hasn't fired at all -- an early recency-only trend read.
-_CONFIRM_DOWN = "&#8600;"  # ↘ suffix on ▼ when hitter_recency_flag == 'declining'; STANDALONE same idea.
+# _CONFIRM_UP/_CONFIRM_DOWN (the ↗/↘ confirmation-arrow glyphs) now live in fantasy/scoring.py
+# -- pitcher_regression_badge needs them too and that's a lower layer -- and are inherited here
+# via the `from fantasy.scoring import *` above.
 
 
 def _hit_badge_context(row, hit_pctile=None, cap=None, idx_recent=None):
@@ -407,7 +402,7 @@ def _hit_badge_context(row, hit_pctile=None, cap=None, idx_recent=None):
         elif -d_ba >= _XREG_BA and -d_slg >= _XREG_SLG:
             confirmed = _rflag == "declining"
             contradicted = _rflag == "improving"
-            badge_txt = "&#9660;" + _CONFIRM_DOWN if confirmed else "&#9660;"
+            badge_txt = "&#9660;" + _CONFIRM_DOWN if confirmed else "&#9661;"
             tail = (" Confirmed by his recent games, not just predicted." if confirmed
                      else " Heads up: his recent games are trending the OTHER way (heating up) &mdash; worth watching." if contradicted
                      else "")
@@ -477,10 +472,10 @@ def hitter_badges(row, hit_pctile=None, cap=None, regression=True, idx_recent=No
                     badges.append(_hit_badge("&#9660;" + _CONFIRM_DOWN, RED,
                         _rt + " &mdash; confirmed: already cooling off in recent games, not just a season-level prediction"))
                 elif _rflag == "improving":
-                    badges.append(_hit_badge("&#9660;", RED,
+                    badges.append(_hit_badge("&#9661;", RED,
                         _rt + " &mdash; heads up: his recent games are trending the OTHER way (heating up) &mdash; worth watching before acting on this"))
                 else:
-                    badges.append(_hit_badge("&#9660;", RED, _rt))
+                    badges.append(_hit_badge("&#9661;", RED, _rt))
             elif _rflag == "improving":
                 badges.append(_hit_badge(_CONFIRM_UP, GREEN,
                     f"Recent games already trending up vs his own season xBA {xba:.3f}/xSLG {xslg:.3f} &mdash; "
@@ -515,23 +510,37 @@ def _sp_skill_context(row):
     return _badge_ctx_wrap(lines)
 
 
-def _pitcher_badge_context(row):
-    """Explain the pitcher regression badge ($ buy-low / ▼ sell-high) `row` earns — SAME
-    predicate as `pitcher_regression_badge` — so the tap-to-expand panel explains the chip
-    shown beside the name. Row-only (ERA vs xERA, no recent-form input), so it renders from
-    the shared breakdown for BOTH SP and RP. The SP-only ⚠ blowup badge — which needs the
-    render-site L15 ERA to stay in lockstep with its chip — stays in `_sp_badge_context`."""
+def _pitcher_badge_context(row, idx_recent=None):
+    """Explain the pitcher regression badge ($ buy-low / ▼ / ▽ sell-high, or the standalone
+    early-read arrow) `row` earns — SAME predicate as `pitcher_regression_badge` — so the
+    tap-to-expand panel explains the chip shown beside the name. `idx_recent` (optional, the
+    best_recent_p index) checks the sell-high call against `pitcher_recency_flag`, same as the
+    badge itself, so the panel text never disagrees with the glyph (solid ▼ vs hollow ▽, or a
+    bare arrow) actually shown. The SP-only ⚠ blowup badge — which needs the render-site L15
+    ERA to stay in lockstep with its chip — stays in `_sp_badge_context`."""
     flag = pitcher_regression_flag(row)
+    rec = idx_recent.get(row.get("PlayerName", "")) if idx_recent else None
+    rflag = pitcher_recency_flag(row, rec) if rec else None
     if not flag:
-        return ""
+        xera = _n(row.get("xERA"))
+        if xera <= 0 or rflag not in ("improving", "declining"):
+            return ""
+        verb = "better" if rflag == "improving" else "worse"
+        signal = "buy" if rflag == "improving" else "sell"
+        line = (f'{pitcher_regression_badge(row, idx_recent)} Recent games already trending {verb} than his '
+                f'season {xera:.2f} xERA &mdash; before it&rsquo;s shown up enough in his season ERA to trip '
+                f'a season-level {signal} signal. Early skill-trend read, not yet a season call.')
+        return _badge_ctx_wrap([line])
     era, xera = _n(row.get("ERA")), _n(row.get("xERA"))
     if flag == "sell":
-        line = (f'{pitcher_regression_badge(row)} ERA {era:.2f} is running below his '
-                f'{xera:.2f} xERA &mdash; getting lucky, regression risk (sell-high).')
+        confirmed_tail = (" Already confirmed by his recent games, not just a season-level prediction."
+                           if rflag == "declining" else "")
+        line = (f'{pitcher_regression_badge(row, idx_recent)} ERA {era:.2f} is running below his '
+                f'{xera:.2f} xERA &mdash; getting lucky, regression risk (sell-high).{confirmed_tail}')
         if _is_sp(row):   # ⚠ only shows for startable arms, so the distinction is SP-only
             line += ' Separate from &#9888;: this is mean regression, not blowup floor.'
     else:
-        line = (f'{pitcher_regression_badge(row)} ERA {era:.2f} is running above his '
+        line = (f'{pitcher_regression_badge(row, idx_recent)} ERA {era:.2f} is running above his '
                 f'{xera:.2f} xERA &mdash; unlucky, positive regression likely (buy-low).')
     return _badge_ctx_wrap([line])
 
@@ -857,7 +866,7 @@ def _pitcher_score_breakdown(r, idx_recent=None):
             + _recent_form_line(rec, role, win, season_row=r)
             + _archetype_line(_pitcher_archetype(r, role, season, tag))
             + f'<div style="margin-top:4px;">{narr}</div>')
-    html += _pitcher_badge_context(r)
+    html += _pitcher_badge_context(r, idx_recent)
     html += _injury_context(r)
     return html
 

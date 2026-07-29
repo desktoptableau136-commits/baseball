@@ -793,6 +793,60 @@ _XREG_ERA_IP = 20     # min IP so the gap is a real signal, not small-sample noi
 _XERA_OFFSET = 0.0
 
 
+# Confirmation arrows on the $/▼ badge: the season-level regression flag says a player *should*
+# revert; the recency flag (hitter_recency_flag / pitcher_recency_flag, below) says whether that
+# reversion has ALREADY shown up in his recent games. Plain text glyphs (not emoji) so they
+# inherit the chip's own GREEN/RED color rather than carrying a fixed color of their own -- no
+# new hue, palette stays single-meaning-per-hue. Defined here (not in fantasy/analytics.py, the
+# original home) because `pitcher_regression_badge` -- a scoring-layer function -- now needs them
+# too; analytics.py inherits them via its `from fantasy.scoring import *`.
+_CONFIRM_UP   = "&#8599;"  # ↗ suffix when the recency flag == 'improving'; STANDALONE (no $/▼
+    # prefix) when the season flag hasn't fired at all -- an early recency-only trend read.
+_CONFIRM_DOWN = "&#8600;"  # ↘ suffix on a solid ▼ when the recency flag == 'declining'; STANDALONE same idea.
+
+
+_PIT_RECENCY_MIN_IP   = 8     # min recent IP so a pitcher ERA read isn't 1-2 shaky starts of
+                              # noise (IP analog of _HIT_RECENCY_MIN_AB)
+_PIT_RECENCY_PRIOR_IP = 25.0  # recent-IP shrinkage strength toward season xERA when checking
+                              # confirmation (pitcher analog of _HIT_REG_PRIOR_AB)
+_PIT_RECENCY_GAP_ERA  = 1.50  # effective recent ERA vs xERA gap that counts as "confirmed" --
+                              # ~1.5x the season _XREG_ERA bar, same margin-over-the-season-
+                              # threshold pattern as _HIT_RECENCY_GAP_BA/SLG vs _XREG_BA/SLG
+
+
+def _effective_era_recent(season_row, recent_row):
+    """Recent-window ERA regressed toward season xERA (skill estimate), IP-weighted -- same
+    shrinkage pattern as _effective_avg/_effective_slg, adapted for a pitcher's ERA."""
+    era, ip = _n(recent_row.get("ERA")), _n(recent_row.get("IP"))
+    if era <= 0 or ip <= 0:
+        return 0.0
+    target = _n(season_row.get("xERA")) or (_LG.get("era") or 4.10)
+    return (era * ip + target * _PIT_RECENCY_PRIOR_IP) / (ip + _PIT_RECENCY_PRIOR_IP)
+
+
+def pitcher_recency_flag(season_row, recent_row):
+    """Pitcher analog of hitter_recency_flag: does a pitcher's recent ERA already show the
+    season regression flag's predicted move (relative to his season xERA skill anchor), or does
+    IP-shrinkage mostly erase it? 'declining' = recent ERA already worse than xERA (confirms a
+    sell-high call -- he's already getting hit harder, not just statistically 'due'); 'improving'
+    = recent ERA already better than xERA (confirms a buy-low call); 'noise' = the recent sample
+    doesn't clear the anchor either way; None = below the IP reliability floor or no xERA. ERA is
+    lower-is-better, so the sign convention is flipped vs hitter_recency_flag's AVG/SLG
+    (higher-is-better)."""
+    ip = _n(recent_row.get("IP")) if recent_row else 0
+    if ip < _PIT_RECENCY_MIN_IP:
+        return None
+    xera = _n(season_row.get("xERA"))
+    if xera <= 0:
+        return None
+    gap = _effective_era_recent(season_row, recent_row) - xera
+    if gap >= _PIT_RECENCY_GAP_ERA:
+        return "declining"
+    if gap <= -_PIT_RECENCY_GAP_ERA:
+        return "improving"
+    return "noise"
+
+
 def compute_xera_offset(pitchers):
     """Set the module `_XERA_OFFSET` = league median (xERA − ERA) over the qualified YEAR
     pool, so `pitcher_regression_flag` measures luck RELATIVE to the systematic offset."""
@@ -819,18 +873,49 @@ def pitcher_regression_flag(row):
     return None
 
 
-def pitcher_regression_badge(row):
-    """Green $ (buy-low) / red ▼ (sell-high) chip for a pitcher whose ERA has diverged from
-    xERA, or '' when neither. Display-only (never folded into any score); hover names the
-    ERA vs xERA gap. SEPARATE from ⚠ (tail risk) — see the note above."""
+def pitcher_regression_badge(row, idx_recent=None):
+    """Green $ (buy-low) / red ▼ (sell-high, CONFIRMED) or hollow ▽ (sell-high, still just a
+    season-level prediction) chip for a pitcher whose ERA has diverged from xERA, or '' when
+    neither. Display-only (never folded into any score); hover names the ERA vs xERA gap.
+    SEPARATE from ⚠ (tail risk) — see the note above. `idx_recent` (optional, the
+    best_recent_p index) checks the sell-high call against `pitcher_recency_flag` — same
+    three-outcome pattern as the hitter $/▼ badge (`hitter_badges`): recency CONFIRMS -> solid
+    ▼ + a downward confirmation arrow; recency DISAGREES, has no data, or wasn't passed ->
+    hollow ▽ (still a live warning — just not yet shown up in his actual recent games).
+    Omitting `idx_recent` (default) always renders the hollow ▽ for a sell-high flag, since
+    there's no way to check confirmation without it. STANDALONE EARLY-READ ARROW (pitcher
+    analog of hitter_badges' 4th case): when the season flag hasn't fired at all but
+    `pitcher_recency_flag` clears its threshold on its own, renders a bare confirmation arrow
+    (no $/▼/▽) — an early skill-trend read ahead of the season ERA catching up."""
     flag = pitcher_regression_flag(row)
+    rec = idx_recent.get(row.get("PlayerName", "")) if idx_recent else None
+    rflag = pitcher_recency_flag(row, rec) if rec else None
     if not flag:
+        xera = _n(row.get("xERA"))
+        if xera <= 0:
+            return ""
+        if rflag == "improving":
+            return _hit_badge(_CONFIRM_UP, GREEN,
+                               f"Recent games already trending better than his season {xera:.2f} xERA "
+                               "&mdash; before it's shown up enough in his season ERA to trip a "
+                               "season-level buy signal. Early skill-trend read, not yet a season call.")
+        if rflag == "declining":
+            return _hit_badge(_CONFIRM_DOWN, RED,
+                               f"Recent games already trending worse than his season {xera:.2f} xERA "
+                               "&mdash; before it's shown up enough in his season ERA to trip a "
+                               "season-level sell signal. Early skill-trend read, not yet a season call.")
         return ""
     era, xera = _n(row.get("ERA")), _n(row.get("xERA"))
     gap = f"ERA {era:.2f} vs xERA {xera:.2f}"
     if flag == "buy":
         return _hit_badge("$", GREEN, gap + " &mdash; ERA above expected, positive regression likely (buy-low)")
-    return _hit_badge("&#9660;", RED, gap + " &mdash; ERA below expected, regression risk (sell-high)")
+    if rflag == "declining":
+        return _hit_badge("&#9660;" + _CONFIRM_DOWN, RED,
+                           gap + " &mdash; confirmed: already worsening in his recent games, "
+                                 "not just a season-level prediction. Regression risk (sell-high).")
+    tail = (" Heads up: his recent games are trending the OTHER way (improving) &mdash; worth watching."
+            if rflag == "improving" else "")
+    return _hit_badge("&#9661;", RED, gap + " &mdash; ERA below expected, regression risk (sell-high)." + tail)
 
 
 # ── Season starter-skill badges (the SEASON analog of the per-start QS / 5K+ chips) ──

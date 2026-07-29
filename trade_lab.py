@@ -246,11 +246,11 @@ def _serialize(r, role, best_recent_h, best_recent_p, hit_pctile):
         badges    = sd.hitter_badges(r, hit_pctile, idx_recent=best_recent_h)
         breakdown = sd._hitter_score_breakdown(r, best_recent_h, hit_pctile)
     elif role == "sp":
-        # Season skill (QS / K+) first, then the risk flags (blowup ⚠ / regression $ ▼).
-        badges    = sd.sp_skill_badges(r) + sd.blowup_badge(r) + sd.pitcher_regression_badge(r)
+        # Season skill (QS / K+) first, then the risk flags (blowup ⚠ / regression $ ▼▽).
+        badges    = sd.sp_skill_badges(r) + sd.blowup_badge(r) + sd.pitcher_regression_badge(r, idx_recent=best_recent_p)
         breakdown = sd._pitcher_score_breakdown(r, best_recent_p) + sd._sp_skill_context(r)
     else:
-        badges    = sd.pitcher_regression_badge(r)
+        badges    = sd.pitcher_regression_badge(r, idx_recent=best_recent_p)
         breakdown = sd._pitcher_score_breakdown(r, best_recent_p)
     badges += sd._il_badge(r)   # injury chip — explains the _tval discount (mirrors the digest cards)
     return {

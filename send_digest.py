@@ -924,7 +924,7 @@ def build_pitcher_hot_cold_section(pitchers, my_team, best_recent_p=None):
             _bd_uid("phc", r["name"]), 7)
         rows_html += (
             f'<tr style="{bg}">'
-            f'<td style="{TD_S}font-weight:600;">{team_logo(r["team"])}{r["name"]}{r["inj"]}{pitcher_regression_badge(r["srow"])}</td>'
+            f'<td style="{TD_S}font-weight:600;">{team_logo(r["team"])}{r["name"]}{r["inj"]}{pitcher_regression_badge(r["srow"], idx_recent=best_recent_p)}</td>'
             f'<td style="{TDC}color:{MUTED};">{r["pos"]}</td>'
             f'<td style="{TDC}">{r["season_era"]:.2f}</td>'
             f'<td style="{TDC}">{whiff_cell}</td>'
@@ -2389,8 +2389,8 @@ def build_glossary_section():
                "(WHIP), a strikeout escape hatch (K% / whiff), effective run prevention (ERA regressed toward "
                "xERA), and hard contact allowed, then escalates when the arm is <b>cold lately</b> (high L15 ERA). "
                "<b>Hover</b> for the worst 2–3 drivers. A floor warning only — it never lowers the Score, and the "
-               "digest steers pickups away from flagged arms. Distinct from ▼ sell-high — ⚠ is single-start "
-               "<i>tail</i> risk, ▼ is <i>mean</i> regression."),
+               "digest steers pickups away from flagged arms. Distinct from ▼/▽ sell-high — ⚠ is single-start "
+               "<i>tail</i> risk, ▼/▽ is <i>mean</i> regression."),
 
         _subhead("Hitters"),
         _entry(f'PWR{_hit_badge("PWR", PURPLE)}',
@@ -2400,26 +2400,33 @@ def build_glossary_section():
                "Next to a hitter's name — a genuine base-stealer (top-20% SB producer, corroborated by sprint "
                "speed)."),
         _subhead("Buy-low / sell-high — pitchers &amp; hitters"),
-        _entry(f'$ / ▼{_hit_badge("$", GREEN)}{_hit_badge("&#9660;", RED)}',
+        _entry(f'$ / ▼ / ▽{_hit_badge("$", GREEN)}{_hit_badge("&#9660;", RED)}{_hit_badge("&#9661;", RED)}',
                "Statcast expected-vs-actual regression flags (mutually exclusive). <b>$</b> (green) = "
                "<b>buy-low</b>: results running <i>behind</i> the expected stats (unlucky) → positive regression "
-               "likely, a good acquire-cheap target. <b>▼</b> (red) = <b>sell-high</b>: results <i>ahead</i> of "
-               "expected (lucky) → regression risk, move him while the surface looks great. For <b>hitters</b> "
-               "the read is xBA/xSLG vs actual AVG/SLG; for <b>pitchers</b> it's xERA vs ERA (measured relative to "
-               "the league's typical xERA-vs-ERA offset, since xERA runs a bit high). Display-only — never changes "
-               "a Score — and it powers the buy-low / sell-high timing in Trade Radar. <b>Hover</b> for the numbers."),
+               "likely, a good acquire-cheap target. <b>▽</b> (hollow red) = <b>sell-high</b>: results <i>ahead</i> "
+               "of expected (lucky) → regression risk — a season-level prediction only, not yet showing up in his "
+               "actual recent games. <b>▼</b> (solid red) = that same sell-high call, but already <b>confirmed</b> "
+               "— his recent games are already trending the predicted way (see the next entry). The shape does the "
+               "talking on purpose: hollow reads as 'watch out,' solid reads as 'already happening.' For "
+               "<b>hitters</b> the read is xBA/xSLG vs actual AVG/SLG; for <b>pitchers</b> it's xERA vs ERA "
+               "(measured relative to the league's typical xERA-vs-ERA offset, since xERA runs a bit high). "
+               "Display-only — never changes a Score — and it powers the buy-low / sell-high timing in Trade Radar. "
+               "<b>Hover</b> for the numbers."),
         _entry(f'$&#8599; / ▼&#8600;{_hit_badge("$&#8599;", GREEN)}{_hit_badge("&#9660;&#8600;", RED)}',
-               "<b>Hitters only</b> — a small diagonal arrow means the buy-low/sell-high call isn't just a season-level "
-               "prediction, it's already showing up in his <i>recent</i> games (his recent AVG/SLG, weighted for small-"
-               "sample size, still diverges from his season expected stats in the same direction). No arrow doesn't "
-               "mean the call is wrong — most of the time there's just no recent confirmation yet either way. When his "
-               "recent games are trending the <i>opposite</i> way instead, the badge stays plain but the hover text "
-               "says so — worth a second look before acting on the $/▼ call."),
+               "<b>Hitters and pitchers</b> — a small diagonal arrow means the buy-low/sell-high call isn't just a "
+               "season-level prediction, it's already showing up in his <i>recent</i> games (recent AVG/SLG for a "
+               "hitter, recent ERA for a pitcher — both weighted for small-sample size — still diverge from the "
+               "season expected stats in the same direction). This is exactly what flips the sell-high glyph from "
+               "hollow ▽ to solid ▼. No arrow doesn't mean the call is wrong — most of the time there's just no "
+               "recent confirmation yet either way. When his recent games are trending the <i>opposite</i> way "
+               "instead, the badge stays as shown but the hover text flags the contradiction — worth a second look "
+               "before acting on the $/▼/▽ call."),
         _entry(f'&#8599; / &#8600;{_hit_badge("&#8599;", GREEN)}{_hit_badge("&#8600;", RED)}',
-               "<b>Hitters only</b> — a bare diagonal arrow with <i>no</i> $/▼ means his season aggregate hasn't moved "
-               "enough yet to trip the season-level buy-low/sell-high badge, but his recent games are <i>already</i> "
-               "trending that direction against his own expected stats. An early read — it can graduate to a full "
-               "$/▼ later once the season numbers catch up, or fade back to nothing if it was a short blip."),
+               "<b>Hitters and pitchers</b> — a bare diagonal arrow with <i>no</i> $/▼/▽ means his season "
+               "aggregate hasn't moved enough yet to trip the season-level buy-low/sell-high badge, but his "
+               "recent games are <i>already</i> trending that direction against his own expected stats (xBA/xSLG "
+               "for hitters, xERA for pitchers). An early read — it can graduate to a full $/▼ later once the "
+               "season numbers catch up, or fade back to nothing if it was a short blip."),
         _entry(f'Injury (trade cards){_il_badge({"ESPN_Status": "TEN_DAY_DL"})}{_il_badge({"ESPN_Status": "SIXTY_DAY_DL"})}{_il_badge({"ESPN_Status": "DAY_TO_DAY"})}',
                "On a <b>Trade Radar</b>, <b>Pending Trades</b>, or <b>Trade Lab</b> player line, a red "
                "<b>IL-10 / IL-15 / IL-60 / OUT</b> (or orange <b>DTD</b>) chip flags an injured player. His "
@@ -2462,13 +2469,14 @@ def build_glossary_section():
                "sure loss &mdash; clears the bar) &mdash; these are the categories worth spending a move on, "
                "ranked most-decisive first. <b>Concede</b> = win odds &le; 15% <i>or</i> a toss-up that barely "
                "moves the week either way &mdash; not worth chasing."),
-        _entry(f"&#9312;&ndash;&#9314; Ranked moves &middot; streamer / hold tag",
-               "Up to 3 FA pickups (from the same pools as FA Starting Pitchers / Relief Pitchers / Hitters &mdash; "
-               "never a player those tables don't also list), ranked by how much they lift your <b>Win-the-week</b> "
-               "odds, not just a single category. Each card shows the add, the drop it costs (or a free roster "
-               "spot), and the before&rarr;after odds for both the category and the whole week. The right-aligned "
-               "tag reads <b>hold</b> when the add is a durable season-quality upgrade over your starter at that "
-               "spot, else <b>streamer</b> (a short-term volume/form play &mdash; an SP added for this week's "
+        _entry(f"&#9312;&#9313; Ranked moves &middot; streamer / hold tag",
+               "Up to 2 hitter + 2 pitcher FA pickups, in side-by-side columns (from the same pools as FA "
+               "Starting Pitchers / Relief Pitchers / Hitters &mdash; never a player those tables don't also "
+               "list), each column ranked by how much its picks lift your <b>Win-the-week</b> odds, not just a "
+               "single category. Each card shows the add, the drop it costs (or a free roster spot), and the "
+               "before&rarr;after odds for both the category and the whole week. The right-aligned tag reads "
+               "<b>hold</b> when the add is a durable season-quality upgrade over your starter at that spot, "
+               "else <b>streamer</b> (a short-term volume/form play &mdash; an SP added for this week's "
                "start(s), or a bat riding a hot recent window)."),
 
         _subhead("Pending trades"),
@@ -2526,7 +2534,7 @@ def build_glossary_section():
                "that stat and shrinks for counting cats as the matchup ends; a category with no history yet "
                "falls back to its close-threshold. The % and the ▲▼◆ marker always agree in direction with "
                "the “proj” value (see <b>Badges & icons</b> for the markers)."),
-        _entry(f'Trade Radar{_hit_badge("$", GREEN)}{_hit_badge("&#9660;", RED)}',
+        _entry(f'Trade Radar{_hit_badge("$", GREEN)}{_hit_badge("&#9660;", RED)}{_hit_badge("&#9661;", RED)}',
                "Trade ideas that <b>fix a rival's category need</b> (their reason to accept) "
                "while <b>tilting value to you</b>. You send a player strong in a category you're deep in and "
                "they're weak in; you get back one who fills a category <i>or a thin roster position</i> you "
@@ -2538,7 +2546,8 @@ def build_glossary_section():
                "<b>favor you</b> rather than land even. Where possible it leverages <b>buy-low / sell-high</b> "
                "timing (Statcast expected vs actual): move a bat whose surface stats are about to regress, "
                "acquire one due to rebound. Chips: blue = category gained, cyan = thin position upgraded, and "
-               "the same <b>$</b> (buy-low) / <b>▼</b> (sell-high) glyphs used everywhere else in the digest — "
+               "the same <b>$</b> (buy-low) / <b>▼</b>-or-<b>▽</b> (sell-high — solid once confirmed by his "
+               "recent games, hollow while still just a prediction) glyphs used everywhere else in the digest — "
                "the footer tag tells you which way the timing helps you. A purple <b>💫 Blockbuster</b> card "
                "(when one exists) is the headline: a multi-player <b>consolidation</b> win-win — give several "
                "depth pieces, get fewer-but-better need-fillers — that the standard ≤2-per-side deals can't "
@@ -3208,14 +3217,15 @@ def _rank_todays_games(todays_games, my_key, opp_key, pin_favorite=True):
 
 def build_todays_games_section(todays_games, my_team, opp_team, max_games=4,
                                hit_rows=None, pit_rows=None, recent_era=None, hit_pctile=None,
-                               idx_recent=None):
+                               idx_recent=None, idx_recent_p=None):
     """The 'Today's MLB Games' panel — the real games worth tuning into because they
     carry the most of my and my opponent's rostered players. Returns '' when nothing
     qualifies (off-day / no overlap). Perspective is applied here from each involved
     player's FantasyTeam, so it works under --team for free. When the row lookups are
     passed (`hit_rows`/`pit_rows` = season YEAR row keyed by _badge_name_key, `recent_era`
     = L15 ERA keyed the same, `hit_pctile` = the qualified-pool percentile index, `idx_recent`
-    = best_recent_h, confirms the hitter $/▼ against hitter_recency_flag), each involved player
+    = best_recent_h, confirms the hitter $/▼ against hitter_recency_flag; `idx_recent_p` =
+    best_recent_p, confirms the pitcher $/▼ against pitcher_recency_flag), each involved player
     gets the SAME role-aware tactical badges as the rest of the digest — hitters PWR/SB/$/▼
     (`hitter_badges`), pitchers ⚠ (`blowup_badge`, self-gated to startable arms) + $/▼
     (`pitcher_regression_badge`)."""
@@ -3232,7 +3242,7 @@ def build_todays_games_section(todays_games, my_team, opp_team, max_games=4,
             row = pit_rows.get(key)
             if not row:
                 return ""
-            return blowup_badge(row, recent_era.get(key)) + pitcher_regression_badge(row)
+            return blowup_badge(row, recent_era.get(key)) + pitcher_regression_badge(row, idx_recent=idx_recent_p)
         row = hit_rows.get(key)
         return hitter_badges(row, hit_pctile, idx_recent=idx_recent) if row else ""
 
@@ -3652,7 +3662,9 @@ _GAMEPLAN_CONCEDE_PCT  = 15   # cat win% <= this -> ✋ Concede (don't spend a m
 _GAMEPLAN_MIN_LEVERAGE = 8    # min swing leverage (win-the-week percentage points) for a
                               # toss-up cat to count as 🎯 Contest rather than ✋ Concede —
                               # a toss-up cat that barely moves the week isn't worth a move
-_GAMEPLAN_MAX_MOVES    = 3    # top-N ranked move cards
+_GAMEPLAN_MAX_HIT_MOVES = 2   # top-N ranked hitter move cards (left column)
+_GAMEPLAN_MAX_PIT_MOVES = 2   # top-N ranked pitcher move cards (right column, SP+RP combined)
+_GAMEPLAN_MAX_MOVES = _GAMEPLAN_MAX_HIT_MOVES + _GAMEPLAN_MAX_PIT_MOVES  # total cards, for the subtitle
 _GAMEPLAN_DROP_SEASON_FLOOR = 40   # a move card's drop cost must have a SEASON score (not
                               # the recent-blended one, which a single bad week can crater)
                               # below this -- a bit above _FA_SP_MIN_SCORE's 35 "streamer-tier"
@@ -3672,7 +3684,8 @@ def build_game_plan(matchup, winprob_ctx, per_cat, winprob_rf, winprob_weeks,
                     league_active_roster_max=26, league_il_roster_max=2,
                     best_recent_p=None, best_recent_h=None, hit_pctile=None):
     """The Weekly Game Plan: a contest/concede category read (Part A) plus up to
-    _GAMEPLAN_MAX_MOVES ranked FA move cards (Part B), each showing the matchup-win-%
+    _GAMEPLAN_MAX_HIT_MOVES ranked hitter move cards + _GAMEPLAN_MAX_PIT_MOVES ranked
+    pitcher move cards (Part B), laid out in two columns, each showing the matchup-win-%
     it buys. '' when there's no live matchup or no usable win-prob context (mirrors the
     other matchup-dependent sections' guard)."""
     if not matchup or not per_cat:
@@ -3899,98 +3912,136 @@ def build_game_plan(matchup, winprob_ctx, per_cat, winprob_rf, winprob_weeks,
             return f'<span style="color:{MUTED};font-size:11px;">{val:.{dec}f} {lbl} this season</span>'
 
         locked_set = set(locked)
-        candidates = [(r, "sp") for r in fa_sp] + [(r, "rp") for r in fa_rp] + [(r, "hit") for r in fa_hit]
-        scored = []
-        for r, role in candidates:
-            res = _move_win_delta(r, role, winprob_ctx, per_cat, winprob_rf,
-                                  today_str, week_end_str, weeks_played=winprob_weeks)
-            if not res:
-                continue
-            best_cat, cb, ca, wb, wa = res
-            if best_cat in locked_set:
-                continue   # already yours -- a spurious "+0%" card, skip (no filter needed otherwise)
-            lift = wa - wb
-            if lift <= 0:
-                continue
-            scored.append((lift, r, role, best_cat, cb, ca, wb, wa))
-        scored.sort(key=lambda x: -x[0])
+        hit_candidates = [(r, "hit") for r in fa_hit]
+        pit_candidates = [(r, "sp") for r in fa_sp] + [(r, "rp") for r in fa_rp]
+
+        def _score_candidates(candidates):
+            scored = []
+            for r, role in candidates:
+                res = _move_win_delta(r, role, winprob_ctx, per_cat, winprob_rf,
+                                      today_str, week_end_str, weeks_played=winprob_weeks)
+                if not res:
+                    continue
+                best_cat, cb, ca, wb, wa = res
+                if best_cat in locked_set:
+                    continue   # already yours -- a spurious "+0%" card, skip (no filter needed otherwise)
+                lift = wa - wb
+                if lift <= 0:
+                    continue
+                scored.append((lift, r, role, best_cat, cb, ca, wb, wa))
+            scored.sort(key=lambda x: -x[0])
+            return scored
+
+        scored_hit = _score_candidates(hit_candidates)
+        scored_pit = _score_candidates(pit_candidates)
 
         _CIRCLED = ["①", "②", "③", "④", "⑤"]
-        cards = []
-        for (lift, r, role, best_cat, cb, ca, wb, wa) in scored:
-            if len(cards) >= _GAMEPLAN_MAX_MOVES:
-                break
-            hold = _is_hold(r, role)
-            tag_lbl, tag_col = ("hold", ACCENT) if hold else ("streamer", MUTED)
-            # Resolve the drop BEFORE building the card. _take_drop only offers genuinely
-            # fringe players (_droppable, built above) -- when slots_left covers the add, no
-            # drop is needed at all. When neither an open slot nor a safe drop exists, the
-            # card still renders (the pickup idea is still worth surfacing -- ranked purely
-            # by matchup lift) with an advisory line instead of a specific drop, rather than
-            # disappearing entirely just because there's no fringe bench fat to spare.
-            if slots_left > 0:
-                slots_left -= 1
-                drop_html = (f'<span style="color:{GREEN};font-size:11px;">&#10003; roster spot open '
-                             f'&mdash; no drop needed</span>')
-            else:
-                d = _take_drop(r)
-                if d is None:
-                    drop_html = (f'<span style="color:{MUTED};font-size:11px;">No safe drop right now '
-                                 f'&mdash; worth a manual look at your bench</span>')
+
+        def _build_cards(scored_list, cap):
+            nonlocal slots_left
+            cards = []
+            for (lift, r, role, best_cat, cb, ca, wb, wa) in scored_list:
+                if len(cards) >= cap:
+                    break
+                hold = _is_hold(r, role)
+                tag_lbl, tag_col = ("hold", ACCENT) if hold else ("streamer", MUTED)
+                # Resolve the drop BEFORE building the card. _take_drop only offers genuinely
+                # fringe players (_droppable, built above) -- when slots_left covers the add, no
+                # drop is needed at all. When neither an open slot nor a safe drop exists, the
+                # card still renders (the pickup idea is still worth surfacing -- ranked purely
+                # by matchup lift) with an advisory line instead of a specific drop, rather than
+                # disappearing entirely just because there's no fringe bench fat to spare.
+                if slots_left > 0:
+                    slots_left -= 1
+                    drop_html = (f'<span style="color:{GREEN};font-size:11px;">&#10003; roster spot open '
+                                 f'&mdash; no drop needed</span>')
                 else:
-                    drop_html = _render_drop(d)
-            i = len(cards)
-            pos_disp = _pos_disp(r)
-            team_l = team_logo(r.get("Team"))
-            add_line = _move_line(r, role, best_cat)
-            cat_lbl = _CAT_LABELS_MAP.get(best_cat, best_cat)
+                    d = _take_drop(r)
+                    if d is None:
+                        drop_html = (f'<span style="color:{MUTED};font-size:11px;">No safe drop right now '
+                                     f'&mdash; worth a manual look at your bench</span>')
+                    else:
+                        drop_html = _render_drop(d)
+                i = len(cards)
+                pos_disp = _pos_disp(r)
+                team_l = team_logo(r.get("Team"))
+                add_line = _move_line(r, role, best_cat)
+                cat_lbl = _CAT_LABELS_MAP.get(best_cat, best_cat)
 
-            badges = ""
-            if role == "hit":
-                badges = hitter_badges(r, hit_pctile, idx_recent=best_recent_h)
-                bd = _hitter_score_breakdown(r, best_recent_h, hit_pctile)
-                score_val = _blend(r, hitter_score, best_recent_h)
-            else:
-                pv = _proj_line_vals(r)
-                if pv:
-                    ip_g, er, k = pv
-                    if _proj_is_qs(ip_g, er):
-                        badges += qs_badge(ip_g, er, r)
-                    if k >= 5:
-                        badges += k5_badge(k, r)
-                if role == "sp":
-                    badges += blowup_badge(r) + pitcher_regression_badge(r)
-                bd = _pitcher_score_breakdown(r, best_recent_p)
-                score_val = _score_p(r, best_recent_p)
-            uid = _bd_uid("gp", r.get("PlayerName", "")) if bd else None
-            score_html, reveal = _trade_score_reveal(int(round(score_val)), bd, uid)
+                badges = ""
+                if role == "hit":
+                    badges = hitter_badges(r, hit_pctile, idx_recent=best_recent_h)
+                    bd = _hitter_score_breakdown(r, best_recent_h, hit_pctile)
+                    score_val = _blend(r, hitter_score, best_recent_h)
+                else:
+                    pv = _proj_line_vals(r)
+                    if pv:
+                        ip_g, er, k = pv
+                        if _proj_is_qs(ip_g, er):
+                            badges += qs_badge(ip_g, er, r)
+                        if k >= 5:
+                            badges += k5_badge(k, r)
+                    if role == "sp":
+                        badges += blowup_badge(r) + pitcher_regression_badge(r, idx_recent=best_recent_p)
+                    bd = _pitcher_score_breakdown(r, best_recent_p)
+                    score_val = _score_p(r, best_recent_p)
+                uid = _bd_uid("gp", r.get("PlayerName", "")) if bd else None
+                score_html, reveal = _trade_score_reveal(int(round(score_val)), bd, uid)
 
-            num = _CIRCLED[i] if i < len(_CIRCLED) else str(i + 1)
-            cards.append(
-                f'<div style="background:{SURFACE};border:1px solid {BORDER};border-radius:8px;'
-                f'padding:10px 14px;margin-bottom:10px;">'
-                f'<div style="font-size:11.5px;color:{ACCENT};font-weight:800;margin-bottom:5px;">'
-                f'{num} +{round(lift)}% {cat_lbl} odds</div>'
-                f'<div style="font-size:12.5px;">Add {team_l}'
-                f'<span style="color:{TEXT};font-weight:700;">{r.get("PlayerName","")}</span> '
-                f'<span style="color:{MUTED};">({pos_disp})</span> {score_html}{badges}</div>'
-                f'<div style="margin-top:2px;">{add_line}</div>'
-                f'<div style="margin-top:6px;font-size:12px;">{drop_html}'
-                f'<span style="float:right;color:{tag_col};font-size:9.5px;font-weight:700;'
-                f'text-transform:uppercase;border:1px solid {tag_col};border-radius:3px;'
-                f'padding:1px 6px;">{tag_lbl}</span></div>'
-                f'<div style="margin-top:6px;font-size:11px;color:{MUTED};clear:both;'
-                f'border-top:1px solid {BORDER};padding-top:6px;">'
-                f'&#8594; lifts your <span style="color:{TEXT};">{cat_lbl}</span> win '
-                f'{cb}% &#8594; {ca}%, matchup {wb}% &#8594; <span style="color:{TEXT};font-weight:700;">{wa}%</span>'
-                f'</div>{reveal}</div>'
-            )
-        if cards:
-            cards_html = "".join(cards)
-        else:
+                num = _CIRCLED[i] if i < len(_CIRCLED) else str(i + 1)
+                cards.append(
+                    f'<div style="background:{SURFACE};border:1px solid {BORDER};border-radius:8px;'
+                    f'padding:10px 14px;margin-bottom:10px;">'
+                    f'<div style="font-size:11.5px;color:{ACCENT};font-weight:800;margin-bottom:5px;">'
+                    f'{num} +{round(lift)}% {cat_lbl} odds</div>'
+                    f'<div style="font-size:12.5px;">Add {team_l}'
+                    f'<span style="color:{TEXT};font-weight:700;">{r.get("PlayerName","")}</span> '
+                    f'<span style="color:{MUTED};">({pos_disp})</span> {score_html}{badges}</div>'
+                    f'<div style="margin-top:2px;">{add_line}</div>'
+                    f'<div style="margin-top:6px;font-size:12px;">{drop_html}'
+                    f'<span style="float:right;color:{tag_col};font-size:9.5px;font-weight:700;'
+                    f'text-transform:uppercase;border:1px solid {tag_col};border-radius:3px;'
+                    f'padding:1px 6px;">{tag_lbl}</span></div>'
+                    f'<div style="margin-top:6px;font-size:11px;color:{MUTED};clear:both;'
+                    f'border-top:1px solid {BORDER};padding-top:6px;">'
+                    f'&#8594; lifts your <span style="color:{TEXT};">{cat_lbl}</span> win '
+                    f'{cb}% &#8594; {ca}%, matchup {wb}% &#8594; <span style="color:{TEXT};font-weight:700;">{wa}%</span>'
+                    f'</div>{reveal}</div>'
+                )
+            return cards
+
+        hit_cards = _build_cards(scored_hit, _GAMEPLAN_MAX_HIT_MOVES)
+        pit_cards = _build_cards(scored_pit, _GAMEPLAN_MAX_PIT_MOVES)
+
+        def _empty_col_note(note):
             # Same card weight/border as an actual move card (not a stray trailing line)
-            # so Part B reads as an intentional, labeled answer -- "no moves cleared the
-            # bar" -- rather than content that silently went missing.
+            # so an empty column reads as an intentional, labeled answer -- "no moves
+            # cleared the bar" -- rather than content that silently went missing.
+            return (
+                f'<div style="background:{SURFACE};border:1px solid {BORDER};border-radius:8px;'
+                f'padding:12px 14px;text-align:center;">'
+                f'<div style="font-size:11.5px;color:{TEXT};font-weight:700;">'
+                f'&#128269; No moves clear the bar</div>'
+                f'<div style="font-size:10.5px;color:{MUTED};margin-top:4px;line-height:1.4;">{note}</div>'
+                f'</div>'
+            )
+
+        if hit_cards or pit_cards:
+            hit_body = "".join(hit_cards) if hit_cards else _empty_col_note(
+                "Every hitter candidate's cost was a real rostered player.")
+            pit_body = "".join(pit_cards) if pit_cards else _empty_col_note(
+                "Every pitcher candidate's cost was a real rostered player.")
+            cards_html = (
+                f'<table style="width:100%;border-collapse:collapse;"><tr>'
+                f'<td style="width:50%;vertical-align:top;padding-right:6px;">'
+                f'<div style="font-size:9px;color:{MUTED};font-weight:700;text-transform:uppercase;'
+                f'letter-spacing:.5px;margin-bottom:6px;">Hitters</div>{hit_body}</td>'
+                f'<td style="width:50%;vertical-align:top;padding-left:6px;">'
+                f'<div style="font-size:9px;color:{MUTED};font-weight:700;text-transform:uppercase;'
+                f'letter-spacing:.5px;margin-bottom:6px;">Pitchers</div>{pit_body}</td>'
+                f'</tr></table>'
+            )
+        else:
             cards_html = (
                 f'<div style="background:{SURFACE};border:1px solid {BORDER};border-radius:8px;'
                 f'padding:12px 14px;margin-bottom:18px;text-align:center;">'
@@ -4004,7 +4055,8 @@ def build_game_plan(matchup, winprob_ctx, per_cat, winprob_rf, winprob_weeks,
 
     sub = (f'Final odds for the week &mdash; too late for a move to swing it'
            if is_sunday else
-           f'up to {_GAMEPLAN_MAX_MOVES} ranked moves &middot; weekly add/drop budget ~{_GAMEPLAN_WEEKLY_MOVE_CAP}')
+           f'up to {_GAMEPLAN_MAX_MOVES} ranked moves ({_GAMEPLAN_MAX_HIT_MOVES} hitter, '
+           f'{_GAMEPLAN_MAX_PIT_MOVES} pitcher) &middot; weekly add/drop budget ~{_GAMEPLAN_WEEKLY_MOVE_CAP}')
 
     return section_head("Weekly Game Plan", sub) + strip + cards_html
 
@@ -4394,7 +4446,7 @@ def build_email(snap, override_team=None):
                 if k_fires_s:
                     start_badges.append(k5_badge(_pjs_k, r))
                 start_badges.append(blowup_badge(r, p15r.get("ERA")))
-                start_badges.append(pitcher_regression_badge(r))
+                start_badges.append(pitcher_regression_badge(r, idx_recent=best_recent_p))
                 start_badge = "".join(start_badges)
                 proj_line_s = _proj_line_html(r)
                 _mus_bd = (_pitcher_score_breakdown(r, best_recent_p)
@@ -4484,7 +4536,7 @@ def build_email(snap, override_team=None):
                 _bd_uid("myrp", r.get("PlayerName", "")), 10)
             return (
                 f'<tr style="{bg}">'
-                f'<td style="{TD_S}font-weight:600;">{team_logo(r.get("Team"))}{r.get("PlayerName","")}{inj_tag(r)}{ds_badge}{pitcher_regression_badge(r)}</td>'
+                f'<td style="{TD_S}font-weight:600;">{team_logo(r.get("Team"))}{r.get("PlayerName","")}{inj_tag(r)}{ds_badge}{pitcher_regression_badge(r, idx_recent=best_recent_p)}</td>'
                 f'<td style="{TDC}color:{MUTED};">{r.get("Position","")}</td>'
                 f'<td style="{TDC}">{v(svhd, 0)}</td>'
                 f'<td style="{TDC}">{v(k, 0)}</td>'
@@ -4624,7 +4676,7 @@ def build_email(snap, override_team=None):
                 elif k_fires:
                     name_border = f"border-left:3px solid {YELLOW};"
                 pickup_badges.append(blowup_badge(r, p15r.get("ERA")))
-                pickup_badges.append(pitcher_regression_badge(r))
+                pickup_badges.append(pitcher_regression_badge(r, idx_recent=best_recent_p))
                 pickup_badge = "".join(pickup_badges)
                 # Two-start flag always shows — a 2-start FA is a top streaming target
                 _n_starts_fa = _starts_this_week(r, today_str, week_end_str)
@@ -4704,7 +4756,7 @@ def build_email(snap, override_team=None):
                 _bd_uid("farp", r.get("PlayerName", "")), 11)
             return (
                 f'<tr style="{bg}">'
-                f'<td style="{TD_S}font-weight:600;">{team_logo(r.get("Team"))}{r.get("PlayerName","")}{inj_tag(r)}{ds_badge}{pitcher_regression_badge(r)}</td>'
+                f'<td style="{TD_S}font-weight:600;">{team_logo(r.get("Team"))}{r.get("PlayerName","")}{inj_tag(r)}{ds_badge}{pitcher_regression_badge(r, idx_recent=best_recent_p)}</td>'
                 f'<td style="{TDC}color:{MUTED};">{r.get("Position","")}</td>'
                 f'<td style="{TDC}">{v(svhd, 0)}</td>'
                 f'<td style="{TDC}">{v(k, 0)}</td>'
@@ -4822,7 +4874,7 @@ def build_email(snap, override_team=None):
             rows += (
                 f'<tr style="{bg}">'
                 f'<td style="{TD_S}font-weight:600;">{team_logo(r.get("Team"))}{r.get("PlayerName","")}{inj_tag(r)}{hitter_badges(r, hit_pctile, idx_recent=best_recent_h)}</td>'
-                f'<td style="{TDC}color:{MUTED};">{r.get("Position","")}</td>'
+                f'<td style="{TDC}color:{MUTED};font-size:11px;">{r.get("Position","")}</td>'
                 f'<td style="{TDC}">{v(r.get("R"), 0)}</td>'
                 f'<td style="{TDC}">{v(r.get("HR"), 0)}</td>'
                 f'<td style="{TDC}">{v(r.get("RBI"), 0)}</td>'
@@ -4841,9 +4893,9 @@ def build_email(snap, override_team=None):
         # capped width and wraps (`_cats_cell(..., wrap=True)`) instead of forcing overflow.
         _fa_hit_colgroup = (
             '<colgroup>'
-            '<col style="width:22%;"><col style="width:5%;"><col style="width:5%;">'
+            '<col style="width:25%;"><col style="width:8%;"><col style="width:5%;">'
             '<col style="width:5%;"><col style="width:5%;"><col style="width:5%;">'
-            '<col style="width:6%;"><col style="width:6%;"><col style="width:15%;">'
+            '<col style="width:6%;"><col style="width:6%;"><col style="width:9%;">'
             '<col style="width:12%;"><col style="width:6%;"><col style="width:8%;">'
             '</colgroup>'
         )
@@ -5081,7 +5133,7 @@ def build_email(snap, override_team=None):
                 f'{team_logo(starter.get("Team"), 16)}'
                 f'<span style="font-weight:600;">{starter["PlayerName"]}</span>'
                 f'{inj_tag(starter)}'
-                f'{pitcher_regression_badge(starter) if _is_pit_pos else hitter_badges(starter, hit_pctile, idx_recent=best_recent_h)}'
+                f'{pitcher_regression_badge(starter, idx_recent=best_recent_p) if _is_pit_pos else hitter_badges(starter, hit_pctile, idx_recent=best_recent_h)}'
                 f' {_start_badge}'
                 f'{pos_stat_line(starter, p["pos"])}'
             )
@@ -5125,7 +5177,7 @@ def build_email(snap, override_team=None):
                 f'<span style="{"font-weight:600;" if upgrade else ""}'
                 f'color:{GREEN if upgrade else MUTED};">'
                 f'{top_fa["PlayerName"]}</span>'
-                f'{pitcher_regression_badge(top_fa) if _is_pit_pos else hitter_badges(top_fa, hit_pctile, idx_recent=best_recent_h)}'
+                f'{pitcher_regression_badge(top_fa, idx_recent=best_recent_p) if _is_pit_pos else hitter_badges(top_fa, hit_pctile, idx_recent=best_recent_h)}'
                 f' {_fa_badge}'
                 f'{"&nbsp;&#8593;" if upgrade else ""}'
                 f'{pos_stat_line(top_fa, p["pos"])}'
@@ -5301,7 +5353,8 @@ def build_email(snap, override_team=None):
         todays_games_section = build_todays_games_section(
             _tg_list, my_team, _opp_name,
             hit_rows=_tg_hit_rows, pit_rows=_tg_pit_rows,
-            recent_era=_tg_recent_era, hit_pctile=hit_pctile, idx_recent=best_recent_h)
+            recent_era=_tg_recent_era, hit_pctile=hit_pctile, idx_recent=best_recent_h,
+            idx_recent_p=best_recent_p)
         # Teaser names the true highest-OVERLAP game (pin_favorite=False), not the pinned favorite.
         _ranked_tg = _rank_todays_games(_tg_list, " ".join(my_team.split()), " ".join(_opp_name.split()), pin_favorite=False)
         if _ranked_tg:
@@ -5450,7 +5503,7 @@ def build_email(snap, override_team=None):
   </style>
 </head>
 <body style="margin:0;padding:16px;background:#060b18;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
-<div class="ew" style="max-width:740px;margin:0 auto;background:{BG};border:1px solid {BORDER};border-radius:8px;overflow:hidden;">
+<div class="ew" style="max-width:814px;margin:0 auto;background:{BG};border:1px solid {BORDER};border-radius:8px;overflow:hidden;">
 
   {header}
   {kpi}

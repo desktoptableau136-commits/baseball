@@ -1175,7 +1175,19 @@ def _trade_player_line(r, hi_cats, hi_color, side, show_pos=False,
         tip = ("results ahead of his Statcast expected — sell him high"
                if side == "give" else
                "results ahead of his Statcast expected — regression risk (you'd be buying high)")
-        chips += _hit_badge("&#9660;", RED, tip)
+        # Same solid-▼-when-confirmed / hollow-▽-otherwise split as pitcher_regression_badge /
+        # hitter_badges -- a trade card shouldn't read "already declining" off a season-level
+        # prediction alone.
+        if r.get("_tptype") == "hit":
+            _rec = best_recent_h.get(nm) if best_recent_h else None
+            _rflag = hitter_recency_flag(r, _rec) if _rec else None
+        else:
+            _rec = best_recent_p.get(nm) if best_recent_p else None
+            _rflag = pitcher_recency_flag(r, _rec) if _rec else None
+        if _rflag == "declining":
+            chips += _hit_badge("&#9660;" + _CONFIRM_DOWN, RED, tip + " — confirmed by his recent games")
+        else:
+            chips += _hit_badge("&#9661;", RED, tip)
     elif r.get("_tbuy"):
         tip = ("results behind his Statcast expected — a rebound candidate (think twice before dealing him)"
                if side == "give" else

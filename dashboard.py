@@ -155,9 +155,11 @@ def _fv(v, dec=0):
     return s[1:] if (dec >= 2 and 0 <= v < 1) else s
 
 
-def _reg_chip8(r):
-    """Tiny 8px pitcher buy-low ($) / sell-high (▼) chip, matching the QS/5K+/⚠ chips in
-    My Pitching. Same $/▼ glyph + green/red as everywhere else (sd.pitcher_regression_*)."""
+def _reg_chip8(r, idx_recent=None):
+    """Tiny 8px pitcher buy-low ($) / sell-high (▼ confirmed / ▽ predicted) chip, matching
+    the QS/5K+/⚠ chips in My Pitching. Same $/▼/▽ glyphs + green/red as everywhere else
+    (sd.pitcher_regression_*). `idx_recent` (best_recent_p) checks a sell-high flag against
+    sd.pitcher_recency_flag, same solid-vs-hollow split as the digest badge."""
     flag = sd.pitcher_regression_flag(r)
     if not flag:
         return ""
@@ -165,7 +167,15 @@ def _reg_chip8(r):
     if flag == "buy":
         col, glyph, tip = GREEN, "$", f"ERA {era:.2f} vs xERA {xera:.2f} &mdash; buy-low (unlucky, positive regression likely)"
     else:
-        col, glyph, tip = RED, "&#9660;", f"ERA {era:.2f} vs xERA {xera:.2f} &mdash; sell-high (lucky, regression risk)"
+        rec = idx_recent.get(r.get("PlayerName", "")) if idx_recent else None
+        rflag = sd.pitcher_recency_flag(r, rec) if rec else None
+        col = RED
+        if rflag == "declining":
+            glyph = "&#9660;" + sd._CONFIRM_DOWN
+            tip = f"ERA {era:.2f} vs xERA {xera:.2f} &mdash; sell-high, confirmed by his recent games (regression risk)"
+        else:
+            glyph = "&#9661;"
+            tip = f"ERA {era:.2f} vs xERA {xera:.2f} &mdash; sell-high (lucky, regression risk)"
     rr, gg, bb = int(col[1:3], 16), int(col[3:5], 16), int(col[5:7], 16)
     return (f' <span title="{tip}" style="font-size:8px;font-weight:700;color:{col};'
             f'background:rgba({rr},{gg},{bb},0.12);border:1px solid rgba({rr},{gg},{bb},0.35);'
@@ -426,7 +436,7 @@ def render_tv_games(ctx):
             k = sd._badge_name_key(p.get("name", ""))
             if p.get("is_p"):
                 row = pit_rows.get(k)
-                return (sd.blowup_badge(row, rec_era.get(k)) + sd.pitcher_regression_badge(row)) if row else ""
+                return (sd.blowup_badge(row, rec_era.get(k)) + sd.pitcher_regression_badge(row, idx_recent=ctx["best_recent_p"])) if row else ""
             row = hit_rows.get(k)
             return sd.hitter_badges(row, hit_pctile, cap=2, idx_recent=ctx.get("best_recent_h")) if row else ""
 
@@ -569,7 +579,7 @@ def render_pitching(ctx):
             badges += (f' <span title="{_rt}" style="font-size:8px;font-weight:700;color:{ORANGE};'
                        f'background:rgba(234,88,12,0.12);border:1px solid rgba(234,88,12,0.35);'
                        f'border-radius:3px;padding:0 3px;vertical-align:middle;">&#9888;</span>')
-        badges += _reg_chip8(r)   # $ buy-low / ▼ sell-high (ERA vs xERA)
+        badges += _reg_chip8(r, ctx["best_recent_p"])   # $ buy-low / ▼▽ sell-high (ERA vs xERA)
         rows.append(
             f'<div style="display:flex;justify-content:space-between;gap:6px;padding:2px 0;white-space:nowrap;border-bottom:1px solid {BORDER};">'
             f'<span style="overflow:hidden;text-overflow:ellipsis;">{sd.team_logo(r.get("Team"), 14)}<span style="color:{TEXT};font-weight:600;">{r.get("PlayerName")}</span>{two} '
@@ -676,7 +686,7 @@ def render_holes(ctx):
         wname = worst.get("PlayerName", "—") if worst else "—"
         wlogo = sd.team_logo(worst.get("Team"), 13) if worst else ""
         wsc = int(worst.get("_pscore", 0)) if worst else 0
-        wbadge = (sd.hitter_badges(worst, ctx["hit_pctile"], idx_recent=ctx["best_recent_h"]) if _hit_pos else sd.pitcher_regression_badge(worst)) if worst else ""
+        wbadge = (sd.hitter_badges(worst, ctx["hit_pctile"], idx_recent=ctx["best_recent_h"]) if _hit_pos else sd.pitcher_regression_badge(worst, idx_recent=ctx["best_recent_p"])) if worst else ""
         fa_s = ""
         if fa:
             fsc = int(fa.get("_pscore", 0))
@@ -685,7 +695,7 @@ def render_holes(ctx):
             # whose weakness belongs elsewhere. Matches the digest ↑ arrow (#60); the
             # worst→FA pairing still displays the drop target, only the green is honest.
             gain = fsc - (p.get("my_avg") or 0)
-            fbadge = sd.hitter_badges(fa, ctx["hit_pctile"], idx_recent=ctx["best_recent_h"]) if _hit_pos else sd.pitcher_regression_badge(fa)
+            fbadge = sd.hitter_badges(fa, ctx["hit_pctile"], idx_recent=ctx["best_recent_h"]) if _hit_pos else sd.pitcher_regression_badge(fa, idx_recent=ctx["best_recent_p"])
             fa_s = (f' &rarr; {sd.team_logo(fa.get("Team"), 13)}<span style="color:{GREEN if gain>0 else MUTED};">{fa.get("PlayerName")}</span>{fbadge} {_mini_badge(fsc)}')
         rows.append(
             f'<div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:2px 0;border-bottom:1px solid {BORDER};">'
@@ -724,7 +734,19 @@ def render_trade_radar(ctx):
         if p.get("_tsell"):
             tip = ("results ahead of his Statcast expected — regression risk, you'd be buying high"
                    if is_get else "results ahead of his Statcast expected — sell him high")
-            chips += f' <span title="{tip}" style="color:{RED};font-weight:700;font-size:11px;cursor:help;">&#9660;</span>'
+            # Same solid-▼-when-confirmed / hollow-▽-otherwise split as the digest's
+            # pitcher_regression_badge / hitter_badges.
+            nm = p.get("PlayerName", "")
+            if p.get("_tptype") == "hit":
+                _rec = (ctx.get("best_recent_h") or {}).get(nm)
+                _rflag = sd.hitter_recency_flag(p, _rec) if _rec else None
+            else:
+                _rec = (ctx.get("best_recent_p") or {}).get(nm)
+                _rflag = sd.pitcher_recency_flag(p, _rec) if _rec else None
+            glyph = "&#9660;" + sd._CONFIRM_DOWN if _rflag == "declining" else "&#9661;"
+            if _rflag == "declining":
+                tip += " — confirmed by his recent games"
+            chips += f' <span title="{tip}" style="color:{RED};font-weight:700;font-size:11px;cursor:help;">{glyph}</span>'
         elif p.get("_tbuy"):
             tip = ("results behind his Statcast expected — positive regression likely, acquire cheap"
                    if is_get else "results behind his Statcast expected — a rebound candidate, think twice before dealing him")
@@ -882,11 +904,11 @@ def render_fa_radar(ctx):
         qs = sd.qs_probability(r)
         _l15 = (ctx["p15"].get(r.get("PlayerName", "")) or ctx["rec_p"].get(r.get("PlayerName", ""), {})).get("ERA")
         parts.append(spline(r, r.get("_score", 0), f'{_n(r.get("ERA")):.2f} ERA &middot; QS{qs}%',
-                            badges=sd.blowup_badge(r, _l15) + sd.pitcher_regression_badge(r)))
+                            badges=sd.blowup_badge(r, _l15) + sd.pitcher_regression_badge(r, idx_recent=ctx["best_recent_p"])))
     parts.append(hdr("Relievers"))
     for r in ctx["fa_rp"][:2]:
         parts.append(spline(r, r.get("_rp_score", 0), f'{int(_n(r.get("ESPN_SVHD")) or _n(r.get("SVHD")))} SV+H &middot; {_n(r.get("ERA")):.2f}',
-                            badges=sd.pitcher_regression_badge(r)))
+                            badges=sd.pitcher_regression_badge(r, idx_recent=ctx["best_recent_p"])))
     parts.append(hdr("Hitters"))
     for r in ctx["fa_hit"][:2]:
         parts.append(spline(r, r.get("_score", 0), f'{_fv(_n(r.get("OPS")),3)} OPS', badges=sd.hitter_badges(r, ctx["hit_pctile"], idx_recent=ctx["best_recent_h"])))
@@ -968,7 +990,7 @@ def _legend_items():
         item(_legend_chip("5K+", YELLOW), "proj 5+ K"),
         item(_legend_chip("&#9888;", ORANGE), "low floor / blowup risk"),
         item(_legend_chip("$", GREEN), "buy-low (unlucky)"),
-        item(_legend_chip("&#9660;", RED), "sell-high (lucky)"),
+        item(f'{_legend_chip("&#9661;", RED)}{_legend_chip("&#9660;"+sd._CONFIRM_DOWN, RED)}', "sell-high (lucky) — hollow = predicted, solid = confirmed by recent games"),
         item(_legend_chip("PWR", sd.PURPLE), "power / HR threat"),
         item(_legend_chip("SB", sd.SILVER), "speed / steals"),
         item(f'{plain("&#128293;",GREEN)}{plain("&#10052;",ACCENT)}', "hot / cold vs season"),
