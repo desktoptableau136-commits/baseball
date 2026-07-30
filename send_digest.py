@@ -898,7 +898,8 @@ def build_hot_cold_section(hitters, my_team, best_recent_h=None, hit_pctile=None
 
     return (
         section_head("Hitter Recent Form", sub) +
-        f'<table style="width:100%;border-collapse:collapse;margin-bottom:24px;font-size:13px;">'
+        f'<div style="overflow-x:auto;-webkit-overflow-scrolling:touch;margin-bottom:24px;">'
+        f'<table style="width:100%;min-width:520px;border-collapse:collapse;font-size:13px;">'
         f'<thead><tr>'
         f'<th style="{TH_S}">Hitter</th>'
         f'<th style="{TH_S}text-align:center;">Pos</th>'
@@ -908,6 +909,7 @@ def build_hot_cold_section(hitters, my_team, best_recent_h=None, hit_pctile=None
         f'<th style="{TH_S}text-align:center;" title="Which recent window (30/15/7-day) backed the Recent Form read">📅</th>'
         f'<th style="{TH_S}text-align:center;">Score</th>'
         f'</tr></thead><tbody>{rows_html}</tbody></table>'
+        f'</div>'
     )
 
 def build_pitcher_hot_cold_section(pitchers, my_team, best_recent_p=None, move_registry=None):
@@ -974,7 +976,8 @@ def build_pitcher_hot_cold_section(pitchers, my_team, best_recent_p=None, move_r
 
     return (
         section_head("Pitcher Recent Form", sub) +
-        f'<table style="width:100%;border-collapse:collapse;margin-bottom:24px;font-size:13px;">'
+        f'<div style="overflow-x:auto;-webkit-overflow-scrolling:touch;margin-bottom:24px;">'
+        f'<table style="width:100%;min-width:520px;border-collapse:collapse;font-size:13px;">'
         f'<thead><tr>'
         f'<th style="{TH_S}">Pitcher</th>'
         f'<th style="{TH_S}text-align:center;">Pos</th>'
@@ -984,6 +987,7 @@ def build_pitcher_hot_cold_section(pitchers, my_team, best_recent_p=None, move_r
         f'<th style="{TH_S}text-align:center;" title="Which recent window (30/15/7-day) backed the Recent Form read">📅</th>'
         f'<th style="{TH_S}text-align:center;">Score</th>'
         f'</tr></thead><tbody>{rows_html}</tbody></table>'
+        f'</div>'
     )
 
 # ── CATEGORY PULSE ───────────────────────────────────────────────────────────
@@ -5100,7 +5104,7 @@ def build_email(snap, override_team=None):
             '</colgroup>'
         )
         table = (
-            f'<table style="width:100%;border-collapse:collapse;margin-bottom:0;font-size:13px;table-layout:fixed;">'
+            f'<table style="width:100%;min-width:680px;border-collapse:collapse;margin-bottom:0;font-size:13px;table-layout:fixed;">'
             f'{_fa_hit_colgroup}'
             f'<thead><tr>'
             f'<th style="{TH_S}">Hitter</th>'
