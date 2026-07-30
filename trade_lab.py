@@ -189,6 +189,10 @@ def build_data(snap, my_team):
             "surplus_pos": surplus_pos,
             "pos_rank": pos_rank,   # {pos: {rank, n}} → collapsed-section league-rank gauge
             "pos_count": sd._team_position_counts(hitters, tk),   # redundancy + depth guard: bodies per position
+            # Declared target positions (C/SS overlay) — threaded into the JS star-reach relief so
+            # the builder's "Would they do it?" can't read MORE conservative than the Partner-Fit
+            # card that pointed at this exact deal (see _TARGET_POS_REACH_RELIEF in fantasy/trades.py).
+            "target_pos": sorted(sd._TEAM_TARGET_POS.get(tk, set())),
         }
 
         buckets = {"hit": [], "sp": [], "rp": []}
@@ -250,9 +254,12 @@ def build_data(snap, my_team):
             "needCat": sd._NEED_MULT_CAT, "needPos": sd._NEED_MULT_POS,
             "needSurplus": sd._NEED_MULT_SURPLUS, "needClamp": list(sd._NEED_MULT_CLAMP),
             "thinPosPenalty": sd._TRADE_THIN_POS_PENALTY,   # depth floor: read penalty per single-slot pos a team is left thin at
+            "targetPosReachRelief": sd._TARGET_POS_REACH_RELIEF,   # star-reach relief when the incoming player fills a declared target pos (C/SS)
             "megaScarceMult": sd._MEGA_SCARCE_MULT,   # blockbuster banner: scarcity mult that earns "league's thinnest position"
             "megaStarScore": sd._MEGA_STAR_SCORE,     # blockbuster banner: _tscore floor for a piece to get NAMED
             "megaStarCap": sd._MEGA_STAR_CAP,         # blockbuster banner: max named headliners
+            "acceptPctK": sd._ACCEPT_PCT_K,           # "Would they do it?" likelihood-to-accept squash
+            "acceptPctFloor": sd._ACCEPT_PCT_FLOOR, "acceptPctCeil": sd._ACCEPT_PCT_CEIL,
         },
         "refreshed": snap.get("refreshed_at", ""),
     }
@@ -309,11 +316,13 @@ _FIT_TIER_ORDER = {"BEST": 0, "REACH": 1, "SLIM": 2, "ONEWAY": 3, "NOFIT": 4}
 _FIT_SCARCE_POS = {"C", "SS"}
 
 
-def _fit_stuck_reason(ins, outs, net_val, net_them):
+def _fit_stuck_reason(ins, outs, net_val, net_them, target_relief=0.0):
     """Plain-English reason a NEAR-MISS deal (ACCEPT for me, but not `_trade_tilt`-realistic
     for the rival) stalls — mirrors the two branches `_trade_tilt`/`_deal_star_reach` can fail
-    on, so the SLIM card's explanation can't drift from the actual gate that dropped it."""
-    if sd._deal_star_reach(ins, outs, net_val):
+    on, so the SLIM card's explanation can't drift from the actual gate that dropped it.
+    `target_relief` mirrors the same relief `_tilt` applies, so a deal that already accounts for
+    a declared target position doesn't get mis-explained as a plain star reach."""
+    if sd._deal_star_reach(ins, outs, net_val, target_relief=target_relief):
         star = max(ins, key=lambda p: _n(p.get("_tval_star", p.get("_tval")))) if ins else None
         name = star.get("PlayerName", "") if star else ""
         return f"{name} is a bona fide star — they'd likely hold at this price." if name \
@@ -398,6 +407,13 @@ def build_partner_fit(pitchers, hitters, roto, team_keys, ranks, n,
             for d in deals:
                 by_team.setdefault(d.get("team"), []).append(d)
 
+            # This pov's declared target positions (C/SS etc, see CLAUDE.md _TEAM_TARGET_POS) --
+            # threaded into the realism check below so a card can't stall on "star reach" purely
+            # because the position it fills is scarce and the pov has already signaled they'll
+            # pay a premium there. Mirrors fantasy.trades.find_trades' own generation-time relief
+            # so the board's tiering can't disagree with what the engine actually generated.
+            _pov_target_pos = sd._TEAM_TARGET_POS.get(pov, set())
+
             records = []
             for rival in team_keys:
                 if rival == pov:
@@ -405,9 +421,19 @@ def build_partner_fit(pitchers, hitters, roto, team_keys, ranks, n,
                 r_needs, r_surplus = needs_of(rival), surplus_of(rival)
                 i_offer   = sorted(my_surplus & r_needs)    # my categorical reason for them
                 they_offer = sorted(r_surplus & my_needs)   # what they can spare me
+
+                def _relief_for(ins):
+                    return sd._TARGET_POS_REACH_RELIEF if (_pov_target_pos and any(
+                        set(i.get("_tfillpos", [])) & _pov_target_pos for i in (ins or []))) else 0.0
+
                 def _tilt(d):
-                    return sd._trade_tilt(d.get("net_val", 0), d.get("ins"), d.get("outs"),
-                                          net_them=d.get("net_them"))
+                    ins = d.get("ins") or []
+                    return sd._trade_tilt(d.get("net_val", 0), ins, d.get("outs"),
+                                          net_them=d.get("net_them"), target_relief=_relief_for(ins))
+
+                def _accept_pct(d):
+                    return round(sd._accept_pct(d.get("net_val", 0), d.get("net_them"), d.get("ins"),
+                                                d.get("outs"), target_relief=_relief_for(d.get("ins"))))
 
                 # Only deals that are ACCEPT for MY side can be a "target" — a deal that's good for
                 # them but not for me (I overpay / fill no need) is exactly what made the board
@@ -444,6 +470,7 @@ def build_partner_fit(pitchers, hitters, roto, team_keys, ranks, n,
                         "team": rival, "tier": tier,
                         "get": get, "give": give,
                         "verdict": words,
+                        "acceptPct": _accept_pct(best),
                         # Name only the cats the players I'd ACTUALLY send cover for them (the deal's
                         # own send_cats), not the roster-wide surplus∩needs intersection — so the
                         # "you're deep in X (their needs)" prose can't overclaim.
@@ -470,7 +497,8 @@ def build_partner_fit(pitchers, hitters, roto, team_keys, ranks, n,
                     if near is not None:
                         nvp, _nac, _ = _tilt(near)
                         stuck = _fit_stuck_reason(near.get("ins"), near.get("outs"),
-                                                   near.get("net_val", 0), near.get("net_them"))
+                                                   near.get("net_val", 0), near.get("net_them"),
+                                                   target_relief=_relief_for(near.get("ins")))
                         records.append({
                             "team": rival, "tier": "SLIM",
                             "get": [{"name": p.get("PlayerName", ""), "pos": _fit_pos_disp(p)}
@@ -478,6 +506,7 @@ def build_partner_fit(pitchers, hitters, roto, team_keys, ranks, n,
                             "give": [{"name": p.get("PlayerName", ""), "pos": _fit_pos_disp(p)}
                                      for p in near["outs"]],
                             "why": f"Closest look: real value edge for you ({nvp}), but {stuck}",
+                            "acceptPct": _accept_pct(near),
                         })
                     else:
                         records.append({"team": rival, "tier": "SLIM",
@@ -511,6 +540,10 @@ def build_megadeal_board(pitchers, hitters, roto, team_keys, ranks, n,
         deals = sd.find_megadeals(pitchers, hitters, roto, pov, best_recent_p, best_recent_h,
                                   pos_data_by_team.get(pov, []), hit_pctile, pit_pctile,
                                   limit=2, pos_data_by_team=pos_data_by_team)
+        # Same target-position relief find_trades applied at generation time (see
+        # _TARGET_POS_REACH_RELIEF) -- reused here so the displayed acceptPct can't read lower
+        # than what actually let this megadeal past the win-win gate.
+        _pov_target_pos = sd._TEAM_TARGET_POS.get(pov, set())
         recs = []
         for d in deals:
             get = [{"name": p.get("PlayerName", ""), "pos": _fit_pos_disp(p),
@@ -522,10 +555,14 @@ def build_megadeal_board(pitchers, hitters, roto, team_keys, ranks, n,
             # so the two surfaces can't drift in voice: names the headliner, a quality/scarcity
             # read off his own score, and what the rival gets out of it too.
             spark = sd._mega_insight_text(d)
+            _relief = sd._TARGET_POS_REACH_RELIEF if (_pov_target_pos and any(
+                set(i.get("_tfillpos", [])) & _pov_target_pos for i in d["ins"])) else 0.0
             recs.append({
                 "team": d["team"], "tier": "MEGA",
                 "get": get, "give": give,
                 "verdict": "Blockbuster win-win — you give depth, get fewer-but-better.",
+                "acceptPct": round(sd._accept_pct(d.get("net_val", 0), d.get("net_them"), d["ins"],
+                                                  d["outs"], target_relief=_relief)),
                 "spark": spark,
                 # Cats the players I'd ACTUALLY send cover for them (the deal's own send_cats).
                 "whyOffer": [CAT_LABELS.get(c, c) for c in d.get("send_cats", [])],
@@ -576,6 +613,8 @@ def _tl_legend_items():
         item(sd._il_badge({"ESPN_Status": "TEN_DAY_DL"}), "injured &mdash; trade value discounted by severity"),
         item(f'<span style="color:{LIME};font-weight:800;font-size:10px;">POS</span>', "fills one of your thin positions"),
         item('&#128171;', "Blockbuster &mdash; multi-player consolidation win-win"),
+        item(f'<span style="color:{GREEN};font-weight:700;font-size:10px;">62% likely</span>',
+             "estimated odds the rival says yes &mdash; a heuristic read, not a guarantee"),
     ]
     return "".join(items)
 
@@ -749,6 +788,7 @@ body {{ margin:0; background:{BG}; color:{TEXT}; font-family:-apple-system,Segoe
 #mid {{ position:sticky; top:12px; min-width:0; max-height:74vh; overflow-y:auto; background:{SURFACE}; border:1px solid {BORDER}; border-radius:10px; padding:14px; }}
 #verdict {{ text-align:center; margin-bottom:10px; }}
 .vpill {{ display:inline-block; font-weight:800; font-size:14px; padding:4px 14px; border-radius:12px; color:#0b1220; }}
+.pillpct {{ font-weight:700; font-size:11px; opacity:.75; margin-left:2px; }}
 .vwhy {{ color:{MUTED}; font-size:12px; margin-top:6px; }}
 #mid.midmega {{ border-color:{PURPLE}; box-shadow:0 0 0 1px {PURPLE}, 0 0 22px rgba(168,85,247,0.28); background-image:linear-gradient(180deg,rgba(168,85,247,0.08),rgba(168,85,247,0)); }}
 .megaline {{ margin-top:9px; font-size:11.5px; line-height:1.45; color:{TEXT}; background:rgba(168,85,247,0.12); border:1px solid {PURPLE}; border-radius:7px; padding:7px 9px; text-align:left; }}
@@ -822,6 +862,8 @@ details#vdetail[open] > summary::before {{ content:'\\25BC'; }}
 .chip.pos {{ background:rgba(59,130,246,.14); border-color:{ACCENT}; color:{ACCENT}; }}
 .readline {{ margin-top:6px; }}
 .readlbl {{ color:{MUTED}; font-weight:700; }}
+.sidepill {{ display:inline-block; font-weight:800; font-size:10.5px; letter-spacing:.3px; padding:1px 7px; border-radius:9px; color:#0b1220; vertical-align:middle; }}
+.sidereason {{ color:{MUTED}; }}
 #clearBtn {{ margin-top:12px; width:100%; background:{SURFACE2}; color:{MUTED}; border:1px solid {BORDER}; border-radius:6px; padding:7px; font-size:12px; font-weight:700; cursor:pointer; }}
 #clearBtn:hover {{ color:{TEXT}; }}
 .empty {{ color:{MUTED}; font-size:12px; font-style:italic; }}
@@ -869,6 +911,7 @@ details#vdetail[open] > summary::before {{ content:'\\25BC'; }}
             background:rgba(168,85,247,0.10); border:1px solid {PURPLE}; border-radius:6px; padding:5px 8px; }}
 .fbchead {{ display:flex; align-items:center; gap:9px; margin-bottom:7px; }}
 .fbvchip {{ font-size:9px; font-weight:800; letter-spacing:.6px; border:1px solid; border-radius:5px; padding:2px 6px; white-space:nowrap; background:rgba(255,255,255,.02); }}
+.fbaccept {{ font-size:10px; font-weight:700; white-space:nowrap; }}
 .fbteam {{ font-weight:800; font-size:14px; flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }}
 .fbbuild {{ font-size:10px; font-weight:800; color:{ACCENT}; border:1px solid {ACCENT}; border-radius:6px; padding:2px 8px; white-space:nowrap; cursor:pointer; }}
 .fbbuild:hover {{ background:rgba(59,130,246,.14); }}
@@ -886,6 +929,7 @@ details#vdetail[open] > summary::before {{ content:'\\25BC'; }}
   #mid {{ position:static; order:-1; max-height:none; overflow-y:visible; }}
   .sidebody {{ max-height:none; overflow-y:visible; }}
   .fblist {{ grid-template-columns:1fr; }}
+  .megalist {{ grid-template-columns:1fr; }}
 }}
 /* Pocket (phone) layout — additive; desktop above is untouched. Bigger tap targets,
    a sticky team-section header, and an always-visible bottom deal bar. */
@@ -972,14 +1016,15 @@ function checkBuild() {{
 }}
 
 // ---- Pocket: bottom deal bar (always-visible running grade on phones) ----
-function setDealBar(giveN, getN, net, label, color) {{
+function setDealBar(giveN, getN, net, label, color, pct) {{
   var s = document.getElementById('dbsummary'), v = document.getElementById('dbverdict');
   if (!s) return;
   if (!giveN && !getN) {{ s.textContent = 'Tap players to build a deal'; v.innerHTML = ''; return; }}
   var nc = net > 0.1 ? '{GREEN}' : (net < -0.1 ? '{RED}' : '{MUTED}');
   var nt = (net > 0 ? '+' : '') + net.toFixed(2);
   s.innerHTML = 'Give ' + giveN + ' &middot; Get ' + getN + ' &middot; <b style="color:' + nc + '">net ' + nt + '</b>';
-  v.innerHTML = label ? '<span class="vpill" style="background:' + color + ';font-size:12px;padding:3px 11px">' + label + '</span>' : '';
+  var pctTxt = pct != null ? ' ' + pct + '%' : '';
+  v.innerHTML = label ? '<span class="vpill" style="background:' + color + ';font-size:12px;padding:3px 11px">' + label + pctTxt + '</span>' : '';
 }}
 function jumpToDeal() {{
   var m = document.getElementById('mid');
@@ -1069,6 +1114,20 @@ function thinPos(counts, giveList, getList) {{
   return thin;
 }}
 
+// {{added, shed}} onto the roster being judged, layering the GLOBAL in-progress deal
+// (picked.L/picked.R) on top of that roster's current state. `poss` flips which side of
+// `picked` counts as "added to this roster" vs "shed from it": 'your' judges MY roster
+// (added=picked.R, my gets; shed=picked.L, my gives); 'their' judges the OTHER side's roster,
+// where my gives are THEIR gets and vice versa.
+function dealSoFar(poss) {{
+  var addedMap = poss === 'their' ? picked.L : picked.R;
+  var shedMap  = poss === 'their' ? picked.R : picked.L;
+  return {{
+    added: Object.keys(addedMap).map(function(k) {{ return addedMap[k]; }}),
+    shed:  Object.keys(shedMap).map(function(k) {{ return shedMap[k]; }})
+  }};
+}}
+
 // Why a partner player is worth targeting for MY (left) team: fills a category need
 // or (hitter) upgrades one of my thin positions. Reused from the digest's need logic.
 function targetReasons(p, myMeta, poss) {{
@@ -1077,9 +1136,14 @@ function targetReasons(p, myMeta, poss) {{
   var nc = (p.tcats || []).filter(function(c) {{ return (myMeta.needs || []).indexOf(c) >= 0; }});
   if (nc.length) out.push('fills ' + poss + ' ' + nc.map(function(c) {{ return DATA.catLabels[c] || c; }}).join('/') + ' need');
   if (p.role === 'hit' && myMeta.need_pos) {{
+    // Judge this add ON TOP of whatever's already picked in the in-progress deal, not the
+    // candidate alone — otherwise a 2nd/3rd same-position piece still reads "upgrades" even
+    // after an earlier pick in THIS deal already fills the slot (e.g. a counter-suggestion
+    // piling a 2nd SS onto a deal that already lands one at that position).
+    var ds = dealSoFar(poss);
+    var getList = ds.added.filter(function(x) {{ return x.id !== p.id; }}).concat([p]);
     (p.tgroups || []).forEach(function(pos) {{
-      // Judge this single add: get=[p], give=[] — suppressed once the slot is already stacked.
-      if ((pos in myMeta.need_pos) && p.score > myMeta.need_pos[pos] && !posStacked(pos, myMeta, [], [p]))
+      if ((pos in myMeta.need_pos) && p.score > myMeta.need_pos[pos] && !posStacked(pos, myMeta, ds.shed, getList))
         out.push('upgrades ' + poss + ' ' + pos);
     }});
   }}
@@ -1470,29 +1534,90 @@ function starPremium(tval) {{
   return Math.max(0, Math.min(T.starPremCap, (tval - T.starTvalFloor) * T.starTvalSlope));
 }}
 
-// JS mirror of send_digest._deal_star_reach: would a rival balk at parting with prized players
-// without a real overpay? Required overpay = SUM of premium across what they surrender (getArr,
-// = what I acquire) minus the SUM across what they receive back (giveArr). Summing (not max)
-// catches "two franchise players for one star + a role player". Reach (they balk) when that's
-// positive AND I'm not paying up by at least it (net > -req). Drives the "Would they do it?" read.
-function dealStarReach(getArr, giveArr, netVal) {{
+// Raw star-reach gap (req) shared by dealStarReach's boolean gate AND the acceptPct read below,
+// so the two can't disagree: SUM of premium across what the rival surrenders (getArr, = what I
+// acquire) minus the SUM across what they receive back (giveArr). Summing (not max) catches
+// "two franchise players for one star + a role player". `relief` (see targetRelief below) softens
+// this exactly like fantasy.trades._deal_star_reach's target_relief -- WITHOUT it, a deal the
+// Partner-Fit board pointed at (which DOES apply the relief) can read more conservative once
+// actually built here, contradicting the card that suggested it.
+function starReachGap(getArr, giveArr, relief) {{
   var surrender = 0, receive = 0;
   getArr.forEach(function(p) {{ surrender += starPremium(p.tvalStar != null ? p.tvalStar : p.tval); }});
   giveArr.forEach(function(p) {{ receive += starPremium(p.tvalStar != null ? p.tvalStar : p.tval); }});
-  var req = Math.max(0, surrender - receive);
+  return Math.max(0, surrender - receive - (relief || 0));
+}}
+
+// JS mirror of send_digest._deal_star_reach: would a rival balk at parting with prized players
+// without a real overpay? Reach (they balk) when the required overpay is positive AND I'm not
+// paying up by at least it (net > -req). Drives the "Would they do it?" read.
+function dealStarReach(getArr, giveArr, netVal, relief) {{
+  var req = starReachGap(getArr, giveArr, relief);
   return req > 0 && netVal > -req;
 }}
 
-// MY-side mirror (send_digest._deal_star_surrender): would *I* balk at parting with prized
-// players without a real value win? Required premium = SUM across my give (giveArr) minus the
-// SUM across my acquire (getArr). I hold out when that's positive AND I'm not winning by at
-// least it (net < req). Same value-keyed, summed premium — drives "Would you do it?".
-function dealStarSurrender(getArr, giveArr, netVal) {{
+// This POV's declared target positions (C/SS overlay, see fantasy.trades._TEAM_TARGET_POS) --
+// when what I'm ACQUIRING (getArr) fills one, soften the star-reach gate the same amount the
+// Partner-Fit board/megadeal strip already did when they surfaced this deal as a suggestion.
+function targetRelief(getArr, myMeta) {{
+  var tpos = (myMeta && myMeta.target_pos) || [];
+  if (!tpos.length) return 0;
+  var hits = getArr.some(function(p) {{ return (p.tgroups || []).some(function(g) {{ return tpos.indexOf(g) >= 0; }}); }});
+  return hits ? (DATA.tune.targetPosReachRelief || 0) : 0;
+}}
+
+// JS mirror of fantasy.trades._accept_pct: a continuous 0-100 "would they say yes" read from
+// the same demand-side net (already thin-position-penalized, see netThemRead below) minus any
+// star-reach premium NOT already covered by my own overpay (mirrors dealStarReach's exact pass
+// boundary: a package clears the reach gate once my overpay, -netVal, covers starGap, so any
+// leftover gap is credited for whatever's already offset), squashed through a logistic centered
+// on 0 (a dead-even demand-side read -> 50%). A heuristic nudge, not a calibrated probability --
+// clipped away from 0%/100% so it never claims a lock or a dead end.
+function acceptPct(netVal, netThem, starGap) {{
+  var T = DATA.tune;
+  var unmetGap = Math.max(0, (starGap || 0) - Math.max(0, -(netVal || 0)));
+  var drive = (netThem || 0) - unmetGap;
+  var pct = 100 / (1 + Math.exp(-T.acceptPctK * drive));
+  return Math.max(T.acceptPctFloor, Math.min(T.acceptPctCeil, pct));
+}}
+
+// Raw star-surrender gap (req), shared by dealStarSurrender's boolean gate AND myAcceptPct
+// below: SUM of premium across my give (giveArr) minus the SUM across my acquire (getArr).
+function starSurrenderGap(getArr, giveArr) {{
   var givePrem = 0, getPrem = 0;
   giveArr.forEach(function(p) {{ givePrem += starPremium(p.tvalStar != null ? p.tvalStar : p.tval); }});
   getArr.forEach(function(p) {{ getPrem += starPremium(p.tvalStar != null ? p.tvalStar : p.tval); }});
-  var req = Math.max(0, givePrem - getPrem);
+  return Math.max(0, givePrem - getPrem);
+}}
+
+// MY-side mirror (send_digest._deal_star_surrender): would *I* balk at parting with prized
+// players without a real value win? I hold out when the required premium is positive AND I'm
+// not winning by at least it (net < req). Same value-keyed, summed premium — drives "Would you
+// do it?".
+function dealStarSurrender(getArr, giveArr, netVal) {{
+  var req = starSurrenderGap(getArr, giveArr);
   return req > 0 && netVal < req;
+}}
+
+// MY-side mirror of acceptPct: would *I* say yes, continuous 0-100. Mirrors dealStarSurrender's
+// exact pass boundary (I clear the surrender gate once my raw gain, netVal, covers the gap), so
+// leftover gap not yet covered by that gain is the headwind on `netMe` (my demand-side net).
+function myAcceptPct(netVal, netMe, surrenderGap) {{
+  var T = DATA.tune;
+  var unmetGap = Math.max(0, (surrenderGap || 0) - Math.max(0, (netVal || 0)));
+  var drive = (netMe || 0) - unmetGap;
+  var pct = 100 / (1 + Math.exp(-T.acceptPctK * drive));
+  return Math.max(T.acceptPctFloor, Math.min(T.acceptPctCeil, pct));
+}}
+
+// Plain-English headline for the TWO-SIDED combined odds (pillPct) -- this drives the top pill,
+// which answers "will this whole deal actually go through", not "what does MY side think of it"
+// (that finer-grained ACCEPT/COUNTER/DECLINE reasoning still lives in the `why` sentence
+// underneath the pill, and in the two "Would they/you do it?" lines below it).
+function dealOddsRead(pct) {{
+  if (pct >= 65) return {{ label: 'GOOD CHANCE', color: '{GREEN}' }};
+  if (pct >= 30) return {{ label: 'WORTH A SHOT', color: '{YELLOW}' }};
+  return {{ label: 'LIKELY REJECTED', color: '{RED}' }};
 }}
 
 // JS mirror of send_digest._need_mult: demand-side team-need multiplier. A player is worth
@@ -1681,29 +1806,40 @@ function recompute() {{
   // mirroring send_digest._trade_tilt(net_them). A STAR REACH (prying their best player without
   // an overpay) is always a tough sell; then, if they come out clearly behind by THEIR own
   // valuation (netThem < -realisticMax) it's an aggressive ask; else if my give hits their
-  // category needs it's realistic; otherwise a likely tough sell.
+  // category needs OR they clearly gain on value it's realistic; otherwise a coin flip.
   // Each acceptance read carries a SENTIMENT tier (yes/maybe/no) so it renders with a quick
   // color + thumb icon — the reader should grok "how each side feels" at a glance, then read why.
+  // IMPORTANT: every branch here must stay directionally consistent with `pfPct` below (same
+  // netThemRead/star-gap inputs) -- a tier that disagrees with its own percentage (e.g. a red
+  // "no" next to "97% likely") is worse than no percentage at all.
   var partnerNeeds = partnerMeta.needs || [];
   var partnerGets = lost.filter(function(c){{ return partnerNeeds.indexOf(c) >= 0; }});
   // Honest read: a thin single-slot loss penalizes their demand-side net (read only — the
   // displayed Their-value row stays pure), so the tilt naturally flips toward "aggressive ask".
   var thinNote = thinThem.length ? ' (no backup at ' + thinThem.join(', ') + ')' : '';
   var netThemRead = netThem - (DATA.tune.thinPosPenalty || 0) * thinThem.length;
+  var relief = targetRelief(getArr, myMeta);
   var pfTier, pfReason;
   if (!lKeys.length && !rKeys.length) {{
     pfTier = 'na'; pfReason = '&mdash;';
   }} else if (leavesThemShort.length) {{
     pfTier = 'no'; pfReason = 'they won\'t gut their ' + leavesThemShort.join(', ') + ' &mdash; no backup left';
-  }} else if (dealStarReach(getArr, giveArr, netVal)) {{
+  }} else if (dealStarReach(getArr, giveArr, netVal, relief)) {{
     pfTier = 'no'; pfReason = 'they won\'t ship their star at even value';
   }} else if (netThemRead < -DATA.tune.realisticMax) {{
     pfTier = 'maybe'; pfReason = 'they come out behind on their own needs' + thinNote + ' &mdash; you\'d have to sweeten it';
   }} else if (partnerGets.length) {{
     pfTier = 'yes'; pfReason = 'it fills their needs (' + partnerGets.map(function(c){{return DATA.catLabels[c]||c;}}).join(', ') + ')' + thinNote;
+  }} else if (netThemRead > 0.1) {{
+    // Not a listed category need, but they still clearly gain on raw/demand-weighted value
+    // (this IS what pfPct is reading) -- without this branch the tier fell through to a flat
+    // "no" here even when the value swing was strongly in their favor.
+    pfTier = 'yes'; pfReason = 'they clearly gain on value, even outside a listed need' + thinNote;
   }} else {{
-    pfTier = 'no'; pfReason = 'it doesn\'t address anything they need';
+    pfTier = 'maybe'; pfReason = 'doesn\'t address a listed need, but the price is fair &mdash; a coin flip' + thinNote;
   }}
+  var pfPct = (lKeys.length || rKeys.length)
+            ? Math.round(acceptPct(netVal, netThemRead, starReachGap(getArr, giveArr, relief))) : null;
 
   // OVERALL-DEAL check: the pill above answers "is this good FOR ME" — but a trade is a
   // two-sided negotiation, so an ACCEPT that the rival would flatly balk at (pfTier no/maybe)
@@ -1788,9 +1924,25 @@ function recompute() {{
                + mCount + ', and ' + mRival + '.</div>';
   }}
   document.getElementById('mid').classList.toggle('midmega', isMega);
-  vBox.innerHTML = '<span class="vpill" style="background:'+color+'">'+label+'</span>'
+  // TWO-SIDED combined odds, not an echo of either line below -- but weighted, not a straight
+  // product. YOU pick which deals even get proposed (you already filter out ones you'd never
+  // send), so what matters most at this stage is whether THEY'D take it; a 65/35 weighted
+  // average keeps both sides in the number while leaning it toward their read. Clamped the same
+  // way each individual read is, so this can't overclaim a lock/dead-end either.
+  var PILL_W_THEM = 0.65, PILL_W_ME = 0.35;
+  var myPctForPill = myAcceptPct(netVal, netMe, starSurrenderGap(getArr, giveArr));
+  var pillPct = Math.round(Math.max(DATA.tune.acceptPctFloor, Math.min(DATA.tune.acceptPctCeil,
+      PILL_W_THEM * pfPct + PILL_W_ME * myPctForPill)));
+  // The TOP PILL headline answers "will this whole deal go through" (the combined odds banded
+  // into plain English) -- it is DELIBERATELY not the my-side ACCEPT/COUNTER/DECLINE verdict,
+  // which reads as one-sided ("by team POV") sitting at the top of a two-sided negotiation. That
+  // finer-grained reasoning (why label/why would have been COUNTER, the counter-suggestion, etc)
+  // still lives in `why` right underneath, and in full on the two "Would they/you do it?" lines.
+  var odds = dealOddsRead(pillPct);
+  vBox.innerHTML = '<span class="vpill" style="background:'+odds.color+'">'+odds.label
+    + ' <span class="pillpct">' + pillPct + '%</span></span>'
     + '<div class="vwhy">'+why+'</div>' + megaBanner;
-  setDealBar(lKeys.length, rKeys.length, netVal, label, color);
+  setDealBar(lKeys.length, rKeys.length, netVal, odds.label, odds.color, pillPct);
 
   // MY-side acceptance — the mirror of "Would they do it?". A star surrender at par is the read
   // that makes an even deal one *I* should hold out on, no matter how well the categories fit.
@@ -1810,24 +1962,43 @@ function recompute() {{
     yfReason = 'it fills a need (' + needFilled.map(function(c){{return DATA.catLabels[c]||c;}}).join(', ')
              + (posList.length ? (needFilled.length ? ', ' : '') + posList.join(', ') + ' slot' : '')
              + '), but the timing is a trap';
+  }} else if ((needFilled.length || posList.length) && netMe < -0.1) {{
+    // Addresses a need, but you're paying up beyond the fair-value band -- the EXACT threshold
+    // the pill above downgrades to COUNTER on (addressesNeed && netMe < -0.1). Without this
+    // check the two could disagree (pill says COUNTER while this line said an unqualified
+    // "yes"), which is what actually produced a green thumbs-up sitting next to a 5% read.
+    yfTier = 'maybe';
+    yfReason = 'it fills a need (' + needFilled.map(function(c){{return DATA.catLabels[c]||c;}}).join(', ')
+             + (posList.length ? (needFilled.length ? ', ' : '') + posList.join(', ') + ' slot' : '')
+             + '), but you\'d be paying up for it';
   }} else if (needFilled.length || posList.length) {{
     yfTier = 'yes';
     yfReason = 'it fills your needs (' + needFilled.map(function(c){{return DATA.catLabels[c]||c;}}).join(', ')
              + (posList.length ? (needFilled.length ? ', ' : '') + posList.join(', ') + ' slot' : '') + ')';
+  }} else if (netMe > 0.1) {{
+    // Not a listed need, but you still clearly win the value -- keep this in sync with yfPct
+    // below (same netMe input) so a strongly positive read can't still show up as "maybe".
+    yfTier = 'yes'; yfReason = 'you clearly win the value, even outside a listed need';
   }} else if (netMe >= -0.1) {{
     yfTier = 'maybe'; yfReason = 'fair value, but nothing you\'re short on';
   }} else {{
     yfTier = 'no'; yfReason = 'you\'d overpay without filling a need';
   }}
+  var yfPct = Math.round(myPctForPill);   // same read the pill above already computed
 
-  // Sentiment marker: thumb icon + color, keyed to the tier. Same mapping both sides so the
-  // color/icon language is learned once (green = this side likes it, red = this side balks).
-  var ACC = {{ yes:['&#128077;','{GREEN}'], maybe:['&#129300;','{YELLOW}'], no:['&#128078;','{RED}'], na:['','{MUTED}'] }};
-  function accLine(lbl, tier, reason) {{
+  // Per-side verdict: the SAME ACCEPT/COUNTER/DECLINE vocabulary as the top pill's own verdict
+  // language (that's what a real negotiation actually has three outcomes of), just asked from
+  // each side's POV with its own %, instead of a generic yes/maybe/no + thumb icon. The two
+  // lines below combine into the top pill's odds (their % x my %), so all three numbers stay
+  // legible as one system: "would they ACCEPT/COUNTER/DECLINE" x "would you ACCEPT/COUNTER/
+  // DECLINE" = "is this deal likely to happen at all".
+  var ACC = {{ yes:['ACCEPT','{GREEN}'], maybe:['COUNTER','{YELLOW}'], no:['DECLINE','{RED}'], na:['&mdash;','{MUTED}'] }};
+  function accLine(lbl, tier, reason, pct) {{
     var m = ACC[tier] || ACC.na;
-    var ic = m[0] ? m[0] + ' ' : '';
+    var pctTxt = (pct != null) ? ' ' + pct + '%' : '';
+    var verdict = '<span class="sidepill" style="background:' + m[1] + '">' + m[0] + pctTxt + '</span>';
     return '<div class="readline"><span class="readlbl">' + lbl + '</span> '
-         + '<span style="color:' + m[1] + '">' + ic + reason + '</span></div>';
+         + verdict + ' <span class="sidereason">' + reason + '</span></div>';
   }}
 
   var gainChips = gained.length ? gained.map(function(c){{
@@ -1885,7 +2056,7 @@ function recompute() {{
   document.getElementById('dealsum').innerHTML = '<div class="dealsum">' + dealSummary(netVal, netMe, netThem, addressesNeed) + '</div>';
 
   // Resting reads — just the two acceptance lines; everything numeric moves to Value detail.
-  reads.innerHTML = accLine('Would they do it?', pfTier, pfReason) + accLine('Would you do it?', yfTier, yfReason);
+  reads.innerHTML = accLine('Would they do it?', pfTier, pfReason, pfPct) + accLine('Would you do it?', yfTier, yfReason, yfPct);
 
   // Value detail (collapsed): the 3-POV matrix + category gain/lose chips.
   document.getElementById('vdetailBody').innerHTML =
@@ -1927,11 +2098,22 @@ function posChip(pos, needSet) {{
   return '<span class="fbpos" style="color:' + col + ';border-color:' + col + '">' + pos + '</span>';
 }}
 
+// Likelihood-to-accept chip -- the continuous _accept_pct read (server-computed, same signals
+// the BEST/REACH/SLIM tiers already sort on) so two cards with the same tier label can still be
+// told apart at a glance. Absent (NOFIT/ONEWAY/no-deal diagnoses carry no acceptPct) -> no chip.
+function acceptChip(pct) {{
+  if (pct == null) return '';
+  var col = pct >= 60 ? '{GREEN}' : (pct >= 30 ? '{YELLOW}' : '{RED}');
+  return '<span class="fbaccept" style="color:' + col
+       + '" title="Estimated odds the rival says yes -- a heuristic read, not a guarantee">'
+       + Math.round(pct) + '% likely</span>';
+}}
+
 function fitCard(r, needSet) {{
   var t = FIT_TIER[r.tier] || FIT_TIER.SLIM, col = t[0], lbl = t[1];
   var meta = DATA.teamsMeta[r.team] || {{ name:r.team }};
   var head = '<div class="fbchead"><span class="fbvchip" style="color:' + col + ';border-color:' + col + '">'
-           + lbl + '</span><span class="fbteam">' + meta.name + '</span>';
+           + lbl + '</span>' + acceptChip(r.acceptPct) + '<span class="fbteam">' + meta.name + '</span>';
   if (r.tier === 'BEST' || r.tier === 'REACH' || r.tier === 'MEGA') {{
     var giveNames = (r.give || []).map(function(g) {{ return g.name; }}).join(',');
     var getNames  = (r.get || []).map(function(g) {{ return g.name; }}).join(',');

@@ -2424,6 +2424,14 @@ def build_glossary_section():
                "is worth far less than a day-to-day one — but never to zero, since he comes back. The chip tells "
                "you <i>why</i> a card values him below his healthy line, on both sides of the deal. <b>Hover</b> "
                "for the timeline."),
+        _entry('Realistic &middot; 62%',
+               "On a Trade Radar card, the small chip next to the value tilt: <b>realistic</b> (green) / "
+               "<b>aggressive ask</b> (yellow) is the rival's-POV read on whether they'd say yes; the trailing "
+               "<b>%</b> is the same signal on a continuous 0&ndash;100 scale (their demand-side value gain minus "
+               "any unmet star-reach premium, squashed through a logistic) so two same-chip cards can still be "
+               "told apart. A heuristic nudge, not a calibrated probability &mdash; clipped away from 0%/100% so it "
+               "never claims a lock or a dead end. The Trade Lab's Partner Fit board and Blockbuster strip show "
+               "the identical read on their cards."),
         _entry(f'Verdict (Pending Trades){_verdict_pill("ACCEPT", GREEN)}&nbsp;{_verdict_pill("COUNTER", YELLOW)}&nbsp;{_verdict_pill("DECLINE", RED)}',
                "On a real trade offer made <b>to you</b>, the lean: <b>ACCEPT</b> (green) = you win the value, or "
                "it's roughly even and fills a real category/positional need without a timing trap; <b>COUNTER</b> "
