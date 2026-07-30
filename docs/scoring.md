@@ -42,7 +42,7 @@ send_digest.py (~line 1140).
   calibrated `_cat_win_prob` per category, and returns `(joint_tuple, per_cat_map)`. Because it's fed
   the identical context as the cards, the joint number can **never disagree** with what the reader
   sees on the Category Pulse grid. `build_email` builds this ONCE (`winprob_joint`, `winprob_percat`)
-  right after `winprob_weeks`; every consumer (the 🎯 chip, the Briefing line, `build_game_plan`, the
+  right after `winprob_weeks`; every consumer (the 🏆 chip, the Briefing line, `build_game_plan`, the
   dashboard) reads that single result — nobody recomputes it per-render.
 - **Independence caveat (ship "modeled odds," not a guarantee):** categories aren't truly
   independent — a strong pitching week correlates K/QS/W/ERA/WHIP — so the joint is mildly
@@ -57,7 +57,7 @@ send_digest.py (~line 1140).
   so a great week realistically reads ~90%, not 100%; that's correct behavior, not a bug. There's
   always a small tie slice (`P(win)+P(tie)+P(loss)=100%`); the shown chip is the WIN share only.
 - **Display sites, all reading the SAME `winprob_joint`/`winprob_percat`:** the Category Pulse
-  summary line's 🎯 chip (`build_category_pulse` collects each card's `(p_win, p_tie)` into
+  summary line's 🏆 chip (`build_category_pulse` collects each card's `(p_win, p_tie)` into
   `cat_probs` during its own card loop — a SEPARATE, redundant call to `_matchup_win_prob` on the
   identical inputs, not a second data source, so it can't drift even though it isn't literally the
   same Python call as `build_email`'s `winprob_joint`); The Briefing's "This matchup" line
@@ -73,7 +73,7 @@ every other matchup-dependent section's empty-state guard).
 - **Part A — contest/concede strip.** Every category lands in exactly one bucket, from
   `winprob_percat` + `_matchup_swing`:
   - **🔒 Locked** (`p_win% >= _GAMEPLAN_LOCK_PCT` = 85) — already yours, no action.
-  - **🎯 Contest** — a real toss-up (not locked, not conceded) whose leverage clears
+  - **⚔️ Contest** — a real toss-up (not locked, not conceded) whose leverage clears
     `_GAMEPLAN_MIN_LEVERAGE` (8 win-the-week percentage points) — genuinely worth a move, sorted
     most-decisive-first.
   - **✋ Concede** (`p_win% <= _GAMEPLAN_CONCEDE_PCT` = 15, OR a toss-up whose leverage is below the
@@ -102,7 +102,7 @@ every other matchup-dependent section's empty-state guard).
   - **`_move_win_delta(cand_row, role, winprob_ctx, per_cat, remaining_frac, today_str,
     week_end_str, weeks_played)`** → `(best_cat, cat_before%, cat_after%, week_before%, week_after%)`
     or `None`. Folds `_pickup_contrib`'s deltas into a COPY of `per_cat` (never mutates the shared
-    map — the same one the 🎯 chip reads), recomputing only the affected category's `p_win` via
+    map — the same one the 🏆 chip reads), recomputing only the affected category's `p_win` via
     `_cat_win_prob`, then reruns `_matchup_win_prob` on the copy. Unlike `pickup_win_delta`, this does
     **not** gate on `_PICKUP_WINDELTA_MIN`/`_PICKUP_CONTESTED_MAX` — a candidate whose only
     production lands in an already-locked/conceded category naturally yields ~0 matchup lift and

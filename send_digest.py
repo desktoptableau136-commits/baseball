@@ -1445,7 +1445,7 @@ def build_category_pulse(matchup, weekly_avgs=None, days_elapsed=None, remaining
     proj_results = []
     close_flags  = []   # per-card toss-up flag (win% in the _TOSSUP band) → summary count
     cat_probs    = []   # per-card (p_win, p_tie) → fed once into _matchup_win_prob for the
-                         # 🎯 Win-the-week chip, so it can never disagree with the cards
+                         # 🏆 Win-the-week chip, so it can never disagree with the cards
 
     def _card(c):
         cat   = c["cat"]
@@ -1626,17 +1626,19 @@ def build_category_pulse(matchup, weekly_avgs=None, days_elapsed=None, remaining
             f'<span style="color:{TEXT}88;font-weight:600;">{proj_t}T</span>'
         )
 
-    # 🎯 Win the week — the 12 per-card win probabilities collapsed into ONE number via
+    # 🏆 Win the week — the 12 per-card win probabilities collapsed into ONE number via
     # the exact margin DP (_matchup_win_prob). Reuses cat_probs collected above during
     # the card loop (no recomputation), so it can never disagree with the cards. Colored
-    # to the outcome; see docs/scoring.md for the "how to read this" note.
+    # to the outcome; see docs/scoring.md for the "how to read this" note. Trophy, not the
+    # target glyph — 🎯 is reserved exclusively for the Trade Lab's "fills your need" marker,
+    # so "win the week" doesn't share an icon with a per-player flag.
     if cat_probs:
         win_week, _tie_week, _loss_week = _matchup_win_prob(cat_probs)
         wk_pct = round(win_week * 100)
         wk_col = GREEN if wk_pct > 55 else (RED if wk_pct < 45 else TEXT)
         summary += (
             f'<span style="color:{MUTED};margin:0 6px;font-size:11px;">·</span>'
-            f'<span style="font-size:12px;">&#127919;</span>'
+            f'<span style="font-size:12px;">&#127942;</span>'
             f'<span style="color:{MUTED};font-size:11px;"> Win the week: </span>'
             f'<span style="color:{wk_col};font-weight:800;">{wk_pct}%</span>'
         )
@@ -2358,82 +2360,13 @@ def build_glossary_section():
                "swing-and-miss and a low WHIP; held back by hard contact&rdquo;). If the player is hurt it ends with a 🩹 <b>Injury</b> line — which side of the IL "
                "he's on (10 / 15 / 60-day, OUT, or day-to-day), the body part and specifics, and his "
                "expected return. The ▾ caret marks a tappable badge; ✕ (or tapping another badge) closes it."),
-        _entry(f'Recent Form{_mark("&#128293;", GREEN)}{_mark("&#10052;", RED)}',
+        _entry(f'Recent Form{_mark("&#128293;", GREEN)}{_mark("&#10052;", ACCENT)}',
                "In the Recent Form columns, 🔥 (or ↑) marks a player running <b>hot</b> vs his season "
                "baseline; ❄ (or ↓) marks <b>cold</b>. Built from the exact same season-vs-recent Score "
                "comparison as the Score breakdown's dual-score header — whichever window is freshest per "
                "player (30/15/7-day), tagged next to the value (e.g. “15d”) — so a player can never read hot "
                "here and cold there. The colored value beside the icon is the recent stat itself, shown for "
                "context; the icon and color are driven by the Score delta, not that raw number."),
-
-        _subhead("Pitchers (starters)"),
-        _entry(f'QS / 5K+ / 2{qs_badge(6.0, 2)}{k5_badge(6)}{two_start_badge()}',
-               "In My Upcoming Starts and FA Starting Pitchers, these annotate a starter's <b>projected line</b> "
-               "for that day: cyan <b>QS</b> = the Proj. Line is a quality start (6+ IP & ≤3 ER); yellow "
-               "<b>5K+</b> = projects 5+ strikeouts; blue <b>2</b> = two starts inside the matchup week. They "
-               "match the Proj. Line exactly (no 5K+ next to a 4 K line) and appear regardless of your rotation "
-               "that day. <b>Hover</b> (or tap the Score pill) for the projected line that earned each one — the "
-               "5K+ tooltip also names the K-skill behind it (whiff rate, whiff percentile, or K%). The QS% "
-               "column shows season quality-start probability separately."),
-        _entry(f'QS / K+ season skill (trade cards){_hit_badge("QS", CYAN)}{_hit_badge("K+", YELLOW)}',
-               "On <b>Trade Radar</b>, <b>Pending Trades</b>, and the <b>Trade Lab</b>, these mark a starter's "
-               "<b>durable season skill</b> — not a single projected start: cyan <b>QS</b> = posts quality starts "
-               "at an elite season clip (top-fifth matchup-neutral season QS%); yellow <b>K+</b> = an "
-               "elite-strikeout arm (top-fifth season K rate). The season counterpart to the per-start QS / 5K+ "
-               "above — same glyphs, but a player <i>trait</i> you weigh when trading, so they're kept off the "
-               "streaming lists (My Upcoming Starts / FA SP) where the per-start chips live. <b>Hover</b> (or tap "
-               "the Score pill) for the numbers."),
-        _entry(f'⚠ low floor{_hit_badge("&#9888;", ORANGE)}',
-               "Warns a starter is <b>blowup-prone</b> — a skill profile at risk of the disaster outing (5+ ER) "
-               "that wrecks your ERA/WHIP and can't be undone once it's in your lineup. Blends baserunner traffic "
-               "(WHIP), a strikeout escape hatch (K% / whiff), effective run prevention (ERA regressed toward "
-               "xERA), and hard contact allowed, then escalates when the arm is <b>cold lately</b> (high L15 ERA). "
-               "<b>Hover</b> for the worst 2–3 drivers. A floor warning only — it never lowers the Score, and the "
-               "digest steers pickups away from flagged arms. Distinct from ▼/▽ sell-high — ⚠ is single-start "
-               "<i>tail</i> risk, ▼/▽ is <i>mean</i> regression."),
-
-        _subhead("Hitters"),
-        _entry(f'PWR{_hit_badge("PWR", PURPLE)}',
-               "Next to a hitter's name — a top-tier power/HR threat (highest modeled HR-probability tier). "
-               "Shown first when several badges apply. Hover (or tap the Score pill) for the drivers."),
-        _entry(f'SB{_hit_badge("SB", SILVER)}',
-               "Next to a hitter's name — a genuine base-stealer (top-20% SB producer, corroborated by sprint "
-               "speed)."),
-        _subhead("Buy-low / sell-high — pitchers &amp; hitters"),
-        _entry(f'$ / ▼ / ▽{_hit_badge("$", GREEN)}{_hit_badge("&#9660;", RED)}{_hit_badge("&#9661;", RED)}',
-               "Statcast expected-vs-actual regression flags (mutually exclusive). <b>$</b> (green) = "
-               "<b>buy-low</b>: results running <i>behind</i> the expected stats (unlucky) → positive regression "
-               "likely, a good acquire-cheap target. <b>▽</b> (hollow red) = <b>sell-high</b>: results <i>ahead</i> "
-               "of expected (lucky) → regression risk — a season-level prediction only, not yet showing up in his "
-               "actual recent games. <b>▼</b> (solid red) = that same sell-high call, but already <b>confirmed</b> "
-               "— his recent games are already trending the predicted way (see the next entry). The shape does the "
-               "talking on purpose: hollow reads as 'watch out,' solid reads as 'already happening.' For "
-               "<b>hitters</b> the read is xBA/xSLG vs actual AVG/SLG; for <b>pitchers</b> it's xERA vs ERA "
-               "(measured relative to the league's typical xERA-vs-ERA offset, since xERA runs a bit high). "
-               "Display-only — never changes a Score — and it powers the buy-low / sell-high timing in Trade Radar. "
-               "<b>Hover</b> for the numbers."),
-        _entry(f'$&#8599; / ▼&#8600;{_hit_badge("$&#8599;", GREEN)}{_hit_badge("&#9660;&#8600;", RED)}',
-               "<b>Hitters and pitchers</b> — a small diagonal arrow means the buy-low/sell-high call isn't just a "
-               "season-level prediction, it's already showing up in his <i>recent</i> games (recent AVG/SLG for a "
-               "hitter, recent ERA for a pitcher — both weighted for small-sample size — still diverge from the "
-               "season expected stats in the same direction). This is exactly what flips the sell-high glyph from "
-               "hollow ▽ to solid ▼. No arrow doesn't mean the call is wrong — most of the time there's just no "
-               "recent confirmation yet either way. When his recent games are trending the <i>opposite</i> way "
-               "instead, the badge stays as shown but the hover text flags the contradiction — worth a second look "
-               "before acting on the $/▼/▽ call."),
-        _entry(f'&#8599; / &#8600;{_hit_badge("&#8599;", GREEN)}{_hit_badge("&#8600;", RED)}',
-               "<b>Hitters and pitchers</b> — a bare diagonal arrow with <i>no</i> $/▼/▽ means his season "
-               "aggregate hasn't moved enough yet to trip the season-level buy-low/sell-high badge, but his "
-               "recent games are <i>already</i> trending that direction against his own expected stats (xBA/xSLG "
-               "for hitters, xERA for pitchers). An early read — it can graduate to a full $/▼ later once the "
-               "season numbers catch up, or fade back to nothing if it was a short blip."),
-        _entry(f'Injury (trade cards){_il_badge({"ESPN_Status": "TEN_DAY_DL"})}{_il_badge({"ESPN_Status": "SIXTY_DAY_DL"})}{_il_badge({"ESPN_Status": "DAY_TO_DAY"})}',
-               "On a <b>Trade Radar</b>, <b>Pending Trades</b>, or <b>Trade Lab</b> player line, a red "
-               "<b>IL-10 / IL-15 / IL-60 / OUT</b> (or orange <b>DTD</b>) chip flags an injured player. His "
-               "trade value is automatically <b>discounted by severity</b> — a 60-day-IL bat is worth far "
-               "less than a day-to-day one — but never to zero, since he comes back. The chip tells you "
-               "<i>why</i> a card values him below his healthy line, on both sides of the deal. <b>Hover</b> "
-               "for the timeline."),
 
         _subhead("Category Pulse cards"),
         _entry(f'Outcome markers{_mark("&#9650;", GREEN)}{_mark("&#9660;", RED)}{_mark("&#9670;", TEXT)}',
@@ -2444,25 +2377,96 @@ def build_glossary_section():
                "The <b>%</b> in each card corner is your odds of winning that category (normal model of the final "
                "margin), colored to the projected outcome. On a toss-up — odds near even, or a projected tie — a "
                "<b>⚡</b> replaces the number instead."),
+
+        _subhead("Streaming tables (My Upcoming Starts / FA SP · RP · Hitters)"),
+        _entry(f'QS / 5K+ / 2{qs_badge(6.0, 2)}{k5_badge(6)}{two_start_badge()}',
+               "In My Upcoming Starts and FA Starting Pitchers, these annotate a starter's <b>projected line</b> "
+               "for that day: cyan <b>QS</b> = the Proj. Line is a quality start (6+ IP & ≤3 ER); yellow "
+               "<b>5K+</b> = projects 5+ strikeouts; blue <b>2</b> = two starts inside the matchup week. They "
+               "match the Proj. Line exactly (no 5K+ next to a 4 K line) and appear regardless of your rotation "
+               "that day. <b>Hover</b> (or tap the Score pill) for the projected line that earned each one — the "
+               "5K+ tooltip also names the K-skill behind it (whiff rate, whiff percentile, or K%). The QS% "
+               "column shows season quality-start probability separately. (The <b>same QS / K+ letters mean "
+               "something different on trade cards</b> — see Trade cards below.)"),
+        _entry(f'⚠ low floor{_hit_badge("&#9888;", ORANGE)}',
+               "Warns a starter is <b>blowup-prone</b> — a skill profile at risk of the disaster outing (5+ ER) "
+               "that wrecks your ERA/WHIP and can't be undone once it's in your lineup. Blends baserunner traffic "
+               "(WHIP), a strikeout escape hatch (K% / whiff), effective run prevention (ERA regressed toward "
+               "xERA), and hard contact allowed, then escalates when the arm is <b>cold lately</b> (high L15 ERA). "
+               "<b>Hover</b> for the worst 2–3 drivers. A floor warning only — it never lowers the Score, and the "
+               "digest steers pickups away from flagged arms. Distinct from ▼/▽ sell-high — ⚠ is single-start "
+               "<i>tail</i> risk, ▼/▽ is <i>mean</i> regression."),
+        _entry(f'PWR{_hit_badge("PWR", PURPLE)}',
+               "Next to a hitter's name — a top-tier power/HR threat (highest modeled HR-probability tier). "
+               "Shown first when several badges apply. Hover (or tap the Score pill) for the drivers."),
+        _entry(f'SB{_hit_badge("SB", SILVER)}',
+               "Next to a hitter's name — a genuine base-stealer (top-20% SB producer, corroborated by sprint "
+               "speed)."),
         _entry(f'Pickup win-% swing&nbsp;{_swing_cat_chip("K", 46, 58)}',
-               "On any <b>FA Pickup</b> (starter, reliever, or hitter) — the one contested category his remaining "
+               "On any FA pickup (starter, reliever, or hitter) — the one contested category his remaining "
                "production this matchup would most improve, highlighted in that player's <b>Cats</b> column with an "
                "<b>↑</b> (green when the add would put you over 50%, else blue; the other Cats entries are neutral "
                "silver season strengths). Tap the <b>Score</b> pill to reveal the full <b>before→after</b> win odds "
                "(e.g. <i>lifts your K win odds 46% → 58% this matchup</i>). Uses the same calibrated win-probability "
-               "model as the Category Pulse cards; only shown when he'd move a category you're not already winning "
-               "comfortably."),
+               "model as the Category Pulse cards above; only shown when he'd move a category you're not already "
+               "winning comfortably."),
+
+        _subhead("Trade cards (Trade Radar / Pending Trades / Trade Lab)"),
+        _entry(f'QS / K+ season skill{_hit_badge("QS", CYAN)}{_hit_badge("K+", YELLOW)}',
+               "Marks a starter's <b>durable season skill</b> — not a single projected start: cyan <b>QS</b> = "
+               "posts quality starts at an elite season clip (top-fifth matchup-neutral season QS%); yellow "
+               "<b>K+</b> = an elite-strikeout arm (top-fifth season K rate). The trade-value counterpart to the "
+               "per-start QS / 5K+ chips above — same glyphs, but a player <i>trait</i> you weigh when trading, so "
+               "they're kept off the streaming lists (My Upcoming Starts / FA SP) where the per-start chips live."),
+        _entry(f'Injury{_il_badge({"ESPN_Status": "TEN_DAY_DL"})}{_il_badge({"ESPN_Status": "SIXTY_DAY_DL"})}{_il_badge({"ESPN_Status": "DAY_TO_DAY"})}',
+               "On a player line, a red <b>IL-10 / IL-15 / IL-60 / OUT</b> (or orange <b>DTD</b>) chip flags an "
+               "injured player. His trade value is automatically <b>discounted by severity</b> — a 60-day-IL bat "
+               "is worth far less than a day-to-day one — but never to zero, since he comes back. The chip tells "
+               "you <i>why</i> a card values him below his healthy line, on both sides of the deal. <b>Hover</b> "
+               "for the timeline."),
+        _entry(f'Verdict (Pending Trades){_verdict_pill("ACCEPT", GREEN)}&nbsp;{_verdict_pill("COUNTER", YELLOW)}&nbsp;{_verdict_pill("DECLINE", RED)}',
+               "On a real trade offer made <b>to you</b>, the lean: <b>ACCEPT</b> (green) = you win the value, or "
+               "it's roughly even and fills a real category/positional need without a timing trap; <b>COUNTER</b> "
+               "(yellow) = the right direction but you'd be paying up or selling a riser / buying a regressor — on a "
+               "counter it also <b>names the best add-on to ask the other manager for</b> (a spare piece of theirs "
+               "that evens the value and helps a need of yours); <b>DECLINE</b> (red) = it addresses no need and you "
+               "don't gain value. An even-value offer that <b>pries one of your star players at par</b> also leans "
+               "COUNTER (hold out — you'd give up a crown jewel for parity). Value is judged on the same cross-role currency Trade Radar uses. Because offers "
+               "<b>expire</b>, an incoming-offer headline (verdict + days left) also shows atop Matchup at a Glance "
+               "and in the email body's &ldquo;Act today&rdquo; list. An offer <b>you</b> proposed shows an "
+               "&ldquo;awaiting {partner}&rdquo; status instead (it's their call)."),
+
+        _subhead("Buy-low / sell-high — pitchers &amp; hitters, everywhere"),
+        _entry(f'$ / ▽ / ▼{_hit_badge("$", GREEN)}{_hit_badge("&#9661;", RED)}{_hit_badge("&#9660;", RED)}{_hit_badge("&#8599;", GREEN)}{_hit_badge("&#8600;", RED)}',
+               "Statcast expected-vs-actual regression flags (mutually exclusive), escalating through three states "
+               "as the signal firms up. <b>$</b> (green) = <b>buy-low</b>: results running behind the expected "
+               "stats (unlucky) → positive regression likely, a good acquire-cheap target. <b>▽</b> (hollow red) = "
+               "<b>sell-high</b>, season-level prediction only: results running ahead of expected (lucky), not yet "
+               "showing up in his actual recent games. <b>▼</b> (solid red) = that same sell-high call "
+               "<b>confirmed</b> — his recent games are already trending the predicted way (hollow reads 'watch "
+               "out,' solid reads 'already happening'). A small <b>↗/↘</b> diagonal arrow tacked onto either badge "
+               "flags that the recent-games check has weighed in; a <b>bare</b> ↗/↘ with no $/▼/▽ fill means the "
+               "season aggregate hasn't moved enough yet to trip the season-level badge, but recent games are "
+               "already trending that way — an early read that can graduate into a full $/▼ later, or fade back to "
+               "nothing. For <b>hitters</b> the read is xBA/xSLG vs actual AVG/SLG; for <b>pitchers</b> it's xERA "
+               "vs ERA (relative to the league's typical xERA-vs-ERA offset). When recent games trend the "
+               "<i>opposite</i> direction of the season call, hover text flags the contradiction. Display-only — "
+               "never changes a Score — and powers Trade Radar's buy-low/sell-high timing. <b>Hover</b> for the "
+               "numbers."),
 
         _subhead("Weekly Game Plan"),
-        _entry("&#127919; Win the week",
+        _entry("&#127942; Win the week",
                "The 12 per-category win probabilities (same calibrated model as the Category Pulse % chips) "
                "collapsed into <b>one</b> number: the odds you take more categories than your opponent this "
                "matchup. 50% = genuine coin flip; true 100%/0% is rare (12 categories means near-certainty in "
                "almost all of them), so a great week realistically reads &asymp;90%, not 100% &mdash; that's "
                "expected, not a bug. Categories aren't perfectly independent (a strong pitching week correlates "
                "K/QS/W/ERA/WHIP), so treat it as a well-calibrated <i>modeled</i> odds, not a guarantee. Shown "
-               "on the Category Pulse summary, in The Briefing, atop the Weekly Game Plan, and on the dashboard."),
-        _entry("&#128274; Locked &middot; &#127919; Contest &middot; &#9995; Concede",
+               "on the Category Pulse summary, in The Briefing, atop the Weekly Game Plan, and on the dashboard. "
+               "The trophy is deliberately its own glyph, distinct from the crossed-swords Contest bucket below "
+               "and from the Trade Lab's 🎯 target marker — this is the one whole-week number, not a "
+               "per-category or per-player flag."),
+        _entry("&#128274; Locked &middot; &#9876; Contest &middot; &#9995; Concede",
                "The Weekly Game Plan's category triage: <b>Locked</b> = win odds &ge; 85%, already yours, no "
                "action needed. <b>Contest</b> = a real toss-up where winning it would meaningfully swing the "
                "week (its <i>leverage</i> &mdash; how much the week's odds move if it flips from a sure win to a "
@@ -2478,19 +2482,6 @@ def build_glossary_section():
                "<b>hold</b> when the add is a durable season-quality upgrade over your starter at that spot, "
                "else <b>streamer</b> (a short-term volume/form play &mdash; an SP added for this week's "
                "start(s), or a bat riding a hot recent window)."),
-
-        _subhead("Pending trades"),
-        _entry(f'Verdict{_verdict_pill("ACCEPT", GREEN)}&nbsp;{_verdict_pill("COUNTER", YELLOW)}&nbsp;{_verdict_pill("DECLINE", RED)}',
-               "On a real trade offer made <b>to you</b>, the lean: <b>ACCEPT</b> (green) = you win the value, or "
-               "it's roughly even and fills a real category/positional need without a timing trap; <b>COUNTER</b> "
-               "(yellow) = the right direction but you'd be paying up or selling a riser / buying a regressor — on a "
-               "counter it also <b>names the best add-on to ask the other manager for</b> (a spare piece of theirs "
-               "that evens the value and helps a need of yours); <b>DECLINE</b> (red) = it addresses no need and you "
-               "don't gain value. An even-value offer that <b>pries one of your star players at par</b> also leans "
-               "COUNTER (hold out — you'd give up a crown jewel for parity). Value is judged on the same cross-role currency Trade Radar uses. Because offers "
-               "<b>expire</b>, an incoming-offer headline (verdict + days left) also shows atop Matchup at a Glance "
-               "and in the email body's &ldquo;Act today&rdquo; list. An offer <b>you</b> proposed shows an "
-               "&ldquo;awaiting {partner}&rdquo; status instead (it's their call)."),
     ])
     pitching = _group("Pitching metrics", [
         _entry("xERA / xwOBA-against", "Baseball Savant “deserved” run prevention from contact quality — "
@@ -3122,7 +3113,7 @@ def render_briefing(my_team, today, matchup, classification, starts, today_str,
         f'<div style="font-size:15px;color:{mc};font-weight:700;">{mk} {cw}–{cl}–{ct} '
         f'<span style="color:{MUTED};font-weight:400;font-size:13px;">now · '
         f'{verb} {pw}–{pl}–{ptt}'
-        + (f' · &#127919; <span style="color:{GREEN if win_week_pct > 55 else (RED if win_week_pct < 45 else MUTED)};font-weight:700;">'
+        + (f' · &#127942; <span style="color:{GREEN if win_week_pct > 55 else (RED if win_week_pct < 45 else MUTED)};font-weight:700;">'
            f'{win_week_pct}%</span> to win the week' if win_week_pct is not None else '')
         + '</span></div>'
         + (f'<div style="font-size:12.5px;color:#cbd5e1;margin-top:4px;line-height:1.5;">{matchup_prose}</div>' if matchup_prose else "")
@@ -3654,13 +3645,13 @@ def _matchup_closing_note(is_final_day):
 # (_matchup_swing); Part B ranks FA candidates (from the ALREADY-BUILT fa_sp/fa_rp/fa_hit
 # pools, so the plan can only ever recommend a player the FA tables also list) by the
 # MATCHUP-level win% lift adding them buys (_move_win_delta), not their single-category
-# swing. Both parts reuse the same per_cat map build_category_pulse's 🎯 chip is built
+# swing. Both parts reuse the same per_cat map build_category_pulse's 🏆 chip is built
 # from, so the section can't disagree with the number the reader already saw above it.
 
 _GAMEPLAN_LOCK_PCT     = 85   # cat win% >= this -> 🔒 Locked (already yours, no action)
 _GAMEPLAN_CONCEDE_PCT  = 15   # cat win% <= this -> ✋ Concede (don't spend a move here)
 _GAMEPLAN_MIN_LEVERAGE = 8    # min swing leverage (win-the-week percentage points) for a
-                              # toss-up cat to count as 🎯 Contest rather than ✋ Concede —
+                              # toss-up cat to count as ⚔️ Contest rather than ✋ Concede —
                               # a toss-up cat that barely moves the week isn't worth a move
 _GAMEPLAN_MAX_HIT_MOVES = 2   # top-N ranked hitter move cards (left column)
 _GAMEPLAN_MAX_PIT_MOVES = 2   # top-N ranked pitcher move cards (right column, SP+RP combined)
@@ -3722,7 +3713,7 @@ def build_game_plan(matchup, winprob_ctx, per_cat, winprob_rf, winprob_weeks,
         f'<div style="background:{SURFACE};border:1px solid {BORDER};border-radius:8px;'
         f'padding:12px 14px;margin-bottom:14px;">'
         f'<div style="font-size:13px;margin-bottom:10px;">'
-        f'<span style="font-size:14px;">&#127919;</span> '
+        f'<span style="font-size:14px;">&#127942;</span> '
         f'<span style="color:{MUTED};">Win the week: </span>'
         f'<span style="color:{wk_col};font-weight:800;">{wk_pct}%</span>'
         f'</div>'
@@ -3733,7 +3724,7 @@ def build_game_plan(matchup, winprob_ctx, per_cat, winprob_rf, winprob_weeks,
         f'<td style="width:33%;vertical-align:top;padding:0 8px;border-left:1px solid {BORDER};'
         f'border-right:1px solid {BORDER};">'
         f'<div style="color:{YELLOW};font-weight:700;text-transform:uppercase;font-size:9px;'
-        f'letter-spacing:.5px;margin-bottom:4px;">&#127919; Contest</div>{_chip_list(contest, YELLOW)}</td>'
+        f'letter-spacing:.5px;margin-bottom:4px;">&#9876; Contest</div>{_chip_list(contest, YELLOW)}</td>'
         f'<td style="width:33%;vertical-align:top;padding-left:8px;">'
         f'<div style="color:{MUTED};font-weight:700;text-transform:uppercase;font-size:9px;'
         f'letter-spacing:.5px;margin-bottom:4px;">&#9995; Concede</div>{_chip_list(concede, MUTED)}</td>'
@@ -4142,7 +4133,7 @@ def build_email(snap, override_team=None):
     # per-week denominator for the RP/hitter marginal-win% estimate (pickup_win_delta).
     winprob_weeks = max(1.0, (current_week_num or 1) - winprob_rf)
     # Joint win-the-week probability + per-category (p_win, p_tie) map — built ONCE here
-    # from the SAME winprob_ctx as everything else above, so the Category Pulse 🎯 chip,
+    # from the SAME winprob_ctx as everything else above, so the Category Pulse 🏆 chip,
     # the Briefing line, and the Weekly Game Plan can never disagree with each other.
     winprob_joint, winprob_percat = _winprob_joint(winprob_ctx, winprob_rf)
 
@@ -5406,11 +5397,11 @@ def build_email(snap, override_team=None):
     myroster_band = "\n".join(p for p in [
         alert_section,                                                                    # 1  ALERTS (top of My Roster)
         bench_watch,                                                                      # 1b Lineup Watch (matchup-to-date bench leakage / blowups / idle hitters)
-        pos_section,                                                                      # 10 Positional Breakdown (moved to top of My Roster)
         starts_section,                                                                   # 6
         my_rp_section,                                                                    # 7
         build_pitcher_hot_cold_section(pitchers, my_team, best_recent_p),         # 8
         build_hot_cold_section(hitters, my_team, best_recent_h, hit_pctile),  # 9
+        pos_section,                                                                      # 10 Positional Breakdown (moved to bottom of My Roster)
     ] if p)
     game_plan = build_game_plan(
         matchup, winprob_ctx, winprob_percat, winprob_rf, winprob_weeks,
@@ -5421,7 +5412,6 @@ def build_email(snap, override_team=None):
         best_recent_p=best_recent_p, best_recent_h=best_recent_h, hit_pctile=hit_pctile,
     )
     transactions_band = "\n".join(p for p in [
-        game_plan,                                                                        # 10a Weekly Game Plan (win-the-week odds + ranked moves)
         _matchup_closing_note(today_str == week_end_str),                                 # end-of-matchup: pickups can't swing today's closing matchup
         pending_section,                                                                  # 10b Pending Trades (real offers — Accept/Counter/Decline)
         fa_sp_section,                                                                    # 11
@@ -5429,6 +5419,7 @@ def build_email(snap, override_team=None):
         fa_hit_section,                                                                   # 13
         build_trade_radar(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
                           pos_data, hit_pctile, pit_pctile, team_logos=team_logos),       # 13b Trade Radar
+        game_plan,                                                                        # 10a Weekly Game Plan (moved to bottom of Transactions)
     ] if p)
     season_band = "\n".join(p for p in [
         cat_section,                                                                      # 14
