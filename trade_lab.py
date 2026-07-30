@@ -148,6 +148,12 @@ def build_data(snap, my_team):
     # (sd._team_trade_context, per team) inside the loop below.
     ranks, n = sd.team_category_ranks(roto)
 
+    # Replacement level for the Drop Candidate marker — best _tval sitting on waivers right now,
+    # per hitter position group + SP/RP. Computed ONCE: the FA pool doesn't depend on which
+    # team's roster is being viewed. Feeds sd._is_drop_candidate below.
+    fa_replacement = sd._fa_replacement_tvals(hitters, pitchers, best_recent_p, best_recent_h,
+                                              hit_pctile, pit_pctile)
+
     # Team roster ordered by standings; keep the double-space snapshot keys for matching.
     team_keys = [_key(s.get("team_name")) for s in standings] or sorted(ranks.keys())
     team_logos = {_key(s.get("team_name")): s.get("logo_url", "") for s in standings}
@@ -191,14 +197,16 @@ def build_data(snap, my_team):
             if _key(r.get("FantasyTeam")) != tk or int(r.get("Dataset", 0) or 0) != YEAR:
                 continue
             sd._enrich_trade_player(r, "hit", best_recent_p, best_recent_h, hit_pctile, pit_pctile)
-            buckets["hit"].append(_serialize(r, "hit", best_recent_h, best_recent_p, hit_pctile))
+            is_drop = sd._is_drop_candidate(r, tk, teams_meta[tk]["pos_count"], fa_replacement)
+            buckets["hit"].append(_serialize(r, "hit", best_recent_h, best_recent_p, hit_pctile, is_drop))
         # Pitchers (split SP / RP by usage role)
         for r in pitchers:
             if _key(r.get("FantasyTeam")) != tk or int(r.get("Dataset", 0) or 0) != YEAR:
                 continue
             sd._enrich_trade_player(r, "pit", best_recent_p, best_recent_h, hit_pctile, pit_pctile)
             role = "sp" if _is_sp(r) else "rp"
-            buckets[role].append(_serialize(r, role, best_recent_h, best_recent_p, hit_pctile))
+            is_drop = sd._is_drop_candidate(r, tk, fa_replacement=fa_replacement)
+            buckets[role].append(_serialize(r, role, best_recent_h, best_recent_p, hit_pctile, is_drop))
         for role in buckets:
             buckets[role].sort(key=lambda p: -p["score"])
         players[tk] = buckets
@@ -250,7 +258,7 @@ def build_data(snap, my_team):
     }
 
 
-def _serialize(r, role, best_recent_h, best_recent_p, hit_pctile):
+def _serialize(r, role, best_recent_h, best_recent_p, hit_pctile, is_drop=False):
     """One JSON-safe player record. Badges + breakdown are pre-rendered HTML strings."""
     if role == "hit":
         badges    = sd.hitter_badges(r, hit_pctile, idx_recent=best_recent_h)
@@ -280,6 +288,7 @@ def _serialize(r, role, best_recent_h, best_recent_p, hit_pctile):
         "tgroups":   sorted(r.get("_tgroups") or []),
         "sell":      bool(r.get("_tsell")),
         "buy":       bool(r.get("_tbuy")),
+        "drop":      bool(is_drop),   # value too low to shop to anyone -- straight roster cut instead
     }
 
 
@@ -621,8 +630,11 @@ body {{ margin:0; background:{BG}; color:{TEXT}; font-family:-apple-system,Segoe
 .arb {{ font-weight:900; cursor:help; flex:0 0 auto; letter-spacing:-1px; }}
 .arb.bait {{ color:{YELLOW}; }}
 .arb.grab {{ color:{GREEN}; }}
+.arb.drop {{ color:{RED}; }}
 .prow.abait {{ box-shadow:inset -3px 0 0 {YELLOW}; }}   /* left panel — send edge */
 .prow.agrab {{ box-shadow:inset 3px 0 0 {GREEN}; }}     /* right panel — grab edge (wins over target) */
+.prow.pdropL {{ box-shadow:inset -3px 0 0 {RED}; }}      /* left panel — same inward edge as send */
+.prow.pdropR {{ box-shadow:inset 3px 0 0 {RED}; }}        /* right panel — same inward edge as grab/target */
 .prow.strong.abait {{ background:linear-gradient(90deg,transparent,rgba(245,158,11,.10)); }}
 .prow.strong.agrab {{ background:linear-gradient(90deg,rgba(34,197,94,.10),transparent); }}
 .prow-top {{ display:flex; align-items:center; gap:6px; }}
@@ -1000,11 +1012,28 @@ function playerRowHtml(side, p, gkey, myMeta, holderMeta, otherMeta) {{
     if (tr.length) {{ tgt = ' <span class="tgt" title="Target &mdash; ' + tr.join('; ') + '">&#127919;</span>'; tgtCls = ' target'; }}
   }}
   // Arb marker — lives ALONGSIDE the target (different question: value edge, not need-fit).
-  var m = arbMarker(p, holderMeta || {{}}, otherMeta || {{}}), arb = '', arbCls = '';
-  if (m) {{
-    var oName = side === 'L' ? ((otherMeta||{{}}).name || 'They') : 'You';
-    arb = arbGlyph(side, m, arbReasons(p, holderMeta || {{}}, otherMeta || {{}}, oName));
-    arbCls = (side === 'L' ? ' abait' : ' agrab') + (m.tier === 'strong' ? ' strong' : '');
+  // DROP vs arb priority is SIDE-DEPENDENT: on the LEFT (my roster), drop always wins over
+  // "send" -- a too-cheap player of mine can still show a category/position-fit send edge
+  // (arbMarker never looks at value size, only need-multiplier gap), which would misleadingly
+  // read as a real trade chip worth shopping. On the RIGHT (partner roster), "grab" answers a
+  // DIFFERENT question (does he fill MY need?) that stays true whether or not the partner could
+  // easily replace him -- so grab must win when both apply; drop only shows as a fallback when
+  // there's no grab edge at all (still useful: "doesn't help either of us, and replaceable too").
+  var arb = '', arbCls = '';
+  if (side === 'L' && p.drop) {{
+    arb = dropGlyph(p);
+    arbCls = ' pdropL';
+  }} else {{
+    var m = arbMarker(p, holderMeta || {{}}, otherMeta || {{}});
+    if (m) {{
+      var oName = side === 'L' ? ((otherMeta||{{}}).name || 'They') : 'You';
+      var hName = side === 'L' ? 'you' : ((holderMeta||{{}}).name || 'they');
+      arb = arbGlyph(side, m, arbReasons(p, holderMeta || {{}}, otherMeta || {{}}, oName, hName));
+      arbCls = (side === 'L' ? ' abait' : ' agrab') + (m.tier === 'strong' ? ' strong' : '');
+    }} else if (side === 'R' && p.drop) {{
+      arb = dropGlyph(p);
+      arbCls = ' pdropR';
+    }}
   }}
   var bid = 'bd-' + side + '-' + gkey + '-' + p.id;
   return '<div class="prow' + on + tgtCls + arbCls + '" id="row-' + side + '-' + gkey + '-' + p.id + '" '
@@ -1156,12 +1185,15 @@ function arbMarker(p, holderMeta, otherMeta) {{
   return {{ tier: gap >= (DATA.tune.needCat + DATA.tune.needSurplus) ? 'strong' : 'mild' }};
 }}
 
-// Tooltip: why the other side values him more (+ a note when the holder is deep).
-function arbReasons(p, holderMeta, otherMeta, otherName) {{
+// Tooltip: why the other side values him more (+ a note when the HOLDER is deep). holderName
+// must name whoever actually holds him, not a hardcoded 'you' -- on a send (holder=my team) that
+// IS you, but on a grab (holder=the partner) it's them, and saying 'you are deep here' on a grab
+// would wrongly claim the viewer is deep in a stat that's really the partner's redundancy.
+function arbReasons(p, holderMeta, otherMeta, otherName, holderName) {{
   var pos = multParts(p, otherMeta).filter(function(x){{ return x.s>0; }}).map(function(x){{ return x.t; }});
   var deep = multParts(p, holderMeta).some(function(x){{ return x.s<0; }});
   var s = (otherName||'They') + ' value him more: ' + (pos.join(' &#183; ') || 'fits their build');
-  if (deep) s += ' &#183; you are deep here';
+  if (deep) s += ' &#183; ' + (holderName||'they') + ' are deep here';
   return s;
 }}
 
@@ -1172,6 +1204,14 @@ function arbGlyph(side, m, title) {{
   // HTML entities (not \\u escapes): _JS is a raw string, so \\u would survive literally.
   var g = side==='L' ? (strong?'&#9656;&#9656;':'&#9656;') : (strong?'&#9666;&#9666;':'&#9666;');
   return ' <span class="arb '+cls+'" title="'+title+'">'+g+'</span>';
+}}
+
+// Red down-arrow — server-computed (p.drop, sd._is_drop_candidate): his BASE _tval is below
+// the absolute floor, so no partner's need-fit can make him a real trade chip. Direction-less
+// (unlike arbGlyph's inward send/grab) since it isn't about which side values him more.
+function dropGlyph(p) {{
+  if (!p.drop) return '';
+  return ' <span class="arb drop" title="Value too low to interest any trade partner &mdash; a straight roster cut, not a shop-around">&#8595;</span>';
 }}
 
 function openVs(id) {{ var e=document.getElementById(id); if(e) e.style.display = (e.style.display==='none'?'block':'none'); }}
@@ -1200,8 +1240,9 @@ function ledgerItem(side, p) {{
   var holderMeta = side==='L' ? myMeta : partnerMeta;
   var otherMeta  = side==='L' ? partnerMeta : myMeta;
   var otherName  = side==='L' ? (partnerMeta.name||'They') : 'You';
+  var holderName = side==='L' ? 'you' : (partnerMeta.name||'they');
   var m = arbMarker(p, holderMeta, otherMeta);
-  var arb = arbGlyph(side, m, m ? arbReasons(p, holderMeta, otherMeta, otherName) : '');
+  var arb = arbGlyph(side, m, m ? arbReasons(p, holderMeta, otherMeta, otherName, holderName) : '');
   var vsId = 'vs-'+side+'-'+p.id;
   return '<div class="litem">' + p.logo
     + '<span class="lname" onclick="openVs(\'' + vsId + '\')">' + p.name + '</span>' + p.badges + arb
