@@ -521,16 +521,17 @@ def render_category_pulse(ctx):
     close = sum(1 for _, ic, _ in rendered if ic)
     sub = (f'{cw}W&middot;{cl}L&middot;{ct}T &rarr; proj {pw}-{pl}-{pt}'
            + (f' &middot; &#9889;{close}' if close else ''))
-    # 🎯 Win the week — same margin-DP joint the digest's Category Pulse chip uses
+    # 🏆 Win the week — same margin-DP joint the digest's Category Pulse chip uses
     # (sd._matchup_win_prob), fed the SAME per-cell (p_win, p_tie) pairs so the
     # dashboard number can't disagree with the digest's. Appended to the existing
     # subtitle string (no new row) to respect the zero-scroll/1440x900 constraint.
+    # Trophy, not the dartboard — 🎯 stays reserved exclusively for the Trade Lab's need-fit marker.
     cat_probs = [cp for _, _, cp in rendered if cp]
     if cat_probs:
         win_week, _tie_week, _loss_week = sd._matchup_win_prob(cat_probs)
         wk_pct = round(win_week * 100)
         wk_col = GREEN if wk_pct > 55 else (RED if wk_pct < 45 else TEXT)
-        sub += (f' &middot; &#127919; <span style="color:{wk_col};font-weight:700;">'
+        sub += (f' &middot; &#127942; <span style="color:{wk_col};font-weight:700;">'
                 f'{wk_pct}%</span> week')
     return _tile(f"Category Pulse", grid, flex=1.6, sub=sub)
 

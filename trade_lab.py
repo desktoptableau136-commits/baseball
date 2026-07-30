@@ -539,6 +539,60 @@ def build_megadeal_board(pitchers, hitters, roto, team_keys, ranks, n,
 # RENDER — static shell + embedded JSON + the selection/verdict JavaScript.
 # ══════════════════════════════════════════════════════════════════════════════
 
+def _tl_chip(text, color):
+    """A tinted badge chip matching the QS/5K+/PWR visual style used on every player row
+    (mirrors dashboard._legend_chip so the two keys read as one shared design system)."""
+    r, g, b = int(color[1:3], 16), int(color[3:5], 16), int(color[5:7], 16)
+    return (f'<span style="font-size:9px;font-weight:700;color:{color};'
+            f'background:rgba({r},{g},{b},0.12);border:1px solid rgba({r},{g},{b},0.35);'
+            f'border-radius:3px;padding:0 3px;vertical-align:middle;">{text}</span>')
+
+
+def _tl_legend_items():
+    """Badge/marker key for the whole page. Trade Lab reuses the digest's tactical badges
+    verbatim (hitter_badges/sp_skill_badges/blowup_badge/pitcher_regression_badge/_il_badge
+    — see _serialize) PLUS two markers unique to this page (the 🎯 need-fit target and the
+    ▸/◂ value-asymmetry "arb" marker, see docs/trades.md) and the LIME thin-position chip
+    on the Partner Fit board. This is now the ONE place target/send/grab are explained (the
+    old inline .hsub hint was removed once this footer covered the same ground) — same idea
+    as the dashboard's bottom Key bar (dashboard.render_legend)."""
+    def item(chip, desc):
+        return (f'<span style="display:inline-flex;align-items:center;gap:4px;white-space:nowrap;">'
+                f'{chip}<span style="color:{MUTED};font-size:10px;">{desc}</span></span>')
+
+    items = [
+        item(sd.badge(80, small=True), "role score 0&ndash;100"),
+        item('<span style="font-size:12px;">&#127919;</span>', "target &mdash; fills your need"),
+        item(f'<span style="color:{YELLOW};font-weight:900;">&#9656;</span>', "send &mdash; your surplus, they value it more"),
+        item(f'<span style="color:{GREEN};font-weight:900;">&#9666;</span>', "grab &mdash; their surplus, you value it more"),
+        item(_tl_chip("QS", sd.CYAN), "elite season QS%"),
+        item(_tl_chip("K+", YELLOW), "elite season K rate"),
+        item(_tl_chip("&#9888;", sd.ORANGE), "low floor / blowup risk"),
+        item(_tl_chip("PWR", PURPLE), "power / HR threat"),
+        item(_tl_chip("SB", sd.SILVER), "speed / steals"),
+        item(_tl_chip("$", GREEN), "buy-low (unlucky)"),
+        item(f'{_tl_chip("&#9661;", RED)}{_tl_chip("&#9660;", RED)}',
+             "sell-high (lucky) &mdash; hollow = predicted, solid = confirmed"),
+        item(sd._il_badge({"ESPN_Status": "TEN_DAY_DL"}), "injured &mdash; trade value discounted by severity"),
+        item(f'<span style="color:{LIME};font-weight:800;font-size:10px;">POS</span>', "fills one of your thin positions"),
+        item('&#128171;', "Blockbuster &mdash; multi-player consolidation win-win"),
+    ]
+    return "".join(items)
+
+
+def render_tl_legend():
+    """A slim key strip at the foot of the page, mirroring the dashboard's bottom Key bar
+    so every badge here — rosters, ledger, Partner Fit board, Blockbuster cards — has one
+    shared explanation."""
+    return (
+        f'<div id="tllegend" style="margin-top:14px;background:{SURFACE};border:1px solid {BORDER};'
+        f'border-radius:8px;padding:8px 14px;display:flex;flex-wrap:wrap;align-items:center;gap:6px 14px;">'
+        f'<span style="color:{TEXT};font-weight:800;text-transform:uppercase;letter-spacing:.6px;font-size:9px;">Key</span>'
+        + _tl_legend_items() +
+        f'</div>'
+    )
+
+
 def build_html(data):
     blob = json.dumps(data).replace("</", "<\\/")   # </script> safety
     css = _CSS.format(BG=BG, SURFACE=SURFACE, SURFACE2=SURFACE2, BORDER=BORDER,
@@ -561,7 +615,7 @@ def build_html(data):
   <div id="head">
     <div class="headmain">
       <div class="htitle">&#9878;&#65039; Trade Lab</div>
-      <div class="hsub">Pick two teams, click players to build a deal, watch it get graded live. &#127919; = fills your need &middot; <span style="color:{YELLOW};font-weight:800">&#9656;</span> send (your surplus they value more) &middot; <span style="color:{GREEN};font-weight:800">&#9666;</span> grab (their surplus you value more).</div>
+      <div class="hsub">Pick two teams, click players to build a deal, watch it get graded live. See the Key at the bottom of the page for what each marker means.</div>
     </div>
     <div class="headright">
       <div class="fresh" title="Snapshot refresh time — rerun with --refresh to update"><span class="dot" style="background:{fresh_color}"></span><span>Data: {fresh_label}</span></div>
@@ -620,6 +674,7 @@ def build_html(data):
       </div>
     </div>
   </div>
+  {render_tl_legend()}
   <div id="dealbar" onclick="jumpToDeal()">
     <div id="dbsummary">Tap players to build a deal</div>
     <div id="dbverdict"></div>
