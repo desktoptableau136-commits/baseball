@@ -309,19 +309,18 @@ _FIT_TIER_ORDER = {"BEST": 0, "REACH": 1, "SLIM": 2, "ONEWAY": 3, "NOFIT": 4}
 _FIT_SCARCE_POS = {"C", "SS"}
 
 
-def _fit_deal_words(value_phrase, accept, rival_gains=True):
-    """Plain-English one-liner for a graded deal → (sentence, tier_key). The deal is already
-    filtered to ACCEPT-for-me (good for my side), so BEST is reserved for a true win-win: the
-    rival ALSO clearly gains (rival_gains) at a realistic price. Otherwise it's a REACH — worth
-    floating, but the rival may resist."""
-    if accept == "realistic" and rival_gains:
+def _fit_deal_words(value_phrase, rival_gains):
+    """Plain-English one-liner for a LANDABLE deal -> (sentence, tier_key). The candidate pool
+    reaching this fn is already filtered to ACCEPT-for-me AND realistic-for-them (not a star
+    reach, rival doesn't come out clearly behind — see the `cand` filter in build_partner_fit),
+    so both tiers here are deals the rival could plausibly say yes to. BEST = a true win-win
+    (rival ALSO clearly gains). REACH = realistic price but they gain little — still a fair
+    ask (costs them nothing) but less compelling, so still worth floating."""
+    if rival_gains:
         if value_phrase == "you pay up":
             return ("You pay a hair, but a fair ask for a need — they gain too.", "BEST")
         return ("Fair swap — a win for both sides.", "BEST")
-    # good for me, but the rival wins little or nothing → they'll likely push back
-    if value_phrase == "you win the value":
-        return ("You come out ahead, but it's an aggressive ask — expect a counter.", "REACH")
-    return ("Worth floating, but the value's thin for them — expect some back-and-forth.", "REACH")
+    return ("Realistic price, but they gain little — still worth floating.", "REACH")
 
 
 def _and_join(xs):
@@ -389,28 +388,37 @@ def build_partner_fit(pitchers, hitters, roto, team_keys, ranks, n,
                 r_needs, r_surplus = needs_of(rival), surplus_of(rival)
                 i_offer   = sorted(my_surplus & r_needs)    # my categorical reason for them
                 they_offer = sorted(r_surplus & my_needs)   # what they can spare me
+                def _tilt(d):
+                    return sd._trade_tilt(d.get("net_val", 0), d.get("ins"), d.get("outs"),
+                                          net_them=d.get("net_them"))
+
                 # Only deals that are ACCEPT for MY side can be a "target" — a deal that's good for
                 # them but not for me (I overpay / fill no need) is exactly what made the board
                 # headline a deal the builder then DECLINEd. Fall through to a diagnosis instead.
-                cand = [d for d in by_team.get(rival, []) if d.get("my_verdict") == "ACCEPT"]
+                # ALSO require the deal be realistic FOR THE RIVAL (`_trade_tilt`'s "realistic" =
+                # not a star reach AND they don't come out clearly behind on their own needs) —
+                # a candidate that already reads "aggressive ask" here is exactly the kind that
+                # comes back COUNTER/DECLINE once built in the live grader, so recommending it as
+                # a "who should you trade with" target just points at a deal nobody will accept.
+                # Dropping it here lets the rival fall through to an honest SLIM/ONE-WAY/NO-DEAL
+                # diagnosis instead of a doomed REACH card.
+                cand = [d for d in by_team.get(rival, []) if d.get("my_verdict") == "ACCEPT"
+                        and _tilt(d)[1] == "realistic"]
 
                 def _score(d):
-                    vp, ac, _ = sd._trade_tilt(d.get("net_val", 0), d.get("ins"), d.get("outs"),
-                                               net_them=d.get("net_them"))
                     fillpos  = [pos for p in d["ins"] for pos in (p.get("_tfillpos") or [])]
                     fillcats = [c for p in d["ins"] for c in (p.get("_tcats") or [])]
                     scarce = any(pos in _FIT_SCARCE_POS for pos in fillpos) or ("SVHD" in fillcats)
                     getval = sum(_n(p.get("_tval")) for p in d["ins"])
-                    return (ac == "realistic", scarce, getval)
+                    return (scarce, getval)
 
                 best = max(cand, key=_score) if cand else None
                 if best:
-                    vp, ac, _ = sd._trade_tilt(best.get("net_val", 0), best.get("ins"), best.get("outs"),
-                                               net_them=best.get("net_them"))
+                    vp, _ac, _ = _tilt(best)
                     # BEST is a true win-win: realistic price AND the rival CLEARLY gains (not just
                     # breaks even). A good-for-me-only deal drops to REACH ("worth a shot").
                     rival_gains = _n(best.get("net_them")) >= sd._TRADE_RIVAL_GAIN_MIN
-                    words, tier = _fit_deal_words(vp, ac, rival_gains)
+                    words, tier = _fit_deal_words(vp, rival_gains)
                     get = [{"name": p.get("PlayerName", ""), "pos": _fit_pos_disp(p),
                             "tags": _fit_get_tags([p], my_needs)} for p in best["ins"]]
                     give = [{"name": p.get("PlayerName", ""), "pos": _fit_pos_disp(p)}
@@ -529,7 +537,7 @@ def build_html(data):
     </summary>
     <div class="fblegend">
       <span><b style="color:{GREEN}">BEST TARGET</b> &mdash; realistic deal, lands a need</span>
-      <span><b style="color:{YELLOW}">WORTH A SHOT</b> &mdash; good deal, aggressive ask</span>
+      <span><b style="color:{YELLOW}">WORTH A SHOT</b> &mdash; realistic price, but they gain little</span>
       <span><b style="color:{MUTED}">SLIM / ONE-WAY / NO DEAL</b> &mdash; why not</span>
     </div>
     <div id="megawrap" style="display:none;">
