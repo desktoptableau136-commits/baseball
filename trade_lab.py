@@ -309,6 +309,20 @@ _FIT_TIER_ORDER = {"BEST": 0, "REACH": 1, "SLIM": 2, "ONEWAY": 3, "NOFIT": 4}
 _FIT_SCARCE_POS = {"C", "SS"}
 
 
+def _fit_stuck_reason(ins, outs, net_val, net_them):
+    """Plain-English reason a NEAR-MISS deal (ACCEPT for me, but not `_trade_tilt`-realistic
+    for the rival) stalls — mirrors the two branches `_trade_tilt`/`_deal_star_reach` can fail
+    on, so the SLIM card's explanation can't drift from the actual gate that dropped it."""
+    if sd._deal_star_reach(ins, outs, net_val):
+        star = max(ins, key=lambda p: _n(p.get("_tval_star", p.get("_tval")))) if ins else None
+        name = star.get("PlayerName", "") if star else ""
+        return f"{name} is a bona fide star — they'd likely hold at this price." if name \
+            else "it prices out a bona fide star without a real overpay."
+    if net_them is not None and net_them < -sd._TRADE_REALISTIC_MAX:
+        return "it leaves them clearly behind on their own needs."
+    return "it's still a stretch for them to say yes."
+
+
 def _fit_deal_words(value_phrase, rival_gains):
     """Plain-English one-liner for a LANDABLE deal -> (sentence, tier_key). The candidate pool
     reaching this fn is already filtered to ACCEPT-for-me AND realistic-for-them (not a star
@@ -357,7 +371,10 @@ def build_partner_fit(pitchers, hitters, roto, team_keys, ranks, n,
 
     Each record is either ACTIONABLE ({team, tier BEST|REACH, get:[{name,tags}], give:[name],
     verdict, whyOffer:[cat lbls], whyGet:[tags]}) or a DIAGNOSIS ({team, tier SLIM|ONEWAY|NOFIT,
-    why}). Sorted by tier then team name."""
+    why}). A SLIM diagnosis MAY also carry a near-miss deal (get/give, same shape as ACTIONABLE
+    minus `verdict`/`whyOffer`/`whyGet`) — the best ACCEPT-for-me candidate that stalled only on
+    the rival-realism check (star reach / their net loss), so a real but not-landable-as-is ask
+    is still visible instead of a dead-end message. Sorted by tier then team name."""
     third = max(1, round(n / 3.0)) if n else 1
     needs_of   = lambda t: {c for c, rk in ranks.get(t, {}).items() if rk >= n - third + 1}
     surplus_of = lambda t: {c for c, rk in ranks.get(t, {}).items() if rk <= third}
@@ -442,9 +459,30 @@ def build_partner_fit(pitchers, hitters, roto, team_keys, ranks, n,
                         "why": "They have pieces you'd want, but they're strong everywhere you are — "
                                "you can't fill a need of theirs, so you'd overpay."})
                 else:
-                    records.append({"team": rival, "tier": "SLIM",
-                        "why": "Some overlap on paper, but no clean, near-even deal came together. "
-                               "Worth a manual look."})
+                    # No candidate cleared the ACCEPT-for-me + realistic-for-them bar, but there's
+                    # categorical overlap (i_offer). Before falling back to the generic "worth a
+                    # manual look" text, surface the single best NEAR-MISS deal (ACCEPT for me,
+                    # regardless of the rival-side realism check) if one exists, so a real,
+                    # positive-value ask that only stalls on a star-reach/rival-loss read is
+                    # visible instead of hidden behind a dead-end diagnosis.
+                    near_pool = [d for d in by_team.get(rival, []) if d.get("my_verdict") == "ACCEPT"]
+                    near = max(near_pool, key=_score) if near_pool else None
+                    if near is not None:
+                        nvp, _nac, _ = _tilt(near)
+                        stuck = _fit_stuck_reason(near.get("ins"), near.get("outs"),
+                                                   near.get("net_val", 0), near.get("net_them"))
+                        records.append({
+                            "team": rival, "tier": "SLIM",
+                            "get": [{"name": p.get("PlayerName", ""), "pos": _fit_pos_disp(p)}
+                                    for p in near["ins"]],
+                            "give": [{"name": p.get("PlayerName", ""), "pos": _fit_pos_disp(p)}
+                                     for p in near["outs"]],
+                            "why": f"Closest look: real value edge for you ({nvp}), but {stuck}",
+                        })
+                    else:
+                        records.append({"team": rival, "tier": "SLIM",
+                            "why": "Some overlap on paper, but no clean, near-even deal came together. "
+                                   "Worth a manual look."})
 
             records.sort(key=lambda r: (_FIT_TIER_ORDER[r["tier"]], r["team"]))
             out[pov] = records
@@ -1866,6 +1904,21 @@ function fitCard(r, needSet) {{
               ? '<div class="fbspark">&#128171; ' + r.spark + '</div>' : '';
     return '<div class="fbcard' + (r.tier === 'MEGA' ? ' fbmega' : '') + '">'
          + head + deal + verdict + spark + why + '</div>';
+  }}
+  // SLIM near-miss: a real ACCEPT-for-me deal exists but stalled on the rival-realism check
+  // (star reach / their net loss) -- still show it (muted, no green verdict) so it's a lead to
+  // build and inspect manually rather than a dead end, per `_fit_stuck_reason` on the server.
+  if (r.tier === 'SLIM' && r.get && r.get.length) {{
+    var giveNames = (r.give || []).map(function(g) {{ return g.name; }}).join(',');
+    var getNames  = (r.get || []).map(function(g) {{ return g.name; }}).join(',');
+    head += '<span class="fbbuild" data-partner="' + escAttr(r.team) + '" data-give="' + escAttr(giveNames)
+          + '" data-get="' + escAttr(getNames) + '" onclick="loadDeal(this)">Build this &#9654;</span></div>';
+    var getParts = (r.get || []).map(function(g) {{ return g.name + posChip(g.pos, needSet); }}).join(' + ');
+    var giveParts = (r.give || []).map(function(g) {{ return g.name + posChip(g.pos, null); }}).join(' + ');
+    var deal = '<div class="fbdeal"><span class="fbget">Get</span> ' + getParts
+             + '<div class="fbgive"><span class="fbgv">for</span> ' + giveParts + '</div></div>';
+    return '<div class="fbcard dim">' + head + deal
+         + '<div class="fbwhy" style="margin-top:0;color:{MUTED}">' + (r.why || '') + '</div></div>';
   }}
   head += '</div>';
   return '<div class="fbcard dim">' + head
