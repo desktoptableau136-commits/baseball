@@ -1027,7 +1027,8 @@ function playerRowHtml(side, p, gkey, myMeta, holderMeta, otherMeta) {{
     var m = arbMarker(p, holderMeta || {{}}, otherMeta || {{}});
     if (m) {{
       var oName = side === 'L' ? ((otherMeta||{{}}).name || 'They') : 'You';
-      arb = arbGlyph(side, m, arbReasons(p, holderMeta || {{}}, otherMeta || {{}}, oName));
+      var hName = side === 'L' ? 'you' : ((holderMeta||{{}}).name || 'they');
+      arb = arbGlyph(side, m, arbReasons(p, holderMeta || {{}}, otherMeta || {{}}, oName, hName));
       arbCls = (side === 'L' ? ' abait' : ' agrab') + (m.tier === 'strong' ? ' strong' : '');
     }} else if (side === 'R' && p.drop) {{
       arb = dropGlyph(p);
@@ -1184,12 +1185,15 @@ function arbMarker(p, holderMeta, otherMeta) {{
   return {{ tier: gap >= (DATA.tune.needCat + DATA.tune.needSurplus) ? 'strong' : 'mild' }};
 }}
 
-// Tooltip: why the other side values him more (+ a note when the holder is deep).
-function arbReasons(p, holderMeta, otherMeta, otherName) {{
+// Tooltip: why the other side values him more (+ a note when the HOLDER is deep). holderName
+// must name whoever actually holds him, not a hardcoded 'you' -- on a send (holder=my team) that
+// IS you, but on a grab (holder=the partner) it's them, and saying 'you are deep here' on a grab
+// would wrongly claim the viewer is deep in a stat that's really the partner's redundancy.
+function arbReasons(p, holderMeta, otherMeta, otherName, holderName) {{
   var pos = multParts(p, otherMeta).filter(function(x){{ return x.s>0; }}).map(function(x){{ return x.t; }});
   var deep = multParts(p, holderMeta).some(function(x){{ return x.s<0; }});
   var s = (otherName||'They') + ' value him more: ' + (pos.join(' &#183; ') || 'fits their build');
-  if (deep) s += ' &#183; you are deep here';
+  if (deep) s += ' &#183; ' + (holderName||'they') + ' are deep here';
   return s;
 }}
 
@@ -1236,8 +1240,9 @@ function ledgerItem(side, p) {{
   var holderMeta = side==='L' ? myMeta : partnerMeta;
   var otherMeta  = side==='L' ? partnerMeta : myMeta;
   var otherName  = side==='L' ? (partnerMeta.name||'They') : 'You';
+  var holderName = side==='L' ? 'you' : (partnerMeta.name||'they');
   var m = arbMarker(p, holderMeta, otherMeta);
-  var arb = arbGlyph(side, m, m ? arbReasons(p, holderMeta, otherMeta, otherName) : '');
+  var arb = arbGlyph(side, m, m ? arbReasons(p, holderMeta, otherMeta, otherName, holderName) : '');
   var vsId = 'vs-'+side+'-'+p.id;
   return '<div class="litem">' + p.logo
     + '<span class="lname" onclick="openVs(\'' + vsId + '\')">' + p.name + '</span>' + p.badges + arb
