@@ -204,6 +204,21 @@ _TRADE_RIVAL_GAIN_MIN = 0.05  # prescriptive surfaces: min demand-side gain the 
                               #   (the _trade_tilt display read is untouched). Tunable.
 
 
+_TARGET_POS_REACH_RELIEF = 0.35  # star-reach discount when the incoming piece fills one of MY
+    # _TEAM_TARGET_POS spots. _deal_star_reach's summed premium check treats every scarce-position
+    # pickup (a real SS/C) as a "star reach" almost by construction -- but _TEAM_TARGET_POS already
+    # says I'll knowingly pay a premium there, so the generic "rival would balk" heuristic
+    # shouldn't auto-kill it. Threaded through find_trades' generation gates, the digest Trade
+    # Radar's `_trade_tilt` call, and Trade Lab's Partner Fit board (`_tilt`/`_fit_stuck_reason`
+    # in trade_lab.py) so a surfaced card can't contradict its own tag; every other caller keeps
+    # the default 0.0 (no behavior change).
+
+
+_ACCEPT_PCT_K     = 5.0   # logistic steepness for _accept_pct's demand-side -> % squash
+_ACCEPT_PCT_FLOOR = 3.0   # never claim a deal is truly impossible...
+_ACCEPT_PCT_CEIL  = 97.0  # ...or a lock -- this is a heuristic read, not a calibrated model
+
+
 _NEED_MULT_CAT      = 0.14  # per need-cat boost to a player's value for a team short there
 
 
@@ -667,14 +682,19 @@ def _grade_package(outs, ins, ctx):
     need_pos = ctx["need_pos"]; surplus_pos = ctx["surplus_pos"]
     t_needs = ctx["t_needs"]; t_surplus = ctx["t_surplus"]
     t_need_pos = ctx["t_need_pos"]; t_surplus_pos = ctx["t_surplus_pos"]
-    get_cats = ctx["get_cats"]; send_cats = ctx["send_cats"]
+    get_cats = ctx["get_cats"]; send_cats = ctx["send_cats"]; send_pos = ctx["send_pos"]
     my_pos_count = ctx["my_pos_count"]; t_pos_count = ctx["t_pos_count"]
 
     gcov = set().union(*[i["_tcats"] for i in ins]) & get_cats   # category needs met
     gpos = _non_redundant_get_pos(set().union(*[set(i["_tfillpos"]) for i in ins]),
                                   outs, ins, my_pos_count)         # positional holes filled (redundancy-guarded)
     scov = set().union(*[o["_tcats"] for o in outs]) & send_cats
-    if (not gcov and not gpos) or not scov:
+    # THEIR positional holes we fill -- the give-side mirror of gpos, computed fresh from ctx
+    # (never stamped onto shared player dicts, which persist across rivals in find_trades' loop
+    # and would otherwise leak one team's need_pos onto another's grading pass).
+    spos = {pos for o in outs for pos in (o.get("_tgroups", set()) & send_pos)
+            if o.get("_tptype") == "hit" and o.get("_tscore", 0) > t_need_pos[pos][1]}
+    if (not gcov and not gpos) or (not scov and not spos):
         return None
     # DEPTH FLOOR (both parties, hard veto): a deal may not drop either team below
     # startable bodies at a hitter position without a same-position body coming back.
@@ -742,7 +762,7 @@ def _grade_package(outs, ins, ctx):
     # benefit higher (0.5, acceptance likelihood) and, instead of rewarding an edge,
     # PENALIZE paying up (−4·overpay) so the closest-to-even need-fills rank first.
     my_gain    = sum(ranks[my_key][c] for c in gcov) + sum(need_pos[p][0] for p in gpos)
-    their_gain = sum(ranks[team][c]   for c in scov)
+    their_gain = sum(ranks[team][c] for c in scov) + sum(t_need_pos[p][0] for p in spos)
     if mode == "fair":
         score = (my_gain + 0.5 * their_gain + 4.0 * timing
                  - 4.0 * max(0.0, -net_val) - 0.5 * (len(ins) - 1))
@@ -760,6 +780,7 @@ def _grade_package(outs, ins, ctx):
         "get_cats":  sorted(gcov, key=lambda c: (-ranks[my_key][c], c)),
         "get_pos":   sorted(gpos, key=lambda p: (-need_pos[p][0], p)),
         "send_cats": sorted(scov, key=lambda c: (-ranks[team][c], c)),
+        "send_pos":  sorted(spos, key=lambda p: (-t_need_pos[p][0], p)),
     }
 
 
@@ -835,6 +856,16 @@ def find_trades(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
                     if r["_tscore"] > need_pos[pos][1]}
         return set()
 
+    _my_target_pos = _TEAM_TARGET_POS.get(my_key, set())
+
+    def _target_relief(ins):
+        """_TARGET_POS_REACH_RELIEF when any incoming piece fills a personally-declared target
+        position (C/SS) -- see the constant's docstring. 0.0 (no relief) otherwise."""
+        if not _my_target_pos:
+            return 0.0
+        return _TARGET_POS_REACH_RELIEF if any(
+            set(i.get("_tfillpos", [])) & _my_target_pos for i in ins) else 0.0
+
     trades = []
     for team in all_teams:
         if team == my_key or team not in ranks:
@@ -842,23 +873,41 @@ def find_trades(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
         t_needs, t_surplus = needs_of(team), surplus_of(team)   # rival's demand-side context
         send_cats = my_surplus & t_needs           # cats I can help THEM in (they must benefit)
         get_cats  = t_surplus & my_needs           # cats they can help ME in
-        if not send_cats:                          # no mutual benefit possible → skip
-            continue
         t_players = ([enrich(r, "hit") for r in roster(hitters, team)] +
                      [enrich(r, "pit") for r in roster(pitchers, team)])
         t_pos_count = _team_position_counts(hitters, team)   # depth guard: rival bodies per position
         t_pos_data = (pos_data_by_team.get(team) if pos_data_by_team else None) \
             or positional_breakdown(pitchers, hitters, team, best_recent_p, best_recent_h)
         t_need_pos, t_surplus_pos = _pos_need_surplus(t_pos_data, n)   # rival's positional need/surplus
+        # POSITION-ONLY mutual benefit: mine surplus-position bodies that are also a thin/target
+        # spot for THEM (the give-side mirror of _fills_need_pos below) -- a rival with a spare
+        # SS/C I want is a valid partner even when we share no category need at all (a stacked
+        # team's only real needs can be pure position scarcity -- category overlap alone starved
+        # the pool entirely for those spots; see CLAUDE.md _TEAM_TARGET_POS).
+        send_pos = surplus_pos & set(t_need_pos)
+        if not send_cats and not send_pos:          # no mutual benefit (cat OR position) → skip
+            continue
 
-        # Give side: strong in a send cat, at a surplus position, and NOT above the value
-        # ceiling (unless a sell-high regression candidate I want to move anyway). FAIR mode
-        # raises the ceiling (_TRADE_FAIR_MAX_VAL > favor's _TRADE_MAX_VAL) so I'll deal a
-        # genuinely good chip for fair return — but still protects a franchise anchor from
-        # being auto-offered (the value gate keeps the return fair either way).
+        def _fills_their_need_pos(r):
+            """Positions this GIVE piece would genuinely upgrade for the RIVAL -- the mirror of
+            _fills_need_pos below, from their side. Restricted to send_pos (already my-surplus AND
+            their-need) so it can't credit a position neither team actually cares about; the score
+            check keeps it a real upgrade, not just a warm body at a thin spot."""
+            if r["_tptype"] != "hit":
+                return set()
+            return {pos for pos in (r["_tgroups"] & send_pos)
+                    if r["_tscore"] > t_need_pos[pos][1]}
+
+        # Give side: strong in a send cat OR a genuine upgrade at one of their need positions, at
+        # a surplus position of mine, and NOT above the value ceiling (unless a sell-high
+        # regression candidate I want to move anyway). FAIR mode raises the ceiling
+        # (_TRADE_FAIR_MAX_VAL > favor's _TRADE_MAX_VAL) so I'll deal a genuinely good chip for
+        # fair return — but still protects a franchise anchor from being auto-offered (the value
+        # gate keeps the return fair either way).
         _give_ceil = _TRADE_FAIR_MAX_VAL if mode == "fair" else _TRADE_MAX_VAL
         out_pool = sorted([r for r in my_players
-                           if (r["_tcats"] & send_cats) and (r["_tgroups"] & surplus_pos)
+                           if ((r["_tcats"] & send_cats) or _fills_their_need_pos(r))
+                           and (r["_tgroups"] & surplus_pos)
                            and (r["_tval"] <= _give_ceil or r["_tsell"])
                            and not _is_protected(r, my_key)],
                           key=lambda r: -r["_tscore"])[:_TRADE_POOL_WIDTH]
@@ -960,9 +1009,10 @@ def find_trades(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
             # Guaranteeing helpers are present is what a plain top-N-by-score pool missed: for a rival who
             # needs PITCHING, my best-scored disposable bats never help them, so every package failed scov.
             _disp = [r for r in my_players if _mega_disposable(r)]
-            mega_help  = sorted([r for r in _disp if r["_tcats"] & send_cats],
+            mega_help  = sorted([r for r in _disp if (r["_tcats"] & send_cats) or _fills_their_need_pos(r)],
                                 key=lambda r: -r["_tscore"])[:_MEGA_GIVE_WIDTH]
-            mega_depth = sorted([r for r in _disp if not (r["_tcats"] & send_cats)],
+            mega_depth = sorted([r for r in _disp
+                                 if not ((r["_tcats"] & send_cats) or _fills_their_need_pos(r))],
                                 key=lambda r: -r["_tscore"])[:_MEGA_DEPTH_WIDTH]
             _seen_out = {id(r) for r in mega_help}
             mega_out = mega_help + [r for r in mega_depth if id(r) not in _seen_out]
@@ -1019,7 +1069,7 @@ def find_trades(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
             "need_pos": need_pos, "surplus_pos": surplus_pos,
             "t_needs": t_needs, "t_surplus": t_surplus,
             "t_need_pos": t_need_pos, "t_surplus_pos": t_surplus_pos,
-            "get_cats": get_cats, "send_cats": send_cats,
+            "get_cats": get_cats, "send_cats": send_cats, "send_pos": send_pos,
             "my_pos_count": my_pos_count, "t_pos_count": t_pos_count,
         }
         for outs, ins in packages:
@@ -1032,7 +1082,8 @@ def find_trades(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
             # off for the Partner-Fit board (realistic_only=False), which tiers reach deals too.
             if realistic_only and (t["my_verdict"] != "ACCEPT"
                                    or t["net_them"] < _TRADE_RIVAL_GAIN_MIN
-                                   or _deal_star_reach(ins, outs, t["net_val"])):
+                                   or _deal_star_reach(ins, outs, t["net_val"],
+                                                        target_relief=_target_relief(ins))):
                 continue
             trades.append(t)
         # Megadeals are WIN-WIN-ONLY regardless of realistic_only (a big multi-player ask is only
@@ -1043,7 +1094,7 @@ def find_trades(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
             if t is None:
                 continue
             if (t["my_verdict"] != "ACCEPT" or t["net_them"] < _TRADE_RIVAL_GAIN_MIN
-                    or _deal_star_reach(ins, outs, t["net_val"])):
+                    or _deal_star_reach(ins, outs, t["net_val"], target_relief=_target_relief(ins))):
                 continue
             timing = (sum(1 for o in outs if o.get("_tsell")) + sum(1 for i in ins if i.get("_tbuy"))
                       - sum(1 for o in outs if o.get("_tbuy")) - sum(1 for i in ins if i.get("_tsell")))
@@ -1188,7 +1239,7 @@ def _need_mult(row, need_cats, surplus_cats, need_pos=None, surplus_pos=None):
     return max(lo, min(hi, m))
 
 
-def _deal_star_reach(ins, outs, net_val):
+def _deal_star_reach(ins, outs, net_val, target_relief=0.0):
     """Market-perception (NOT value) check: would a rival balk because the deal asks them to
     part with prized players without a real overpay? The premium the rival must be paid to
     SURRENDER their side (`ins` = what I acquire) is the SUM of `_star_premium(_tval_star)` across
@@ -1199,13 +1250,47 @@ def _deal_star_reach(ins, outs, net_val):
     mask that the rival is shipping two premium assets. Value-keyed via `_star_premium`, so a
     role-player's inflated role score no longer counts as a star and a mid reliever contributes
     ~0. Keeps `_tval` a pure value currency; the premium lives in the acceptance layer only.
-    Called by `_trade_tilt`."""
+    `target_relief` (default 0, see `_TARGET_POS_REACH_RELIEF`) shaves the required overpay when
+    the caller knows the deal fills a personally-declared target position -- I've already signaled
+    I'll pay a premium there, so the generic reach guard shouldn't fully apply. Called by
+    `_trade_tilt`."""
     if not ins:
         return False
     surrender = sum(_star_premium(p.get("_tval_star", p.get("_tval"))) for p in ins)
     receive   = sum(_star_premium(o.get("_tval_star", o.get("_tval"))) for o in (outs or []))
-    req = max(0.0, surrender - receive)
+    req = max(0.0, surrender - receive - target_relief)
     return req > 0.0 and net_val > -req
+
+
+def _accept_pct(net_val, net_them, ins, outs, target_relief=0.0):
+    """Continuous 0-100 read of how likely the RIVAL is to accept -- the same signals
+    `_deal_star_reach` gates on (demand-side net + any unmet star-reach premium), squashed
+    through a logistic centered on 0 so a dead-even demand-side read lands at 50%. NOT a
+    calibrated probability (there's no real acceptance-rate data to fit against) -- a continuous
+    view of the same ACCEPT/COUNTER + realistic/aggressive-ask boundary the tiers already draw,
+    so two BEST-tier cards (or two SLIM near-misses) can be told apart instead of only a coarse
+    label. Clipped to [_ACCEPT_PCT_FLOOR, _ACCEPT_PCT_CEIL] so it never claims a lock or a dead
+    end -- this is a heuristic nudge, not a promise. `net_them` should already carry the
+    thin-position penalty (see `_grade_package`); `target_relief` mirrors whatever was passed to
+    `_deal_star_reach` for the same package, so the two reads can't contradict each other.
+    `net_val` (my raw value edge, + = I win) matters here too: `_deal_star_reach` calls a package
+    clear of any reach once my overpay (-net_val) covers the required premium, so an unmet star
+    gap is credited for whatever overpay already offsets it (`max(0, req - max(0, -net_val))`) --
+    without this, a package that already cleared the boolean reach gate via a real overpay would
+    still show a misleadingly low % from the raw premium alone."""
+    # NOTE: deliberately NOT `_n()` here -- `_n` clamps ANY negative to 0 (it's built for raw
+    # stat sentinels, where negative means missing), which would silently zero out a real
+    # negative net_val/net_them (an overpay or a rival net loss) and break this math. `or 0`
+    # only substitutes for None/falsy, never for a legitimate negative float.
+    net_val = float(net_val or 0.0)
+    net_them = float(net_them or 0.0)
+    surrender = sum(_star_premium(p.get("_tval_star", p.get("_tval"))) for p in (ins or []))
+    receive   = sum(_star_premium(o.get("_tval_star", o.get("_tval"))) for o in (outs or []))
+    req = max(0.0, surrender - receive - target_relief)
+    star_gap = max(0.0, req - max(0.0, -net_val))
+    drive = net_them - star_gap
+    pct = 100.0 / (1.0 + math.exp(-_ACCEPT_PCT_K * drive))
+    return max(_ACCEPT_PCT_FLOOR, min(_ACCEPT_PCT_CEIL, pct))
 
 
 def _deal_star_surrender(ins, outs, net_val):
@@ -1222,7 +1307,7 @@ def _deal_star_surrender(ins, outs, net_val):
     return req > 0.0 and net_val < req
 
 
-def _trade_tilt(net_val, ins=None, outs=None, net_them=None):
+def _trade_tilt(net_val, ins=None, outs=None, net_them=None, target_relief=0.0):
     """(value_phrase, accept_phrase, accept_color) for a trade. `net_val` is MY base value edge
     (+ = I win) and sets the my-POV value phrase. The accept phrase is the RIVAL's-POV read on
     whether they'd say yes. It's now AGGRESSIVE: the rival must not clearly lose. When
@@ -1230,12 +1315,15 @@ def _trade_tilt(net_val, ins=None, outs=None, net_them=None):
     read (`net_them >= -_TRADE_REALISTIC_MAX`); otherwise it falls back to the base symmetric
     proxy (`net_val <= _TRADE_REALISTIC_MAX`, i.e. their base loss is small). A STAR REACH
     (prying their best player without an overpay) also forces "aggressive ask". Pass `ins`/`outs`
-    so the graduated star check runs. Shared by the digest Trade Radar + the dashboard tile."""
+    so the graduated star check runs. `target_relief` (default 0) forwards to `_deal_star_reach`
+    so a card can't clear the (relieved) generation gate and then contradict itself with an
+    un-relieved "aggressive ask" tag -- see `_TARGET_POS_REACH_RELIEF`. Shared by the digest
+    Trade Radar + the dashboard tile."""
     value = ("you win the value" if net_val > 0.1 else
              "even value" if net_val >= -0.1 else "you pay up")
     rival_ok = (net_them >= -_TRADE_REALISTIC_MAX) if net_them is not None \
         else (net_val <= _TRADE_REALISTIC_MAX)
-    realistic = rival_ok and not _deal_star_reach(ins, outs, net_val)
+    realistic = rival_ok and not _deal_star_reach(ins, outs, net_val, target_relief=target_relief)
     if realistic:
         return value, "realistic", GREEN
     return value, "aggressive ask", YELLOW
@@ -1764,6 +1852,7 @@ def build_trade_radar(pitchers, hitters, roto, my_team, best_recent_p, best_rece
     if not all_deals:
         return ""
     team_logos = team_logos or {}
+    _my_target_pos = _TEAM_TARGET_POS.get(" ".join(my_team.split()), set())
     cards = []
     for t in all_deals:
         give = "".join(_trade_player_line(o, set(t["send_cats"]), MUTED, "give",
@@ -1777,7 +1866,10 @@ def build_trade_radar(pitchers, hitters, roto, my_team, best_recent_p, best_rece
         get_lbl  = ", ".join(gains) or "depth"
         send_lbl = ", ".join(_CAT_DISPLAY.get(c, c) for c in t["send_cats"])
         net = t.get("net_val", 0.0)
-        value, accept, acc_color = _trade_tilt(net, t["ins"], t["outs"], net_them=t.get("net_them"))
+        _relief = _TARGET_POS_REACH_RELIEF if (_my_target_pos and any(
+            set(i.get("_tfillpos", [])) & _my_target_pos for i in t["ins"])) else 0.0
+        value, accept, acc_color = _trade_tilt(net, t["ins"], t["outs"], net_them=t.get("net_them"),
+                                               target_relief=_relief)
         thesis = ("sell-high" if t.get("sell_out") else "") + \
                  (" · " if t.get("sell_out") and t.get("buy_in") else "") + \
                  ("buy-low" if t.get("buy_in") else "")
@@ -1786,11 +1878,14 @@ def build_trade_radar(pitchers, hitters, roto, my_team, best_recent_p, best_rece
         thin_html = (f'<span style="color:{ORANGE};"> &middot; {t["thin_note"]}</span>'
                      if t.get("thin_note") else "")
         # Realism chip in the card header — the RIVAL's-POV read on whether they'd accept
-        # (a fair/pay-up deal is realistic; a value-tilted one is a tougher sell). This is
-        # what turns "which of these would actually land?" into a glance.
+        # (a fair/pay-up deal is realistic; a value-tilted one is a tougher sell), PLUS the
+        # continuous _accept_pct read so two cards with the same chip text (e.g. two "realistic"
+        # asks) can still be told apart. This is what turns "which of these would actually
+        # land?" into a glance.
+        accept_pct = round(_accept_pct(net, t.get("net_them"), t["ins"], t["outs"], target_relief=_relief))
         acc_chip = (f'<span style="font-size:8.5px;font-weight:700;letter-spacing:.4px;'
                     f'text-transform:uppercase;color:{acc_color};border:1px solid {acc_color};'
-                    f'border-radius:3px;padding:1px 5px;margin-left:6px;">{accept}</span>')
+                    f'border-radius:3px;padding:1px 5px;margin-left:6px;">{accept} &middot; {accept_pct}%</span>')
         # BLOCKBUSTER tag on a megadeal card — the headline of the whole Radar. A SOLID-filled
         # purple->magenta chip (not an outline badge) so it reads as "this is the big one", the
         # PURPLE tying it to the Trade Lab's blockbuster strip. Purple as a card border/solid fill
