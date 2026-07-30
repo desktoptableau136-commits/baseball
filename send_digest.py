@@ -732,6 +732,17 @@ def _move_badge(name, move_registry):
     tip = "Involved in a recommended move: " + " &#8226; ".join(reasons)
     return _hit_badge("&#128203;", TAN, tip)
 
+def _move_badge_context(name, move_registry):
+    """Tap-to-expand 'why' for the 📋 clipboard chip (`_move_badge`) — SAME predicate
+    (a hit on `move_registry`) so the score panel explains the badge shown beside the
+    name, like every other badge. Appended onto each of `_move_badge`'s 7 sibling
+    score-breakdown strings."""
+    reasons = (move_registry or {}).get(name)
+    if not reasons:
+        return ""
+    lines = [f'{_hit_badge("&#128203;", TAN)} Involved in a recommended move: {r}' for r in reasons]
+    return _badge_ctx_wrap(lines)
+
 def make_sparkline(roto, my_team, current_week, n=99, weekly_results=None):
     """
     SVG line chart scaled against the league-wide 5th/95th percentile.
@@ -866,7 +877,8 @@ def build_hot_cold_section(hitters, my_team, best_recent_h=None, hit_pctile=None
     for i, r in enumerate(sorted_rows):
         bg = f"background:{SURFACE2};" if i % 2 else ""
         _cell, _bdrow = score_reveal(
-            r["score"], _hitter_score_breakdown(r["srow"], best_recent_h, hit_pctile),
+            r["score"], _hitter_score_breakdown(r["srow"], best_recent_h, hit_pctile)
+            + _move_badge_context(r["name"], move_registry),
             _bd_uid("rhc", r["name"]), 7)
         rows_html += (
             f'<tr style="{bg}">'
@@ -941,7 +953,8 @@ def build_pitcher_hot_cold_section(pitchers, my_team, best_recent_p=None, move_r
             else (f'{_whiff:.0f}%' if _whiff > 0 else f'<span style="color:{MUTED};">—</span>')
         )
         _cell, _bdrow = score_reveal(
-            r["score"], _pitcher_score_breakdown(r["srow"], best_recent_p),
+            r["score"], _pitcher_score_breakdown(r["srow"], best_recent_p)
+            + _move_badge_context(r["name"], move_registry),
             _bd_uid("phc", r["name"]), 7)
         rows_html += (
             f'<tr style="{bg}">'
@@ -4632,7 +4645,8 @@ def build_email(snap, override_team=None):
                 start_badge = "".join(start_badges)
                 proj_line_s = _proj_line_html(r)
                 _mus_bd = (_pitcher_score_breakdown(r, best_recent_p)
-                           + _sp_badge_context(r, qs_fires_s, k_fires_s, _n_starts_s, p15r.get("ERA")))
+                           + _sp_badge_context(r, qs_fires_s, k_fires_s, _n_starts_s, p15r.get("ERA"))
+                           + _move_badge_context(name, move_registry))
                 _cell, _bdrow = score_reveal(
                     _score_p(r, best_recent_p), _mus_bd,
                     _bd_uid("mus", name), 9)
@@ -4714,7 +4728,8 @@ def build_email(snap, override_team=None):
             no_espn = _n(r.get("ESPN_GP")) <= 0
             ds_badge = _window_badge(ds_label) if ds_label and no_espn else ""
             _cell, _bdrow = score_reveal(
-                r[score_key], _pitcher_score_breakdown(r, best_recent_p),
+                r[score_key], _pitcher_score_breakdown(r, best_recent_p)
+                + _move_badge_context(r.get("PlayerName", ""), move_registry),
                 _bd_uid("myrp", r.get("PlayerName", "")), 10)
             return (
                 f'<tr style="{bg}">'
@@ -4877,7 +4892,8 @@ def build_email(snap, override_team=None):
                 proj_line_str = _proj_line_html(r)
                 _fasp_bd = (_pitcher_score_breakdown(r, best_recent_p)
                             + _sp_badge_context(r, qs_fires, k_fires, _n_starts_fa, p15r.get("ERA"))
-                            + _winprob_context(_wd))
+                            + _winprob_context(_wd)
+                            + _move_badge_context(r.get("PlayerName", ""), move_registry))
                 _cell, _bdrow = score_reveal(
                     r["_score"], _fasp_bd,
                     _bd_uid("fasp", r.get("PlayerName", "")), 10)
@@ -4934,7 +4950,8 @@ def build_email(snap, override_team=None):
             ds_badge = _window_badge(ds_label) if ds_label and no_espn else ""
             _wd_rp = pickup_win_delta(r, winprob_ctx, winprob_rf, today_str, week_end_str, ptype="rp", weeks_played=winprob_weeks)
             _cell, _bdrow = score_reveal(
-                r["_rp_score"], _pitcher_score_breakdown(r, best_recent_p) + _winprob_context(_wd_rp),
+                r["_rp_score"], _pitcher_score_breakdown(r, best_recent_p) + _winprob_context(_wd_rp)
+                + _move_badge_context(r.get("PlayerName", ""), move_registry),
                 _bd_uid("farp", r.get("PlayerName", "")), 11)
             return (
                 f'<tr style="{bg}">'
@@ -5051,7 +5068,8 @@ def build_email(snap, override_team=None):
             row_idx += 1
             _wd_hit = pickup_win_delta(r, winprob_ctx, winprob_rf, today_str, week_end_str, ptype="hit", weeks_played=winprob_weeks)
             _cell, _bdrow = score_reveal(
-                r["_score"], _hitter_score_breakdown(r, best_recent_h, hit_pctile) + _winprob_context(_wd_hit),
+                r["_score"], _hitter_score_breakdown(r, best_recent_h, hit_pctile) + _winprob_context(_wd_hit)
+                + _move_badge_context(r.get("PlayerName", ""), move_registry),
                 _bd_uid("fahit", r.get("PlayerName", "")), 12)
             rows += (
                 f'<tr style="{bg}">'
