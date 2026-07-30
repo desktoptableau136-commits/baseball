@@ -82,9 +82,9 @@ _TEAM_TARGET_POS = {"Guerrero Warfare": {"C", "SS"}}
 #   PROTECTED: named players who are never offered on the give side of a Trade Radar/
 #         megadeal package, and never picked as a suggested drop in the Weekly Game Plan or
 #         Week-at-a-Glance bullets. The existing value-based guards (_TRADE_MAX_VAL give
-#         ceiling, _GAMEPLAN_DROP_SEASON_FLOOR) already protect a true star MOST of the time,
-#         but aren't a hard guarantee -- a slump/injury value dip or a _tsell sell-high flag
-#         could in theory still surface one of these names. This is a belt-and-suspenders,
+#         ceiling, _DROP_SEASON_FLOOR + _outclasses in send_digest.py) already protect a true star
+#         MOST of the time, but aren't a hard guarantee -- a slump/injury value dip or a _tsell
+#         sell-high flag could in theory still surface one of these names. This is a belt-and-suspenders,
 #         name-based backstop for players the manager will just never actually move,
 #         regardless of what the value math says. Deliberately does NOT apply to
 #         _grade_pending_trades -- a REAL incoming trade offer touching one of these players

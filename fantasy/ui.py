@@ -35,6 +35,7 @@ CYAN     = "#22d3ee"   # pitcher QS badge (translucent) — QS + two-start can c
 SILVER   = "#c8d0da"   # hitter SB "Quicksilver" speed badge (metallic, distinct from TEXT/MUTED)
 MAGENTA  = "#e935c1"   # Blockbuster megadeal chip gradient end (PURPLE->MAGENTA) on the digest Trade Radar card
 LIME     = "#D0DE85"   # Trade Radar/Pending/dashboard "upgrades your thin {pos}" chip — its own hue, far from PWR purple + QS cyan on a trade card (was MAGENTA, which now only tints the blockbuster gradient)
+TAN      = "#c19a6b"   # the 📋 "involved in a recommended move" clipboard badge (send_digest._move_badge) — a warm, low-key hue distinct from every other reserved color so the clipboard can't be mistaken for a QS/PWR/injury/regression signal; it's purely informational (points back to another section), so it deliberately doesn't compete with any of those
 
 TH_S = f"padding:8px 10px;background:{SURFACE};color:{MUTED};font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.7px;border-bottom:2px solid {BORDER};white-space:nowrap;"
 TD_S = f"padding:7px 10px;border-bottom:1px solid {BORDER};color:{TEXT};font-size:13px;vertical-align:middle;"

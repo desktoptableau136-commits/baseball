@@ -98,7 +98,7 @@ def build_context(snap, my_team):
     starts   = sd.my_upcoming_starts(pitchers, my_team)
     alerts   = sd.roster_alerts(pitchers, hitters, my_team)
     lineup_eff_current = snap.get("lineup_efficiency_current", {}) if not override else {}
-    roster_sugg = sd._roster_suggestion(
+    roster_sugg, _ = sd._roster_suggestion(
         matchup, pitchers, hitters, fa_sp, fa_rp, fa_hit, my_team, best_recent_p, best_recent_h,
         all_matchups, week_end_str, classification=classification,
         league_active_roster_max=snap.get("league_active_roster_max", 26),

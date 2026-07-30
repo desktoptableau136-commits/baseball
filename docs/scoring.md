@@ -117,30 +117,57 @@ every other matchup-dependent section's empty-state guard).
     contains the `float:right` tag so it can't leak into the row below) — moved off the drop line
     (where it used to sit floated beside "Drop {player}") so the hold/streamer read is the first
     thing seen, before the drop cost.
-  - **Drop selection** mirrors `_roster_suggestion`'s `_take_drop`/`_used_drops` PATTERN (surplus
-    positions preferred, transaction-aware via a `pending_add` coverage check, IL-slot-safe) but is
-    its OWN local instance inside `build_game_plan` — not literally shared state with
-    `_roster_suggestion` (that function's surplus definition also folds in bench-leakage
-    `lineup_eff`, which the Game Plan doesn't thread through). The dedupe guarantee ("two cards never
-    suggest dropping the same player") holds WITHIN the Game Plan's own cards via its own
-    `_used_drops`; it does not cross-dedupe against the separate Week-at-a-Glance bullets.
-  - **Droppability floor — never surface a real rostered asset as a move's cost (session addendum,
-    caught in review).** The FIRST version picked a drop by worst BLENDED score (65% season / 35%
-    recent) across the whole roster, same as `_roster_suggestion`. That's wrong for THIS purpose: a
-    single brutal recent week (a 0-for-a-lot stretch, a couple of bad starts) can crater a real
-    starter's blended score enough that the algorithm reads him as the "worst" player on the roster
-    and offers him up as the cost of a throwaway streamer — confirmed in testing when a legitimate
-    everyday 3B (season score 66, blended down to 55 by a 0.465-OPS/7-day slump) got surfaced as the
-    drop for a middling streaming SP. Fix: `_take_drop` now draws ONLY from `_droppable`, a
-    pre-filtered pool requiring (a) SEASON score (`_season_score_of`, no recent blend) below
-    `_GAMEPLAN_DROP_SEASON_FLOOR` (40 — a touch above `_FA_SP_MIN_SCORE`'s 35 "streamer-tier"
-    cutoff, widened slightly so a few more genuinely-borderline bench bodies clear as safe
-    collateral) and (b) not `_active_role_pitcher` (any current-season SVHD > 0 — protects a
-    closer/setup arm that `rp_score`'s punt-saves weighting (~15% SVHD) can rank as "worst" despite
-    real save-role value) and (c) not on the team's `_TEAM_PROTECTED_PLAYERS` list (named
-    untouchables — see "Personal strategy overlays" in `docs/trades.md`; a belt-and-suspenders
-    backstop on top of the score floor). This applies to EVERY move, hold or streamer — a slump
-    doesn't make a real asset expendable for a durable upgrade either.
+  - **Drop selection** mirrors `_roster_suggestion`'s `_take_drop`/`_used_drops` PATTERN (transaction-
+    aware via a `pending_add` coverage check, IL-slot-safe) but is its OWN local instance inside
+    `build_game_plan` — not literally shared state with `_roster_suggestion` (that function's surplus
+    definition also folds in bench-leakage `lineup_eff`, which the Game Plan doesn't thread through).
+    The dedupe guarantee ("two cards never suggest dropping the same player") holds WITHIN the Game
+    Plan's own cards via its own `_used_drops`; it does not cross-dedupe against the separate
+    Week-at-a-Glance bullets. As of the recency/same-position revision below, **both** functions now
+    share the same eligibility model (`_drop_eligibility_score`, `_DROP_SEASON_FLOOR`, `_outclasses`),
+    defined once in `send_digest.py` near `_UPGRADE_MARGIN` — only the surrounding roster context
+    (surplus/leak groups, `pending_add` coverage) stays per-function.
+  - **Droppability — two independent eligibility paths, either qualifies a candidate (session
+    addendum, caught in review; revised again to add recency + same-position targeting).** The FIRST
+    version picked a drop by worst BLENDED score (65% season / 35% recent) across the whole roster,
+    same as `_roster_suggestion`. That's wrong: a single brutal recent week (a 0-for-a-lot stretch, a
+    couple of bad starts) can crater a real starter's blended score enough that the algorithm reads
+    him as the "worst" player on the roster and offers him up as the cost of a throwaway streamer —
+    confirmed in testing when a legitimate everyday 3B (season score 66, blended down to 55 by a
+    0.465-OPS/7-day slump) got surfaced as the drop for a middling streaming SP. The fix was an
+    absolute SEASON-only floor — safe, but blunt: on a roster where every bench body still scores
+    like a real contributor, it could leave the drop pool completely empty, and it could never single
+    out a same-position player who's merely been outclassed by a specific incoming FA (a decent player
+    isn't "fringe" in the abstract, but can still be the obviously-correct cut for a *specific* add at
+    his own position). Current model, both paths gated first on the shared hard excludes
+    (`_active_role_pitcher` — any current-season SVHD > 0, protects a closer/setup arm that
+    `rp_score`'s punt-saves weighting (~15% SVHD) can rank as "worst" despite real save-role value —
+    and `_is_protected`, the team's `_TEAM_PROTECTED_PLAYERS` list, see "Personal strategy overlays" in
+    `docs/trades.md`):
+    - **Path A (absolute / fringe).** `_drop_eligibility_score(r, kind, best_recent_h) <
+      _DROP_SEASON_FLOOR` (40 — a touch above `_FA_SP_MIN_SCORE`'s 35 "streamer-tier" cutoff).
+      `_drop_eligibility_score` is the season score for pitchers, and for hitters the season score
+      DISCOUNTED by the same continuous, confirmed-decline signal `_tval` already uses for trade
+      valuation (`_recency_value_mult`/`hitter_recency_severity`, `fantasy/trades.py`) — a slump that
+      doesn't survive AB-weighted regression toward xBA/xSLG is a no-op (`'noise'`, mult 1.0), so this
+      still can't reopen the original bug; only a REAL, magnitude-scaled decline moves a hitter's
+      eligibility score down. Pitchers stay plain season score — no continuous pitcher-side severity
+      signal exists yet (only the 3-way `pitcher_recency_flag`); a `pitcher_recency_severity` analog is
+      a tracked follow-up, not built yet.
+    - **Path B (relative / outclassed at the same spot, NEW).** `_outclasses(cand, cand_score,
+      pending_add)`: `cand` shares a `POS_GROUPS` label with the specific `pending_add` being offered
+      in THIS card/bullet, and `pending_add`'s blended score beats `cand`'s by `>= _UPGRADE_MARGIN` —
+      the same margin already used to decide a position is a real NEED. This is what lets a
+      not-globally-fringe player go when he's demonstrably the worse option at the exact position an
+      add fills (e.g. a struggling everyday SS clearly outclassed by a hot FA at the same spot), without
+      loosening anything for an unrelated pickup — Path B only ever fires against the add actually on
+      the card. Recomputed per `pending_add` (like the coverage check), since it depends on the
+      specific transaction. Ranked ahead of Path A in `_take_drop`'s sort (same-spot consolidation
+      first, then Path A surplus, then Path A other) and rendered with an `[outclassed]` tag distinct
+      from `[surplus]` so the digest names the real reason.
+    - This applies to EVERY move, hold or streamer — a slump doesn't make a real asset expendable
+      for a durable upgrade, and an outclass read is only ever scoped to the position actually being
+      upgraded.
   - **No safe drop ≠ no card (loosened from the original all-or-nothing gate).** On a well-built
     roster `_droppable` can legitimately be empty, so `_take_drop` returns `None` — but rather than
     skip the candidate outright, the card still renders (ranked purely by matchup lift) with an
@@ -283,3 +310,10 @@ The buy/sell badge above can't say whether a *recent* hot/cold stretch is backed
 - **PITCHER CONFIRMATION (`pitcher_recency_flag`, session addendum — brings pitchers to parity with the hitter confirmation arrow above):** pitchers previously had NO recency check at all, so a pitcher's sell-high badge was always a bare season-level prediction — exactly the "reads as already-declining when it's really just a forecast" problem that motivated the hollow/solid glyph split. `_effective_era_recent(season_row, recent_row)` regresses the recent-window row's ERA toward the season `xERA` anchor, IP-weighted (`_PIT_RECENCY_PRIOR_IP`=25.0 — the IP analog of `_HIT_REG_PRIOR_AB`), gated on `recent_row IP ≥ _PIT_RECENCY_MIN_IP` (8). `pitcher_recency_flag(season_row, recent_row)` compares the regressed value to `xERA`: `gap ≥ _PIT_RECENCY_GAP_ERA` (1.50, ~1.5x the season `_XREG_ERA` bar, same margin-over-season-threshold pattern as the hitter `_HIT_RECENCY_GAP_BA`/`SLG`) → `'declining'` (recent ERA already worse than expected — confirms sell-high); `gap ≤ -1.50` → `'improving'` (confirms buy-low, though buy-low doesn't change glyph); else `'noise'`; `None` below the IP floor or no `xERA`. Sign convention is flipped vs the hitter version because ERA is lower-is-better. `pitcher_regression_badge`'s `idx_recent` param (the `best_recent_p` index) feeds this check: `'declining'` → solid `▼` + `_CONFIRM_DOWN` (`&#9660;&#8600;`); anything else (contradicted, noise, no data, or `idx_recent` omitted) → hollow `▽`. **Tooltip names the recent ERA (`_rec_era_str`, pitcher analog of `_rec_avg_slg_str` above, same file):** every arrow-bearing tooltip (confirmed `▼↘`, standalone early-read arrow) appends the raw recent-window ERA (`"recent ERA 2.10"`) alongside the season xERA anchor, so the hover explains itself with a real number instead of just "already worsening."
 - **STANDALONE EARLY-READ ARROW (pitcher analog of the hitter's bare-arrow 4th case, added same session):** `pitcher_regression_badge` computes `rflag` (via `pitcher_recency_flag`) BEFORE checking whether the season flag fired at all, not just inside the sell branch. When `pitcher_regression_flag(row)` is `None` (no season-level buy/sell) but `rflag` is `'improving'`/`'declining'` on its own (and `xERA > 0`), it renders a bare `_CONFIRM_UP`/`_CONFIRM_DOWN` chip — no `$`/`▼`/`▽` — an early skill-trend signal (recent ERA already diverging from his own `xERA` anchor) ahead of the season aggregate catching up. Same mutual-exclusivity as the hitter version (only one chip family ever fires) and same zero-new-call-site wiring (every call site already threads `idx_recent`, so this activates for free). `_pitcher_badge_context` mirrors the same branch so the tap-to-expand prose matches. Unlike the hitter version, `pitcher_regression_badge`/`_pitcher_badge_context` render ONE glyph for one row (not a badge list), so the standalone case lives as an early-return branch rather than a parallel append.
 - **Digest sites (all pass `idx_recent=best_recent_p`):** Pitcher Recent Form (`r["srow"]`), Today's MLB Games (`build_todays_games_section`'s new `idx_recent_p` param), Weekly Game Plan, My Upcoming Starts + FA SP (appended to the `start_badges`/`pickup_badges` list beside QS/5K+/⚠), My Relief Pitchers + FA RP (name cell), Positional Breakdown (pitcher branch, both the starter and top-FA cells). Tap-to-expand explained in `_sp_badge_context` (SP sites) and `_pitcher_badge_context` (the shared score-breakdown panel, now also threaded `idx_recent` so its prose never disagrees with the glyph). **Dashboard sites (pass `ctx["best_recent_p"]`):** My Pitching (`_reg_chip8`, 8px, updated with its own inline hollow/solid split), FA Radar SP+RP, Weakest Spots (pitcher rows) — `build_context` calls `compute_xera_offset` so `_XERA_OFFSET` is set there too. **Feeds Trade Radar/Trade Lab/Pending Trades** (`_tsell`/`_tbuy` for pitchers AND hitters — `_trade_player_line` and dashboard's `render_trade_radar` both now check `hitter_recency_flag`/`pitcher_recency_flag` against `best_recent_h`/`best_recent_p` before choosing solid vs hollow, same rule as everywhere else). **When adding a pitcher surface**, drop `pitcher_regression_badge(row, idx_recent=best_recent_p)` after the name (best on a YEAR/season row — the flag needs season ERA vs xERA) — omitting `idx_recent` still works but always renders the hollow, unconfirmed `▽`.
+
+### Recommended-move clipboard badge (📋, `_move_badge`) — cross-references Week-at-a-Glance / Weekly Game Plan onto every other player table
+`_move_badge(name, move_registry)` (send_digest.py) → a `TAN`-colored (`#c19a6b`, its own reserved hue) clipboard chip via `_hit_badge`, or `""` when the player isn't involved in anything. Purely informational — never touches a score, ranking, or the drop/eligibility logic in the section above; it only flags that a player is ALSO named somewhere else.
+- **`move_registry` is `{PlayerName: [reason, ...]}`**, built once in `build_email` from two structured return values: `_roster_suggestion` and `build_game_plan` each now return `(html, moves)` instead of just `html` — `moves` is a list of `{"name": PlayerName, "reason": str}` records for every add AND every drop they name (populated inside `_move_tail`/`_build_cards`, right where each function already resolves its own drop — not re-parsed from the rendered HTML). `build_email` merges both `moves` lists into `move_registry` via `setdefault(...).append(...)`, so a player named by more than one suggestion (e.g. both a Week-at-a-Glance bullet AND a Game Plan card point at the same drop) gets every reason listed in one tooltip.
+- **Computed EARLY, before any player-listing table renders.** `_roster_suggestion`/`build_game_plan` are called once, immediately after `category_classification`/`need_cats` — well before My Upcoming Starts, My RP, Recent Form, or the FA tables build their rows (all of which come later in `build_email`'s code, even though some render earlier in the final HTML via the `top_sections`/`myroster_band`/`transactions_band` assembly lists further down). Their returned HTML (`roster_suggestion`, `game_plan`) is reused unchanged at its original later assembly point — **each function is called EXACTLY ONCE**, since both carry internal `_used_drops`/`slots_left` state; a second call could pick a *different* drop and desync the badge registry from what's actually rendered.
+- **Wired at 7 call sites, ALWAYS LAST** among that row's badges (after `inj_tag`, QS/5K+/⚠, regression, hitter tactical, two-start — whatever else fires on that row) so it never competes with a higher-priority signal: My Upcoming Starts, My Relief Pitchers, Pitcher Recent Form, Hitter Recent Form, FA SP, FA RP, FA Hitters. `build_hot_cold_section`/`build_pitcher_hot_cold_section` (separate top-level functions, unlike the inline FA/My-roster tables) take an added `move_registry=None` param threaded from their `build_email` call sites.
+- **`dashboard.py`'s `_roster_suggestion` call was updated to unpack the new tuple** (`roster_sugg, _ = sd._roster_suggestion(...)`) — the dashboard's compact Recommended Moves tile doesn't build its own `move_registry` (no FA/roster tables there to badge).

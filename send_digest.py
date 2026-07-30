@@ -711,6 +711,27 @@ def inj_tag(r):
     color = RED if (inj in _DL_STATUSES or inj.startswith("IL")) else YELLOW
     return f' <span style="color:{color};font-size:10px;font-weight:600;">{_fmt_status(inj)}</span>'
 
+def _move_badge(name, move_registry):
+    """Clipboard chip marking a player as involved in a system-generated recommended move
+    (an ADD suggested in the Week-at-a-Glance bullets / Weekly Game Plan cards, or the
+    ROSTERED player named as that move's suggested drop) -- so spotting him later in an FA
+    table or a My-roster table (Upcoming Starts / My RP / Recent Form) reminds the reader
+    he's already part of a suggestion, without re-reading those sections. `move_registry`
+    is `{PlayerName: [reason, ...]}`, built once in build_email from `_roster_suggestion`'s
+    and `build_game_plan`'s own move records (not re-parsed from their rendered HTML) --
+    see the "moves" return value on both. A player can be named by more than one
+    suggestion (e.g. both the Week-at-a-Glance bullet AND a Game Plan card point at the
+    same drop); the tooltip lists every reason. '' when the player isn't involved in
+    anything, or `move_registry` is falsy (older callers that don't build one). Colored
+    TAN (its own hue, reserved solely for this badge) and appended LAST after every other
+    badge at each of its 7 call sites -- purely informational, so it never outranks or
+    gets confused with a higher-priority signal (injury, QS/5K+, regression, etc.)."""
+    reasons = (move_registry or {}).get(name)
+    if not reasons:
+        return ""
+    tip = "Involved in a recommended move: " + " &#8226; ".join(reasons)
+    return _hit_badge("&#128203;", TAN, tip)
+
 def make_sparkline(roto, my_team, current_week, n=99, weekly_results=None):
     """
     SVG line chart scaled against the league-wide 5th/95th percentile.
@@ -808,7 +829,7 @@ _CAT_DEC = {
 
 # ── HITTER / PITCHER RECENT FORM ─────────────────────────────────────────────
 
-def build_hot_cold_section(hitters, my_team, best_recent_h=None, hit_pctile=None):
+def build_hot_cold_section(hitters, my_team, best_recent_h=None, hit_pctile=None, move_registry=None):
     if not best_recent_h:
         return ""
 
@@ -849,7 +870,7 @@ def build_hot_cold_section(hitters, my_team, best_recent_h=None, hit_pctile=None
             _bd_uid("rhc", r["name"]), 7)
         rows_html += (
             f'<tr style="{bg}">'
-            f'<td style="{TD_S}font-weight:600;">{team_logo(r["team"])}{r["name"]}{r["inj"]}{hitter_badges(r["srow"], hit_pctile, idx_recent=best_recent_h)}</td>'
+            f'<td style="{TD_S}font-weight:600;">{team_logo(r["team"])}{r["name"]}{r["inj"]}{hitter_badges(r["srow"], hit_pctile, idx_recent=best_recent_h)}{_move_badge(r["name"], move_registry)}</td>'
             f'<td style="{TDC}color:{MUTED};">{r["pos"]}</td>'
             f'<td style="{TDC}">{r["season_ops"]:.3f}</td>'
             f'<td style="{TDC}">{_hrp_cell(r["srow"])}</td>'
@@ -877,7 +898,7 @@ def build_hot_cold_section(hitters, my_team, best_recent_h=None, hit_pctile=None
         f'</tr></thead><tbody>{rows_html}</tbody></table>'
     )
 
-def build_pitcher_hot_cold_section(pitchers, my_team, best_recent_p=None):
+def build_pitcher_hot_cold_section(pitchers, my_team, best_recent_p=None, move_registry=None):
     if not best_recent_p:
         return ""
     my_key = " ".join(my_team.split())
@@ -924,7 +945,7 @@ def build_pitcher_hot_cold_section(pitchers, my_team, best_recent_p=None):
             _bd_uid("phc", r["name"]), 7)
         rows_html += (
             f'<tr style="{bg}">'
-            f'<td style="{TD_S}font-weight:600;">{team_logo(r["team"])}{r["name"]}{r["inj"]}{pitcher_regression_badge(r["srow"], idx_recent=best_recent_p)}</td>'
+            f'<td style="{TD_S}font-weight:600;">{team_logo(r["team"])}{r["name"]}{r["inj"]}{pitcher_regression_badge(r["srow"], idx_recent=best_recent_p)}{_move_badge(r["name"], move_registry)}</td>'
             f'<td style="{TDC}color:{MUTED};">{r["pos"]}</td>'
             f'<td style="{TDC}">{r["season_era"]:.2f}</td>'
             f'<td style="{TDC}">{whiff_cell}</td>'
@@ -1765,15 +1786,43 @@ _UPGRADE_MARGIN = 3.0   # min score-pt upgrade over my worst starter to bother f
                         # (deliberately modest: at my WEAKEST position even a small bump is worth it —
                         #  the point is to fill the hole, not chase the single biggest raw gap)
 
+_DROP_SEASON_FLOOR = 40   # (was _GAMEPLAN_DROP_SEASON_FLOOR, Game-Plan-only) a drop candidate's
+                          # SEASON score (not the recent-blended one, which a single bad week can
+                          # crater) must clear below this to be ABSOLUTE-fringe droppable — a bit
+                          # above _FA_SP_MIN_SCORE's 35 "streamer-tier" cutoff. A rostered player
+                          # scoring like a real contributor, even mid-slump, is never fair collateral
+                          # for an UNRELATED add under this test alone. Now shared by both
+                          # _roster_suggestion and build_game_plan (see _drop_eligibility_score /
+                          # _outclasses below — the RELATIVE same-position test that pairs with it).
+
+def _drop_eligibility_score(r, kind, best_recent_h):
+    """Season score, discounted by the SAME confirmed-decline signal already used to discount
+    trade value (_recency_value_mult / hitter_recency_severity, fantasy/trades.py) -- a hitter
+    reads as MORE droppable than his season number only when a real, regression-tested slump
+    says so, never from a raw blended-score noise dip (the exact bug the old season-only floor
+    was built to stop — see docs/scoring.md). 'noise' (a bad week that doesn't survive
+    regression) is a no-op, so this can't reopen that bug. PITCHERS stay season-only: no
+    continuous pitcher-side severity signal exists yet (only the 3-way pitcher_recency_flag) --
+    a tracked follow-up, not built here."""
+    season = _score_p(r) if kind == "pit" else hitter_score(r)
+    if kind != "hit":
+        return season
+    recent_row = best_recent_h.get(r.get("PlayerName")) if best_recent_h else None
+    return season * _recency_value_mult(r, recent_row)
+
 def _roster_suggestion(matchup, pitchers, hitters, fa_sp, fa_rp, fa_hit,
                         my_team, best_recent_p, best_recent_h,
                         all_matchups, week_end_str, classification=None,
                         league_active_roster_max=26, league_il_roster_max=2, pos_data=None, lineup_eff=None,
                         pill_fn=None):
-    """Return a LIST of Week-at-a-Glance pickup bullets (HTML strings), roster-context
-    aware. (Was: a single 'best available hitter' bullet, blind to positional need -- it
-    chronically told you to add an OF, the deepest pool, even while you were benching a
-    masher there and near-last at catcher.)
+    """Return `(bullets, moves)`: `bullets` is a LIST of Week-at-a-Glance pickup bullets
+    (HTML strings), roster-context aware. (Was: a single 'best available hitter' bullet,
+    blind to positional need -- it chronically told you to add an OF, the deepest pool,
+    even while you were benching a masher there and near-last at catcher.) `moves` is a
+    structured list of `{"name": PlayerName, "reason": str}` records for every add/drop
+    this function suggests -- feeds build_email's `_move_badge` registry so a player
+    involved in one of these suggestions can be flagged wherever else he's listed in the
+    digest, without re-parsing the bullet HTML.
 
       - BAT bullet: upgrade my WEAKEST hitter position where a real FA upgrade exists
         (positional_breakdown rank + score gap). NEVER a position I'm deep at or leaking
@@ -1784,13 +1833,14 @@ def _roster_suggestion(matchup, pitchers, hitters, fa_sp, fa_rp, fa_hit,
         streamer that would make ratios worse.
 
     Drops prefer a SURPLUS player (deep position / bench-leaker), and the two bullets take
-    DISTINCT drops. Falls back to a trade idea only when neither pickup fires.
+    DISTINCT drops. Falls back to a trade idea only when neither pickup fires (that
+    fallback's `moves` is always empty -- see the TRADE fallback section below).
 
     `pill_fn`: optional callback (score:int -> HTML) that renders a score pill after each
     add/drop player name — used by the dashboard's Recommended Moves tile for at-a-glance
     quality; the digest passes nothing (bullets unchanged)."""
     if not matchup:
-        return []
+        return [], []
 
     def _pill(score):
         return f' {pill_fn(int(round(score)))}' if pill_fn else ''
@@ -1865,7 +1915,7 @@ def _roster_suggestion(matchup, pitchers, hitters, fa_sp, fa_rp, fa_hit,
             if lever >= _UPGRADE_MARGIN:
                 need_positions.append((lever, p, top_fa, worst))
 
-    # -- droppable pool, surplus-first -----------------------------------------
+    # -- droppable pool: two independent eligibility paths ----------------------
     drop_pit = [r for r in full_pit
                 if r.get("PSP_Date", "1999-01-01") in ("1999-01-01", "")
                 or r.get("PSP_Date", "9999-99-99") > week_end_str]
@@ -1875,6 +1925,7 @@ def _roster_suggestion(matchup, pitchers, hitters, fa_sp, fa_rp, fa_hit,
         key=lambda x: x[1]
     )
     _drop_score = {id(r): s for r, s, _ in scored_drop}
+    _pit_pos_labels = {label for label, _, ptype in POS_GROUPS if ptype == "pit"}
 
     def _can_drop(cand, pending_add=None):
         """True if dropping cand leaves at least one healthy player at every position it
@@ -1906,15 +1957,58 @@ def _roster_suggestion(matchup, pitchers, hitters, fa_sp, fa_rp, fa_hit,
     def _in_surplus(r):
         return bool(_pos_groups_of(r) & surplus_groups)
 
+    def _active_role_pitcher(r):
+        """A rostered arm with real current-season saves/holds. rp_score deliberately
+        DE-EMPHASIZES SVHD, so a genuine closer/setup arm can still read as the 'worst
+        score' while being a valuable roster piece the reader would never actually cut.
+        Always excluded from the drop pool, regardless of tag. (Ported from
+        build_game_plan's guard of the same name -- same rationale, parity fix.)"""
+        return (_n(r.get("ESPN_SVHD")) or _n(r.get("SVHD"))) > 0
+
+    def _outclasses(cand, cand_score, pending_add):
+        """RELATIVE droppability (Path B): True when `pending_add` shares a position with
+        `cand` AND beats his blended score by >= _UPGRADE_MARGIN -- a genuine, meaningful
+        upgrade at that exact spot, so a same-position body can be offered up even when
+        he's not globally fringe (e.g. a decent-but-clearly-outclassed starter at the
+        position actually being upgraded). Uses the SAME margin already used above to
+        decide a position is a real NEED."""
+        if pending_add is None:
+            return False
+        shared = _pos_groups_of(cand) & _pos_groups_of(pending_add)
+        if not shared:
+            return False
+        add_kind = "pit" if (_pos_groups_of(pending_add) & _pit_pos_labels) else "hit"
+        add_score = (_score_p(pending_add, best_recent_p) if add_kind == "pit"
+                     else _blend(pending_add, hitter_score, best_recent_h))
+        return (add_score - cand_score) >= _UPGRADE_MARGIN
+
     _used_drops = set()
 
     def _take_drop(pending_add=None):
-        """Worst-first, but surplus positions ahead of everything (drop from strength).
-        Recomputed per `pending_add` so a same-position swap (e.g. add a SS, drop your only
-        other SS) isn't blocked by a coverage check that ignores the incoming player."""
+        """Two independent eligibility paths (either qualifies a candidate): Path A
+        (absolute) -- _drop_eligibility_score (season score, recency-discounted for
+        hitters) below _DROP_SEASON_FLOOR, so a real contributor is never unrelated
+        collateral just because he's in a confirmed-noise slump. Path B (relative) --
+        _outclasses: pending_add beats this exact candidate at a shared position by
+        _UPGRADE_MARGIN, even when he isn't globally fringe (the Bichette-for-Grissom
+        case). Ranked: Path-B same-spot first (consolidate the position being upgraded),
+        then Path-A surplus, then Path-A other, worst-score-first within each tier.
+        Recomputed per `pending_add` so both the coverage check and the relative test
+        reflect the actual transaction, not a static pool."""
+        def _eligible(r, s, k):
+            if _active_role_pitcher(r) or not _can_drop(r, pending_add):
+                return False
+            return _outclasses(r, s, pending_add) or \
+                _drop_eligibility_score(r, k, best_recent_h) < _DROP_SEASON_FLOOR
+
+        def _rank(r, s):
+            if _outclasses(r, s, pending_add):
+                return 0
+            return 1 if _in_surplus(r) else 2
+
         order = [r for r, _ in sorted(
-            [(r, s) for r, s, _ in scored_drop if _can_drop(r, pending_add)],
-            key=lambda x: (0 if _in_surplus(x[0]) else 1, x[1]))]
+            [(r, s) for r, s, k in scored_drop if _eligible(r, s, k)],
+            key=lambda x: (_rank(x[0], x[1]), x[1]))]
         for r in order:
             if r.get("PlayerName") not in _used_drops:
                 _used_drops.add(r.get("PlayerName"))
@@ -1937,17 +2031,34 @@ def _roster_suggestion(matchup, pitchers, hitters, fa_sp, fa_rp, fa_hit,
     il_slots_used = min(len(my_il_occupants), league_il_roster_max)
     slots_left = max(0, league_active_roster_max - (len(my_all_occupants) - il_slots_used))
 
-    def _move_tail(add_row):
-        """Free-pickup badge if an open roster spot remains, else ' . Drop <worst surplus>'."""
+    # Structured record of every add/drop this function suggests -- separate from `bullets`
+    # (rendered HTML) so build_email can build the "involved in a recommended move" badge
+    # registry (_move_badge) without re-parsing HTML. {"name": PlayerName, "reason": str}.
+    moves = []
+
+    def _move_tail(add_row, add_reason):
+        """Free-pickup badge if an open roster spot remains, else ' . Drop <worst surplus>'.
+        Also records the add (and, if one is chosen, the drop) into `moves`."""
         nonlocal slots_left
+        if add_row and add_row.get("PlayerName"):
+            moves.append({"name": add_row["PlayerName"],
+                           "reason": f"Week at a Glance pickup &mdash; {add_reason}"})
         if slots_left > 0:
             slots_left -= 1
             return f'<span style="color:{GREEN};font-size:10px;margin-left:6px;">&#10003; roster spot open</span>'
         d = _take_drop(add_row)
         if d and d.get("PlayerName") != add_row.get("PlayerName"):
-            surplus_tag = f' <span style="color:{MUTED};font-size:10px;">[surplus]</span>' if _in_surplus(d) else ''
+            d_score = _drop_score.get(id(d), 0)
+            if _outclasses(d, d_score, add_row):
+                reason_tag = f' <span style="color:{MUTED};font-size:10px;">[outclassed]</span>'
+            elif _in_surplus(d):
+                reason_tag = f' <span style="color:{MUTED};font-size:10px;">[surplus]</span>'
+            else:
+                reason_tag = ''
+            moves.append({"name": d["PlayerName"],
+                           "reason": f"Week at a Glance &mdash; suggested drop for {add_row.get('PlayerName','')}"})
             return (f' &middot; Drop <span style="color:{MUTED};">{d.get("PlayerName","")}'
-                    f' ({_pos_disp(d)})</span>{_pill(_drop_score.get(id(d), 0))}{surplus_tag}')
+                    f' ({_pos_disp(d)})</span>{_pill(d_score)}{reason_tag}')
         return ''
 
     bullets = []
@@ -1973,7 +2084,7 @@ def _roster_suggestion(matchup, pitchers, hitters, fa_sp, fa_rp, fa_hit,
             f'{_pill(_blend(bat_add, hitter_score, best_recent_h))}'
             f'<span style="color:{MUTED};"> ({_pos_disp(bat_add)})</span>'
             f'<span style="color:{MUTED};"> &mdash; {bat_reason}</span>'
-            + _move_tail(bat_add)
+            + _move_tail(bat_add, bat_reason)
         )
 
     # -- PITCH bullet: stabilize ratios after a blowup / a non-toss-up ratio loss --
@@ -2014,16 +2125,18 @@ def _roster_suggestion(matchup, pitchers, hitters, fa_sp, fa_rp, fa_hit,
                 f'<span style="color:{ec};">{era:.2f} ERA</span>'
                 f'<span style="color:{MUTED};"> / </span><span style="color:{wc};">{whip:.2f} WHIP</span>'
                 f'<span style="color:{MUTED};">) &mdash; {preason}</span>'
-                + _move_tail(pa)
+                + _move_tail(pa, preason)
             )
 
     if bullets:
-        return bullets
+        return bullets, moves
 
     # -- TRADE fallback (only when neither pickup fired) ------------------------
+    # `moves` is always [] on this path (no add/drop was chosen above), but the return
+    # shape stays (list, moves) for every branch so callers never have to special-case it.
     opp_matchup = all_matchups.get(" ".join(opp.split()), {}) if opp else {}
     if not opp_matchup:
-        return []
+        return [], moves
 
     opp_cats_map = {c["cat"]: c for c in opp_matchup.get("categories", [])}
     opp_winning  = {cat for cat, c in opp_cats_map.items() if c["result"] == "W"}
@@ -2032,7 +2145,7 @@ def _roster_suggestion(matchup, pitchers, hitters, fa_sp, fa_rp, fa_hit,
     i_offer      = my_winning   & {cat for cat, c in opp_cats_map.items() if c["result"] == "L"}
 
     if not they_offer or not i_offer:
-        return []
+        return [], moves
 
     # Pick primary categories: prefer pitching (more trade value stability)
     need_cat  = max(they_offer,  key=lambda c: (c in _PIT_CATS, _cat_score({}, c)))
@@ -2075,9 +2188,9 @@ def _roster_suggestion(matchup, pitchers, hitters, fa_sp, fa_rp, fa_hit,
                 f'Trade: Offer <span style="color:{TEXT};font-weight:700;">{mn}</span>{_pill(_mn_score)}'
                 f' to {opp} for <span style="color:{TEXT};font-weight:700;">{tn}</span>{_pill(_tn_score)}'
                 f'<span style="color:{MUTED};"> &mdash; fills {nc} gap, gives them {oc}</span>'
-            ]
+            ], moves
 
-    return []
+    return [], moves
 
 def build_week_overview(matchup, week_cats, week_n, fa_sp, starts, days_elapsed, my_starts_by_day, week_end=None, is_sunday=False, roster_suggestion="", trade_bullets=None):
     bullets = []
@@ -2367,6 +2480,14 @@ def build_glossary_section():
                "player (30/15/7-day), tagged next to the value (e.g. “15d”) — so a player can never read hot "
                "here and cold there. The colored value beside the icon is the recent stat itself, shown for "
                "context; the icon and color are driven by the Score delta, not that raw number."),
+        _entry(f'Recommended-move clipboard{_hit_badge("&#128203;", TAN, "example")}',
+               "Marks a player who's already part of a system-generated suggestion elsewhere in this digest — "
+               "an FA named as an <b>Add</b> in the Week-at-a-Glance bullets or a Weekly Game Plan card, or a "
+               "ROSTERED player named as that move's suggested <b>Drop</b>. Hover (or the tooltip on mobile) "
+               "names the specific suggestion(s); a player flagged by more than one lists all of them. Purely "
+               "informational — it doesn't change any score, ranking, or recommendation, just saves a trip "
+               "back up to the section that suggested the move. Always the LAST badge after any others on a "
+               "player's row, so it never displaces a higher-priority signal (injury, QS/5K+, regression, etc.)."),
 
         _subhead("Category Pulse cards"),
         _entry(f'Outcome markers{_mark("&#9650;", GREEN)}{_mark("&#9660;", RED)}{_mark("&#9670;", TEXT)}',
@@ -3664,13 +3785,6 @@ _GAMEPLAN_MIN_LEVERAGE = 8    # min swing leverage (win-the-week percentage poin
 _GAMEPLAN_MAX_HIT_MOVES = 2   # top-N ranked hitter move cards (left column)
 _GAMEPLAN_MAX_PIT_MOVES = 2   # top-N ranked pitcher move cards (right column, SP+RP combined)
 _GAMEPLAN_MAX_MOVES = _GAMEPLAN_MAX_HIT_MOVES + _GAMEPLAN_MAX_PIT_MOVES  # total cards, for the subtitle
-_GAMEPLAN_DROP_SEASON_FLOOR = 40   # a move card's drop cost must have a SEASON score (not
-                              # the recent-blended one, which a single bad week can crater)
-                              # below this -- a bit above _FA_SP_MIN_SCORE's 35 "streamer-tier"
-                              # cutoff, widened slightly (session addendum) so a few more
-                              # genuinely-borderline bench bodies clear as safe collateral.
-                              # A rostered player scoring like a real contributor, even
-                              # mid-slump, is still never fair collateral for an FA add.
 _GAMEPLAN_WEEKLY_MOVE_CAP = 7 # reference only (this league's typical add/drop cadence,
                               # same number the FA-SP per-day cap rationale already cites)
                               # — NOT a live remaining-moves counter (no snapshot field
@@ -3682,13 +3796,18 @@ def build_game_plan(matchup, winprob_ctx, per_cat, winprob_rf, winprob_weeks,
                     my_team, today_str, week_end_str, is_sunday=False,
                     league_active_roster_max=26, league_il_roster_max=2,
                     best_recent_p=None, best_recent_h=None, hit_pctile=None):
-    """The Weekly Game Plan: a contest/concede category read (Part A) plus up to
-    _GAMEPLAN_MAX_HIT_MOVES ranked hitter move cards + _GAMEPLAN_MAX_PIT_MOVES ranked
-    pitcher move cards (Part B), laid out in two columns, each showing the matchup-win-%
-    it buys. '' when there's no live matchup or no usable win-prob context (mirrors the
-    other matchup-dependent sections' guard)."""
+    """Returns `(html, moves)`. `html` is The Weekly Game Plan: a contest/concede category
+    read (Part A) plus up to _GAMEPLAN_MAX_HIT_MOVES ranked hitter move cards +
+    _GAMEPLAN_MAX_PIT_MOVES ranked pitcher move cards (Part B), laid out in two columns,
+    each showing the matchup-win-% it buys. '' when there's no live matchup or no usable
+    win-prob context (mirrors the other matchup-dependent sections' guard). `moves` is a
+    structured list of `{"name": PlayerName, "reason": str}` records for every add/drop
+    shown on a card -- feeds build_email's `_move_badge` registry, same shape/purpose as
+    `_roster_suggestion`'s `moves` return."""
     if not matchup or not per_cat:
-        return ""
+        return "", []
+
+    moves = []   # populated inside _build_cards below (empty when is_sunday or no cards)
 
     # ---- Part A: contest / concede read ---------------------------------------
     swing = _matchup_swing(per_cat)
@@ -3789,6 +3908,7 @@ def build_game_plan(matchup, winprob_ctx, per_cat, winprob_rf, winprob_weeks,
             [(r, _blend(r, hitter_score, best_recent_h), "hit")  for r in full_hit],
             key=lambda x: x[1]
         )
+        _drop_score = {id(r): s for r, s, _ in scored_drop}
 
         def _can_drop(cand, pending_add=None):
             if _on_il(cand):
@@ -3818,32 +3938,50 @@ def build_game_plan(matchup, winprob_ctx, per_cat, winprob_rf, winprob_weeks,
             excluded from the drop pool below, regardless of tag."""
             return (_n(r.get("ESPN_SVHD")) or _n(r.get("SVHD"))) > 0
 
-        def _season_score_of(r, kind):
-            """SEASON-only score (no recent blend) for the droppability floor below. The
-            visible Score badge is 65/35 season/recent, so a single brutal recent week
-            (a stretch of 0-fers, a rough 3-start run) can crater it enough to make a real
-            rostered asset look like the 'worst' player -- that's a false read for THIS
-            purpose (who is safe to actually cut), even though the blended number is the
-            right one for ranking/display everywhere else."""
-            return _score_p(r) if kind == "pit" else hitter_score(r)
+        _pit_pos_labels = {label for label, _, ptype in POS_GROUPS if ptype == "pit"}
 
-        # A Game Plan drop candidate must be genuinely fringe: SEASON score below
-        # _GAMEPLAN_DROP_SEASON_FLOOR (the same "streamer-tier, not worth rostering" cutoff
-        # already used for FA SP -- _FA_SP_MIN_SCORE) AND not an active save/hold-role arm.
-        # A rostered player who merely LOOKS worst because of a cold recent week (or a
-        # punt-saves-discounted closer) is not fair collateral for ANY add, streamer or
-        # hold -- so this applies unconditionally, not just to streamer-tagged moves.
-        _droppable = [(r, s, k) for r, s, k in scored_drop
-                      if not _active_role_pitcher(r)
-                      and not _is_protected(r, my_norm)
-                      and _season_score_of(r, k) < _GAMEPLAN_DROP_SEASON_FLOOR]
+        def _outclasses(cand, cand_score, pending_add):
+            """RELATIVE droppability (Path B): True when `pending_add` shares a position
+            with `cand` AND beats his blended score by >= _UPGRADE_MARGIN -- a genuine,
+            meaningful upgrade at that exact spot, so a same-position body can be offered
+            up even when he's not globally fringe. Mirrors _roster_suggestion's helper of
+            the same name (own instance here, same rationale)."""
+            if pending_add is None:
+                return False
+            shared = _pos_groups_of(cand) & _pos_groups_of(pending_add)
+            if not shared:
+                return False
+            add_kind = "pit" if (_pos_groups_of(pending_add) & _pit_pos_labels) else "hit"
+            add_score = (_score_p(pending_add, best_recent_p) if add_kind == "pit"
+                         else _blend(pending_add, hitter_score, best_recent_h))
+            return (add_score - cand_score) >= _UPGRADE_MARGIN
 
+        # A Game Plan drop candidate must clear one of two eligibility paths (never an
+        # active save/hold-role arm, never protected): Path A (absolute) -- genuinely
+        # fringe, _drop_eligibility_score (season score, recency-discounted for hitters —
+        # see send_digest.py near _UPGRADE_MARGIN) below _DROP_SEASON_FLOOR, so a real
+        # contributor merely having a cold-but-unconfirmed week is never fair collateral
+        # for an UNRELATED add. Path B (relative) -- _outclasses: pending_add beats this
+        # exact candidate at a shared position by _UPGRADE_MARGIN, even when he isn't
+        # globally fringe (a same-spot consolidation read). Recomputed per `pending_add`
+        # since Path B depends on the specific add being offered.
         _used_drops = set()
 
         def _take_drop(pending_add=None):
-            order = [r for r, _, _ in sorted(
-                [(r, s, k) for r, s, k in _droppable if _can_drop(r, pending_add)],
-                key=lambda x: (0 if _in_surplus(x[0]) else 1, x[1]))]
+            def _eligible(r, s, k):
+                if _active_role_pitcher(r) or _is_protected(r, my_norm) or not _can_drop(r, pending_add):
+                    return False
+                return _outclasses(r, s, pending_add) or \
+                    _drop_eligibility_score(r, k, best_recent_h) < _DROP_SEASON_FLOOR
+
+            def _rank(r, s):
+                if _outclasses(r, s, pending_add):
+                    return 0
+                return 1 if _in_surplus(r) else 2
+
+            order = [r for r, _ in sorted(
+                [(r, s) for r, s, k in scored_drop if _eligible(r, s, k)],
+                key=lambda x: (_rank(x[0], x[1]), x[1]))]
             for r in order:
                 if r.get("PlayerName") not in _used_drops:
                     _used_drops.add(r.get("PlayerName"))
@@ -3856,11 +3994,16 @@ def build_game_plan(matchup, winprob_ctx, per_cat, winprob_rf, winprob_weeks,
         il_slots_used = min(len(my_il_occupants), league_il_roster_max)
         slots_left = max(0, league_active_roster_max - (len(my_all_occupants) - il_slots_used))
 
-        def _render_drop(d):
-            surplus_tag = (f' <span style="color:{MUTED};font-size:10px;">[surplus]</span>'
-                           if _in_surplus(d) else '')
-            return (f'Drop <span style="color:{TEXT};font-weight:600;">{d.get("PlayerName","")}'
-                    f'</span><span style="color:{MUTED};"> ({_pos_disp(d)})</span>{surplus_tag}')
+        def _render_drop(d, add_row=None):
+            d_score = _drop_score.get(id(d), 0)
+            if _outclasses(d, d_score, add_row):
+                reason_tag = f' <span style="color:{MUTED};font-size:10px;">[outclassed]</span>'
+            elif _in_surplus(d):
+                reason_tag = f' <span style="color:{MUTED};font-size:10px;">[surplus]</span>'
+            else:
+                reason_tag = ''
+            return (f'<span style="color:{RED};font-weight:700;">Drop</span> <span style="color:{TEXT};font-weight:600;">{d.get("PlayerName","")}'
+                    f'</span><span style="color:{MUTED};"> ({_pos_disp(d)})</span>{reason_tag}')
 
         def _is_hold(cand, role):
             """hold = the add's SEASON blended score beats my starter quality at his
@@ -3944,12 +4087,17 @@ def build_game_plan(matchup, winprob_ctx, per_cat, winprob_rf, winprob_weeks,
                     break
                 hold = _is_hold(r, role)
                 tag_lbl, tag_col = ("hold", ACCENT) if hold else ("streamer", MUTED)
-                # Resolve the drop BEFORE building the card. _take_drop only offers genuinely
-                # fringe players (_droppable, built above) -- when slots_left covers the add, no
-                # drop is needed at all. When neither an open slot nor a safe drop exists, the
-                # card still renders (the pickup idea is still worth surfacing -- ranked purely
-                # by matchup lift) with an advisory line instead of a specific drop, rather than
-                # disappearing entirely just because there's no fringe bench fat to spare.
+                cat_lbl_early = _CAT_LABELS_MAP.get(best_cat, best_cat)
+                if r.get("PlayerName"):
+                    moves.append({"name": r["PlayerName"],
+                                   "reason": f"Weekly Game Plan &mdash; +{round(lift)}% {cat_lbl_early} "
+                                             f"odds ({tag_lbl})"})
+                # Resolve the drop BEFORE building the card. _take_drop only offers players
+                # clearing Path A (fringe) or Path B (outclassed at a shared spot by this add)
+                # -- when slots_left covers the add, no drop is needed at all. When neither an
+                # open slot nor an eligible drop exists, the card still renders (the pickup idea
+                # is still worth surfacing -- ranked purely by matchup lift) with an advisory
+                # line instead of a specific drop, rather than disappearing entirely.
                 if slots_left > 0:
                     slots_left -= 1
                     drop_html = (f'<span style="color:{GREEN};font-size:11px;">&#10003; roster spot open '
@@ -3960,7 +4108,10 @@ def build_game_plan(matchup, winprob_ctx, per_cat, winprob_rf, winprob_weeks,
                         drop_html = (f'<span style="color:{MUTED};font-size:11px;">No safe drop right now '
                                      f'&mdash; worth a manual look at your bench</span>')
                     else:
-                        drop_html = _render_drop(d)
+                        drop_html = _render_drop(d, add_row=r)
+                        moves.append({"name": d["PlayerName"],
+                                       "reason": f"Weekly Game Plan &mdash; suggested drop for "
+                                                 f"{r.get('PlayerName','')}"})
                 i = len(cards)
                 pos_disp = _pos_disp(r)
                 team_l = team_logo(r.get("Team"))
@@ -3997,7 +4148,7 @@ def build_game_plan(matchup, winprob_ctx, per_cat, winprob_rf, winprob_weeks,
                     f'text-transform:uppercase;border:1px solid {tag_col};border-radius:3px;'
                     f'padding:1px 6px;">{tag_lbl}</span>'
                     f'{num} +{round(lift)}% {cat_lbl} odds</div>'
-                    f'<div style="font-size:12.5px;">Add {team_l}'
+                    f'<div style="font-size:12.5px;"><span style="color:{GREEN};font-weight:700;">Add</span> {team_l}'
                     f'<span style="color:{TEXT};font-weight:700;">{r.get("PlayerName","")}</span> '
                     f'<span style="color:{MUTED};">({pos_disp})</span> {score_html}{badges}</div>'
                     f'<div style="margin-top:2px;">{add_line}</div>'
@@ -4058,7 +4209,7 @@ def build_game_plan(matchup, winprob_ctx, per_cat, winprob_rf, winprob_weeks,
            f'up to {_GAMEPLAN_MAX_MOVES} ranked moves ({_GAMEPLAN_MAX_HIT_MOVES} hitter, '
            f'{_GAMEPLAN_MAX_PIT_MOVES} pitcher) &middot; weekly add/drop budget ~{_GAMEPLAN_WEEKLY_MOVE_CAP}')
 
-    return section_head("Weekly Game Plan", sub) + strip + cards_html
+    return section_head("Weekly Game Plan", sub) + strip + cards_html, moves
 
 def build_email(snap, override_team=None):
     my_team       = override_team if override_team else snap.get("my_team", MY_TEAM)
@@ -4155,6 +4306,37 @@ def build_email(snap, override_team=None):
     # need_cats = the categories I'm losing OR that are a tossup — highlighted in FA "Cats".
     _losing_now = {c["cat"] for c in (matchup.get("categories", []) if matchup else []) if c.get("result") == "L"}
     need_cats = _losing_now | {c for c, (res, tier) in category_classification.items() if tier == "tossup"}
+
+    # _roster_suggestion / build_game_plan computed HERE (before ANY player-listing table
+    # below — My Upcoming Starts, My RP, Recent Form, FA SP/RP/Hitters) so their "moves"
+    # records can build the move_registry that _move_badge reads to flag a player already
+    # involved in one of these suggestions wherever else he's listed in the digest. Each
+    # function is called EXACTLY ONCE — both carry internal _used_drops/slots_left state,
+    # so a second call could pick a DIFFERENT drop and desync the badge registry from the
+    # actually-rendered bullets/cards. Their returned HTML (roster_suggestion, game_plan)
+    # is reused unchanged at its original later assembly point further down.
+    league_active_roster_max = int(snap.get("league_active_roster_max") or 26)
+    league_il_roster_max = int(snap.get("league_il_roster_max") or 2)
+    roster_suggestion, _rs_moves = _roster_suggestion(
+        matchup, pitchers, hitters, fa_sp, fa_rp, fa_hit,
+        my_team, best_recent_p, best_recent_h,
+        all_matchups, week_end_str, classification=category_classification,
+        league_active_roster_max=league_active_roster_max,
+        league_il_roster_max=league_il_roster_max,
+        pos_data=pos_data, lineup_eff=(snap.get("lineup_efficiency_current") or {} if not override_team else {}),
+    )
+    game_plan, _gp_moves = build_game_plan(
+        matchup, winprob_ctx, winprob_percat, winprob_rf, winprob_weeks,
+        pitchers, hitters, fa_sp, fa_rp, fa_hit, pos_data,
+        my_team, today_str, week_end_str, is_sunday=is_sunday,
+        league_active_roster_max=league_active_roster_max,
+        league_il_roster_max=league_il_roster_max,
+        best_recent_p=best_recent_p, best_recent_h=best_recent_h, hit_pctile=hit_pctile,
+    )
+    move_registry = {}
+    for _m in (_rs_moves + _gp_moves):
+        move_registry.setdefault(_m["name"], []).append(_m["reason"])
+
     # hit_pctile / pit_pctile / positional scarcity already set by prepare_scoring above.
     # The RP-only pool is digest-specific (FA Relievers "Cats" column rates a reliever
     # vs other RELIEVERS, not the whole pitcher pool the trade currency uses).
@@ -4456,7 +4638,7 @@ def build_email(snap, override_team=None):
                     _bd_uid("mus", name), 9)
                 rows += (
                     f'<tr style="{bg}">'
-                    f'<td style="{_tds}font-weight:600;">{team_logo(r.get("Team"))}{name}{inj_tag(r)}{start_badge}</td>'
+                    f'<td style="{_tds}font-weight:600;">{team_logo(r.get("Team"))}{name}{inj_tag(r)}{start_badge}{_move_badge(name, move_registry)}</td>'
                     f'<td style="{_tdc}">{proj_line_s}</td>'
                     f'<td style="{_tdc}">{opp_logo(ha)}{ha}'
                     f'{"&nbsp;<span style=\"color:#888;font-size:11px\">(proj.)</span>" if r.get("PSP_Projected") else ""}'
@@ -4536,7 +4718,7 @@ def build_email(snap, override_team=None):
                 _bd_uid("myrp", r.get("PlayerName", "")), 10)
             return (
                 f'<tr style="{bg}">'
-                f'<td style="{TD_S}font-weight:600;">{team_logo(r.get("Team"))}{r.get("PlayerName","")}{inj_tag(r)}{ds_badge}{pitcher_regression_badge(r, idx_recent=best_recent_p)}</td>'
+                f'<td style="{TD_S}font-weight:600;">{team_logo(r.get("Team"))}{r.get("PlayerName","")}{inj_tag(r)}{ds_badge}{pitcher_regression_badge(r, idx_recent=best_recent_p)}{_move_badge(r.get("PlayerName",""), move_registry)}</td>'
                 f'<td style="{TDC}color:{MUTED};">{r.get("Position","")}</td>'
                 f'<td style="{TDC}">{v(svhd, 0)}</td>'
                 f'<td style="{TDC}">{v(k, 0)}</td>'
@@ -4701,7 +4883,7 @@ def build_email(snap, override_team=None):
                     _bd_uid("fasp", r.get("PlayerName", "")), 10)
                 rows += (
                     f'<tr style="{bg}">'
-                    f'<td style="{name_border}{_tds}font-weight:600;">{team_logo(r.get("Team"))}{r.get("PlayerName","")}{inj_tag(r)}{two_start_html}{pickup_badge}</td>'
+                    f'<td style="{name_border}{_tds}font-weight:600;">{team_logo(r.get("Team"))}{r.get("PlayerName","")}{inj_tag(r)}{two_start_html}{pickup_badge}{_move_badge(r.get("PlayerName",""), move_registry)}</td>'
                     f'<td style="{_tdc}">{proj_line_str}</td>'
                     f'<td style="{_tdc}">{opp_logo(ha)}{ha}'
                     f'{"&nbsp;<span style=\"color:#888;font-size:11px\">(proj.)</span>" if r.get("PSP_Projected") else ""}'
@@ -4756,7 +4938,7 @@ def build_email(snap, override_team=None):
                 _bd_uid("farp", r.get("PlayerName", "")), 11)
             return (
                 f'<tr style="{bg}">'
-                f'<td style="{TD_S}font-weight:600;">{team_logo(r.get("Team"))}{r.get("PlayerName","")}{inj_tag(r)}{ds_badge}{pitcher_regression_badge(r, idx_recent=best_recent_p)}</td>'
+                f'<td style="{TD_S}font-weight:600;">{team_logo(r.get("Team"))}{r.get("PlayerName","")}{inj_tag(r)}{ds_badge}{pitcher_regression_badge(r, idx_recent=best_recent_p)}{_move_badge(r.get("PlayerName",""), move_registry)}</td>'
                 f'<td style="{TDC}color:{MUTED};">{r.get("Position","")}</td>'
                 f'<td style="{TDC}">{v(svhd, 0)}</td>'
                 f'<td style="{TDC}">{v(k, 0)}</td>'
@@ -4873,7 +5055,7 @@ def build_email(snap, override_team=None):
                 _bd_uid("fahit", r.get("PlayerName", "")), 12)
             rows += (
                 f'<tr style="{bg}">'
-                f'<td style="{TD_S}font-weight:600;">{team_logo(r.get("Team"))}{r.get("PlayerName","")}{inj_tag(r)}{hitter_badges(r, hit_pctile, idx_recent=best_recent_h)}</td>'
+                f'<td style="{TD_S}font-weight:600;">{team_logo(r.get("Team"))}{r.get("PlayerName","")}{inj_tag(r)}{hitter_badges(r, hit_pctile, idx_recent=best_recent_h)}{_move_badge(r.get("PlayerName",""), move_registry)}</td>'
                 f'<td style="{TDC}color:{MUTED};font-size:11px;">{r.get("Position","")}</td>'
                 f'<td style="{TDC}">{v(r.get("R"), 0)}</td>'
                 f'<td style="{TDC}">{v(r.get("HR"), 0)}</td>'
@@ -5369,16 +5551,8 @@ def build_email(snap, override_team=None):
     except Exception as _e:
         print(f"  WARNING: today's-games panel failed ({_e}); skipping it.")
 
-    league_active_roster_max = int(snap.get("league_active_roster_max") or 26)
-    league_il_roster_max = int(snap.get("league_il_roster_max") or 2)
-    roster_suggestion = _roster_suggestion(
-        matchup, pitchers, hitters, fa_sp, fa_rp, fa_hit,
-        my_team, best_recent_p, best_recent_h,
-        all_matchups, week_end_str, classification=category_classification,
-        league_active_roster_max=league_active_roster_max,
-        league_il_roster_max=league_il_roster_max,
-        pos_data=pos_data, lineup_eff=(snap.get("lineup_efficiency_current") or {} if not override_team else {}),
-    )
+    # roster_suggestion (bullets) was already computed earlier, above the FA/roster tables,
+    # so its "moves" could feed move_registry before any of them rendered — reused here.
     trade_bullets = [_pending_headline(g) for g in incoming_pending]
     week_overview = build_week_overview(
         matchup, week_cats, week_n, fa_sp, starts, days_elapsed, my_starts_by_day,
@@ -5407,18 +5581,12 @@ def build_email(snap, override_team=None):
         bench_watch,                                                                      # 1b Lineup Watch (matchup-to-date bench leakage / blowups / idle hitters)
         starts_section,                                                                   # 6
         my_rp_section,                                                                    # 7
-        build_pitcher_hot_cold_section(pitchers, my_team, best_recent_p),         # 8
-        build_hot_cold_section(hitters, my_team, best_recent_h, hit_pctile),  # 9
+        build_pitcher_hot_cold_section(pitchers, my_team, best_recent_p, move_registry),         # 8
+        build_hot_cold_section(hitters, my_team, best_recent_h, hit_pctile, move_registry),  # 9
         pos_section,                                                                      # 10 Positional Breakdown (moved to bottom of My Roster)
     ] if p)
-    game_plan = build_game_plan(
-        matchup, winprob_ctx, winprob_percat, winprob_rf, winprob_weeks,
-        pitchers, hitters, fa_sp, fa_rp, fa_hit, pos_data,
-        my_team, today_str, week_end_str, is_sunday=is_sunday,
-        league_active_roster_max=league_active_roster_max,
-        league_il_roster_max=league_il_roster_max,
-        best_recent_p=best_recent_p, best_recent_h=best_recent_h, hit_pctile=hit_pctile,
-    )
+    # game_plan (html) was already computed earlier, above the FA/roster tables, so its
+    # "moves" could feed move_registry before any of them rendered — reused here.
     transactions_band = "\n".join(p for p in [
         _matchup_closing_note(today_str == week_end_str),                                 # end-of-matchup: pickups can't swing today's closing matchup
         pending_section,                                                                  # 10b Pending Trades (real offers — Accept/Counter/Decline)
