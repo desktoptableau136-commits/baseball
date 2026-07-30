@@ -633,7 +633,8 @@ body {{ margin:0; background:{BG}; color:{TEXT}; font-family:-apple-system,Segoe
 .arb.drop {{ color:{RED}; }}
 .prow.abait {{ box-shadow:inset -3px 0 0 {YELLOW}; }}   /* left panel — send edge */
 .prow.agrab {{ box-shadow:inset 3px 0 0 {GREEN}; }}     /* right panel — grab edge (wins over target) */
-.prow.pdrop {{ box-shadow:inset -3px 0 0 {RED}; }}       /* value too low to shop — cut, don't trade */
+.prow.pdropL {{ box-shadow:inset -3px 0 0 {RED}; }}      /* left panel — same inward edge as send */
+.prow.pdropR {{ box-shadow:inset 3px 0 0 {RED}; }}        /* right panel — same inward edge as grab/target */
 .prow.strong.abait {{ background:linear-gradient(90deg,transparent,rgba(245,158,11,.10)); }}
 .prow.strong.agrab {{ background:linear-gradient(90deg,rgba(34,197,94,.10),transparent); }}
 .prow-top {{ display:flex; align-items:center; gap:6px; }}
@@ -1011,19 +1012,26 @@ function playerRowHtml(side, p, gkey, myMeta, holderMeta, otherMeta) {{
     if (tr.length) {{ tgt = ' <span class="tgt" title="Target &mdash; ' + tr.join('; ') + '">&#127919;</span>'; tgtCls = ' target'; }}
   }}
   // Arb marker — lives ALONGSIDE the target (different question: value edge, not need-fit).
-  // DROP takes priority over arb: a too-cheap player can still show a category/position-fit
-  // "send" edge (arbMarker never looks at value size, only need-multiplier gap), which would
-  // misleadingly read as a real trade chip. An absolute value floor overrides that read.
+  // DROP vs arb priority is SIDE-DEPENDENT: on the LEFT (my roster), drop always wins over
+  // "send" -- a too-cheap player of mine can still show a category/position-fit send edge
+  // (arbMarker never looks at value size, only need-multiplier gap), which would misleadingly
+  // read as a real trade chip worth shopping. On the RIGHT (partner roster), "grab" answers a
+  // DIFFERENT question (does he fill MY need?) that stays true whether or not the partner could
+  // easily replace him -- so grab must win when both apply; drop only shows as a fallback when
+  // there's no grab edge at all (still useful: "doesn't help either of us, and replaceable too").
   var arb = '', arbCls = '';
-  if (p.drop) {{
+  if (side === 'L' && p.drop) {{
     arb = dropGlyph(p);
-    arbCls = ' pdrop';
+    arbCls = ' pdropL';
   }} else {{
     var m = arbMarker(p, holderMeta || {{}}, otherMeta || {{}});
     if (m) {{
       var oName = side === 'L' ? ((otherMeta||{{}}).name || 'They') : 'You';
       arb = arbGlyph(side, m, arbReasons(p, holderMeta || {{}}, otherMeta || {{}}, oName));
       arbCls = (side === 'L' ? ' abait' : ' agrab') + (m.tier === 'strong' ? ' strong' : '');
+    }} else if (side === 'R' && p.drop) {{
+      arb = dropGlyph(p);
+      arbCls = ' pdropR';
     }}
   }}
   var bid = 'bd-' + side + '-' + gkey + '-' + p.id;
