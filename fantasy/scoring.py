@@ -697,6 +697,24 @@ def hitter_recency_flag(season_row, recent_row):
     return "noise"
 
 
+def hitter_recency_severity(season_row, recent_row):
+    """(flag, severity) — the same flag as hitter_recency_flag, plus HOW FAR past the
+    'survives regression' gap threshold the hitter sits (1.0 = right at the boundary,
+    growing from there; 0.0 when flag isn't 'declining'/'improving'). The flag alone can't
+    tell a hitter who just crossed the line apart from one a month deep in a real slump —
+    this powers the CONTINUOUS _tval recency discount in fantasy/trades.py (_recency_value_mult),
+    which needs magnitude, not just direction. Uses the same effective-AVG/SLG gap math as
+    hitter_recency_flag so the two can never disagree on direction."""
+    flag = hitter_recency_flag(season_row, recent_row)
+    if flag not in ("declining", "improving"):
+        return flag, 0.0
+    xba, xslg = _n(season_row.get("xBA")), _n(season_row.get("xSLG"))
+    gap_avg = _effective_avg(season_row, recent_row) - xba
+    gap_slg = _effective_slg(season_row, recent_row) - xslg
+    severity = max(abs(gap_avg) / _HIT_RECENCY_GAP_BA, abs(gap_slg) / _HIT_RECENCY_GAP_SLG)
+    return flag, severity
+
+
 def _rec_avg_slg_str(recent_row):
     """Format a hitter's RAW recent-window AVG/SLG for a confirmation-arrow (↗/↘) tooltip, or
     '' when unavailable. The confirmation prose says a hot/cold stretch is 'already showing up

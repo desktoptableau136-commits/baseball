@@ -301,6 +301,78 @@ def _leaves_position_short(team_counts, give_players, get_players):
     return short
 
 
+_DROP_TVAL_MAX = 0.60   # fallback floor ONLY when no fa_replacement pool is supplied (e.g. a
+                         # standalone call/test) -- the real gate below is comparative, not absolute.
+
+
+def _fa_replacement_tvals(hitters, pitchers, best_recent_p, best_recent_h, hit_pctile, pit_pctile):
+    """Best (max) _tval currently sitting on waivers, per hitter position group and for SP/RP —
+    the REPLACEMENT LEVEL a drop candidate should actually be measured against, not an arbitrary
+    number. Computed ONCE (the free-agent pool is identical no matter whose roster you're viewing,
+    unlike team needs). Runs every FA row through the SAME _enrich_trade_player used for rostered
+    players, so injury/recency discounts apply symmetrically — an ice-cold or hurt free agent
+    can't inflate the replacement bar either. `_DL_STATUSES`-excluded FAs never set the bar (no
+    point replacing a droppable body with one that can't play)."""
+    by_group = {}
+    for r in hitters:
+        if r.get("FantasyTeam", "") != "" or int(_n(r.get("Dataset")) or 0) != YEAR:
+            continue
+        if str(r.get("FreeAgentInjuryStatus", "")) in _DL_STATUSES:
+            continue
+        row = _enrich_trade_player(dict(r), "hit", best_recent_p, best_recent_h, hit_pctile, pit_pctile)
+        tval = row["_tval"]
+        for g in row["_tgroups"]:
+            if tval > by_group.get(g, 0.0):
+                by_group[g] = tval
+    best_sp = best_rp = 0.0
+    for r in pitchers:
+        if r.get("FantasyTeam", "") != "" or int(_n(r.get("Dataset")) or 0) != YEAR:
+            continue
+        if str(r.get("FreeAgentInjuryStatus", "")) in _DL_STATUSES:
+            continue
+        row = _enrich_trade_player(dict(r), "pit", best_recent_p, best_recent_h, hit_pctile, pit_pctile)
+        if _is_sp(r):
+            best_sp = max(best_sp, row["_tval"])
+        else:
+            best_rp = max(best_rp, row["_tval"])
+    by_group["SP"], by_group["RP"] = best_sp, best_rp
+    return by_group
+
+
+def _is_drop_candidate(r, team_key, team_pos_counts=None, fa_replacement=None):
+    """True when a player's value is so low that shopping him is a waste of time — the right
+    move is a straight roster cut, not an offer. The bar is COMPARATIVE: is there a better body
+    on waivers right now (`fa_replacement`, from `_fa_replacement_tvals`) — not an arbitrary
+    absolute number. Falls back to `_DROP_TVAL_MAX` only when no FA pool is supplied. Distinct
+    from the arb marker (which only compares two ROSTERED teams' relative need) — a garbage
+    player can still show a 'send' edge if a rival happens to need his category more than I do,
+    which would misleadingly read as a real trade chip; this checks against the actual bench-level
+    alternative you could add TODAY instead. Gated the same way an actual drop decision would be:
+    never an IL body (can't drop an IL-slot player anyway, see _on_il), never a protected keeper,
+    and (hitters only, via `team_pos_counts` from `_team_position_counts`) never a team's ONLY
+    startable body at a position — reuses `_leaves_position_short` on a single-player removal with
+    no replacement, so a cheap value read at a thin slot means 'upgrade this spot', not 'cut him
+    with nothing behind him'."""
+    tval = _n(r.get("_tval"))
+    if fa_replacement is not None:
+        if r.get("_tptype") == "hit":
+            best_fa = max((fa_replacement.get(g, 0.0) for g in (r.get("_tgroups") or set())), default=0.0)
+        else:
+            best_fa = fa_replacement.get("SP" if _is_sp(r) else "RP", 0.0)
+        if not (best_fa > tval):
+            return False
+    elif tval >= _DROP_TVAL_MAX:
+        return False
+    if _on_il(r):
+        return False
+    if _is_protected(r, team_key):
+        return False
+    if r.get("_tptype") == "hit" and team_pos_counts is not None:
+        if _leaves_position_short(team_pos_counts, [r], []):
+            return False
+    return True
+
+
 def _non_redundant_get_pos(get_pos, outs, ins, my_pos_count):
     """Filter get-positions to those that AREN'T roster-redundant. A position P is redundant
     when the deal would leave me with more eligible bodies there than my startable slots plus
@@ -419,20 +491,60 @@ def _health_value_mult(r):
 
 # Recency-trend discount on trade value (_tval). A hitter whose recent hot/cold stretch SURVIVES
 # AB-weighted regression toward his season xBA/xSLG (hitter_recency_flag == 'declining'/
-# 'improving') gets a mild value adjustment -- milder than the IL discount, since this is a
-# probabilistic trend read, not a confirmed absence. 'noise'/None -> 1.0 unchanged: the whole
-# point of 'noise' is the streak looks like luck, so season-level value already stands as-is.
-# Symmetric across both trade POVs (same _enrich_trade_player call, same as _health_value_mult) --
-# a player I'd acquire mid-slump is discounted the SAME amount a rival ships him at, so neither
-# side can exploit a one-sided read of the same signal.
-_RECENCY_TVAL_MULT = {"declining": 0.90, "improving": 1.08}
+# 'improving') gets a CONTINUOUS value adjustment scaled by hitter_recency_severity — a guy who
+# just crossed the "survives regression" line reads near the base cut, a month-deep slump (e.g.
+# .148 AVG over 88 AB, ~1.8x past the line) scales well past it, up to the cap. Still gentler than
+# the IL discount at the floor (a probabilistic trend read, not a confirmed absence), but no longer
+# flat -- a flat rate couldn't tell "just crossed the line" from "a month deep." 'noise'/None ->
+# 1.0 unchanged: the whole point of 'noise' is the streak looks like luck, so season-level value
+# already stands as-is. Symmetric across both trade POVs (same _enrich_trade_player call, same as
+# _health_value_mult) -- a player I'd acquire mid-slump is discounted the SAME amount a rival ships
+# him at, so neither side can exploit a one-sided read of the same signal.
+_RECENCY_BASE_CUT      = 0.10   # cut right at the severity=1.0 boundary (matches the old flat rate)
+_RECENCY_CUT_PER_UNIT  = 0.35   # additional cut per severity-unit past the boundary
+_RECENCY_MAX_CUT       = 0.60   # cap for a truly cratering stretch (mult floors at 0.40)
+_RECENCY_BASE_BOOST    = 0.08
+_RECENCY_BOOST_PER_UNIT = 0.15
+_RECENCY_MAX_BOOST     = 0.30   # boosts stay capped lower than cuts -- confirming a slump is
+                                 # real earns a steeper markdown than chasing a hot streak does a markup
+# IL-rust leniency: a player still carrying a live injury signal gets the cut scaled down toward
+# zero the FEWER recent-window AB he's accumulated -- a rough time-since-return proxy. We don't
+# track actual IL start/end dates (fetch_data's injury fields are a point-in-time snapshot, not a
+# history), but a guy who's only played his way to 20 of a possible ~100 recent-window AB has had
+# much less time to shake off rust than one sitting at 90 -- so leniency tapers off as his AB
+# climbs back toward a full workload, same window best_recent_h already uses for the gap read.
+_RECENCY_IL_LENIENCY_MAX = 0.70
+_RECENCY_FULL_AB_30D     = 100.0
+
+
+def _has_injury_signal(r):
+    """Any live sign this player is still shaking off an injury. fetch_data.attach_injury_notes
+    only populates InjuryBodyPart/Detail/ReturnDate for a CURRENTLY-flagged injury (sparse by
+    design), so their mere presence is the signal -- not any specific value. _on_il catches the
+    lineup-slot case too (a stale/blank ESPN_Status shouldn't hide an obvious IL stint)."""
+    return bool(str(r.get("InjuryBodyPart") or "").strip()
+                or str(r.get("InjuryDetail") or "").strip()
+                or str(r.get("InjuryReturnDate") or "").strip()
+                or _on_il(r))
 
 
 def _recency_value_mult(r, recent_row):
-    """Trade-value multiplier from hitter_recency_flag. 1.0 (no-op) when there's no recent row,
-    the read isn't reliable (thin AB / missing xStats), or the flag is 'noise'."""
-    flag = hitter_recency_flag(r, recent_row) if recent_row else None
-    return _RECENCY_TVAL_MULT.get(flag, 1.0)
+    """Continuous trade-value multiplier from hitter_recency_severity. 1.0 (no-op) when there's
+    no recent row, the read isn't reliable (thin AB / missing xStats), or the flag is 'noise'."""
+    if not recent_row:
+        return 1.0
+    flag, severity = hitter_recency_severity(r, recent_row)
+    if flag not in ("declining", "improving"):
+        return 1.0
+    excess = max(0.0, severity - 1.0)
+    if flag == "declining":
+        cut = min(_RECENCY_MAX_CUT, _RECENCY_BASE_CUT + _RECENCY_CUT_PER_UNIT * excess)
+    else:
+        cut = min(_RECENCY_MAX_BOOST, _RECENCY_BASE_BOOST + _RECENCY_BOOST_PER_UNIT * excess)
+    if _has_injury_signal(r):
+        ab_ratio = min(1.0, _n(recent_row.get("AB")) / _RECENCY_FULL_AB_30D)
+        cut *= (1.0 - _RECENCY_IL_LENIENCY_MAX * (1.0 - ab_ratio))
+    return (1.0 - cut) if flag == "declining" else (1.0 + cut)
 
 
 def _il_strips_star(r):
@@ -470,13 +582,24 @@ def _enrich_trade_player(r, ptype, best_recent_p, best_recent_h, hit_pctile, pit
     both find_trades and build_pending_trades_section share one source of truth."""
     if ptype == "hit":
         r["_tscore"] = _blend(r, hitter_score, best_recent_h)
-        r["_tcats"]  = set(player_cat_strengths(r, hit_pctile, _FA_HIT_CATS, set()))
+        _recent_row  = best_recent_h.get(r.get("PlayerName"))
+        _tcats = set(player_cat_strengths(r, hit_pctile, _FA_HIT_CATS, set()))
+        # A CONFIRMED decline (survives regression, not a thin-sample blip) strips his cat-strength
+        # credit entirely for trade need-fit purposes: a rival acquiring him doesn't get his season
+        # numbers, only his current form -- so he shouldn't count as "fills your HR need" off a line
+        # he isn't producing right now. Season-percentile strength stands unchanged everywhere else
+        # (FA table Cats columns, etc.) -- this only touches the trade engine's _tcats, which feeds
+        # find_trades' give/get pool matching, _need_mult category credit, and the Trade Lab arb
+        # marker (the exact "heavy surplus desirability while ice cold" gap this closes).
+        if _recent_row and hitter_recency_flag(r, _recent_row) == "declining":
+            _tcats = set()
+        r["_tcats"] = _tcats
     else:
         r["_tscore"] = _score_p(r, best_recent_p)
         r["_tcats"]  = set(player_cat_strengths(r, pit_pctile, _FA_RP_CATS, set()))
     _raw_val      = _trade_value(r, ptype, hit_pctile, pit_pctile)   # scarcity-weighted, healthy, season value
     if ptype == "hit":
-        _raw_val *= _recency_value_mult(r, best_recent_h.get(r.get("PlayerName")))
+        _raw_val *= _recency_value_mult(r, _recent_row)
     r["_tval"]    = _raw_val * _health_value_mult(r)
     # Star-reach premium is computed off _tval_star: HEALTHY value for a short-term injury (a
     # 10-day-IL superstar is still a star a rival won't ship at par), the DISCOUNTED value only for
