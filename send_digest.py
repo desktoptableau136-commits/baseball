@@ -10,9 +10,10 @@ Setup:
     3. Copy .env.example -> .env and fill in GMAIL_APP_PASSWORD
     pip install python-dotenv    (only needed for .env loading; optional)
 
-Run manually:   python send_digest.py
+Run manually:   python send_digest.py             (digest + dashboard, one email — dashboard is on by default)
 Dry run:        python send_digest.py --dry-run   (saves digest_preview.html, no email)
 Skip refresh:   python send_digest.py --no-refresh
+No dashboard:   python send_digest.py --no-dashboard
 """
 
 import itertools
@@ -5764,7 +5765,7 @@ def send_email(body_html, attachment_html, subject, filename=None, extra_attachm
 def main():
     dry_run        = "--dry-run"       in sys.argv
     no_refresh     = "--no-refresh"    in sys.argv
-    with_dashboard = "--with-dashboard" in sys.argv
+    with_dashboard = "--no-dashboard" not in sys.argv
     override_team = None
     if "--team" in sys.argv:
         idx = sys.argv.index("--team")
@@ -5822,8 +5823,9 @@ def main():
     _kind_sub  = f"{_kind} + Dashboard" if with_dashboard else _kind
     subject    = f"⚾ {team_label} {_kind_sub} — {datetime.now().strftime('%b %d')}"
 
-    # Optionally build the dashboard and attach it to THIS email (one delivery for both).
-    # Isolated so a dashboard failure only drops the attachment — the digest still sends.
+    # Build the dashboard and attach it to THIS email (one delivery for both) — on by
+    # default, opt out with --no-dashboard. Isolated so a dashboard failure only drops
+    # the attachment — the digest still sends.
     extra_attachments = []
     dash_html = None
     if with_dashboard:

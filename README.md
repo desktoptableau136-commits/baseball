@@ -87,8 +87,11 @@ GMAIL_APP_PASSWORD=xxxx xxxx xxxx xxxx
 Open a terminal in the `baseball/` folder and run:
 
 ```bash
-# Full refresh + send email
+# Full refresh + send email (digest + dashboard attached, one email — dashboard is on by default)
 python send_digest.py
+
+# Same, but digest only (no dashboard attachment)
+python send_digest.py --no-dashboard
 
 # Full refresh + browser preview (NO email sent)
 python send_digest.py --dry-run
