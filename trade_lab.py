@@ -636,9 +636,10 @@ def build_html(data):
     blob = json.dumps(data).replace("</", "<\\/")   # </script> safety
     css = _CSS.format(BG=BG, SURFACE=SURFACE, SURFACE2=SURFACE2, BORDER=BORDER,
                       TEXT=TEXT, MUTED=MUTED, ACCENT=ACCENT, GREEN=GREEN, RED=RED, YELLOW=YELLOW,
-                      PURPLE=PURPLE)
+                      PURPLE=PURPLE, LIME=LIME)
     js = _JS.format(GREEN=GREEN, RED=RED, YELLOW=YELLOW, ACCENT=ACCENT,
-                    MUTED=MUTED, TEXT=TEXT, BORDER=BORDER, SURFACE2=SURFACE2, PURPLE=PURPLE, LIME=LIME)
+                    MUTED=MUTED, TEXT=TEXT, BORDER=BORDER, SURFACE2=SURFACE2, PURPLE=PURPLE, LIME=LIME,
+                    ORANGE=sd.ORANGE)
     my_name = _disp(data["myTeam"])
     fresh_label, fresh_color = _freshness(data.get("refreshed", ""))
     refresh_btn = ('<button id="refreshBtn" class="refreshbtn" onclick="doRefresh()">'
@@ -878,13 +879,23 @@ details#vdetail[open] > summary::before {{ content:'\\25BC'; }}
 .stratbtn.active {{ color:#0b1220; background:{ACCENT}; border-color:{ACCENT}; }}
 .ctxline {{ font-size:11.5px; line-height:1.7; }}
 .ctxline .lbl {{ color:{MUTED}; font-weight:700; }}
+.needcat {{ color:{ACCENT}; font-weight:700; }}
+.needpos {{ color:{LIME}; font-weight:700; }}
 .sugblock {{ margin-top:9px; }}
 .sughdr {{ font-size:10px; font-weight:700; color:{MUTED}; text-transform:uppercase; letter-spacing:.5px; margin-bottom:4px; }}
-.sugchip {{ display:inline-block; font-size:11px; color:{TEXT}; background:{SURFACE2}; border:1px solid {BORDER}; border-radius:6px; padding:2px 7px; margin:2px 3px 2px 0; cursor:pointer; }}
+.sugchip {{ display:inline-flex; align-items:center; flex-wrap:wrap; gap:2px; font-size:11px; color:{TEXT}; background:{SURFACE2}; border:1px solid {BORDER}; border-radius:6px; padding:2px 7px; margin:2px 3px 2px 0; cursor:pointer; }}
 .sugchip:hover {{ border-color:{ACCENT}; background:rgba(59,130,246,.12); }}
+.sugchip.fallback {{ border-style:dashed; opacity:.8; }}
 .sugchip .plus {{ color:{GREEN}; font-weight:800; margin-right:3px; }}
+.sugchip .tilde {{ color:{MUTED}; font-weight:800; margin-right:3px; }}
 .sugchip .sugwhy {{ color:{MUTED}; font-size:10px; margin-left:4px; }}
 .sugchip .v {{ color:{ACCENT}; font-size:10px; font-weight:700; margin-left:5px; }}
+.sugchip .sugpct {{ font-size:10px; font-weight:700; margin-left:4px; }}
+.sugchip .sugrisk {{ font-size:10px; font-weight:700; margin-left:4px; }}
+.sugfallback-note {{ font-size:10.5px; color:{MUTED}; margin:2px 0 4px; font-style:italic; }}
+.coachcounter {{ margin-top:8px; font-size:11.5px; color:{TEXT}; background:rgba(59,130,246,.08); border-left:3px solid {ACCENT}; border-radius:5px; padding:5px 8px; }}
+.coachmega {{ margin-top:6px; font-size:11.5px; color:{PURPLE}; }}
+.coachmega.dim {{ color:{MUTED}; }}
 .nudge {{ margin-top:9px; font-size:11.5px; line-height:1.5; color:{TEXT}; background:{SURFACE2}; border:1px solid {BORDER}; border-left:3px solid {ACCENT}; border-radius:5px; padding:6px 9px; }}
 /* Partner Fit board */
 #fitboard {{ background:{SURFACE2}; border:1px solid {BORDER}; border-radius:12px; margin-bottom:16px; overflow:hidden; }}
@@ -970,7 +981,7 @@ var coachFold = false;               // Deal Coach collapsed? persists across re
 var TARGET_NET = {{ fair:0.0, favor:0.30, fleece:0.70 }};   // value edge the coach steers toward
 var STUD_CEIL  = {{ fair:99, favor:1.6, fleece:1.2 }};      // don't suggest offering my pieces above this value
 
-function setStrategy(s) {{ strategy = s; renderCoach(); }}
+function setStrategy(s) {{ strategy = s; recompute(); }}
 
 // ---- Pocket: in-page data refresh (fires the GitHub workflow via the Worker proxy) ----
 var _pollTimer = null, _pollTries = 0;
@@ -1444,71 +1455,150 @@ function flatPool(tk) {{
   return (pl.hit || []).concat(pl.sp || [], pl.rp || []);
 }}
 
-function needLabels(meta, poss) {{
+function needSplit(meta, poss) {{
   var ds = dealSoFar(poss || 'your');
   var resolved = resolvedNeeds(meta, ds.added, ds.shed);
   var cats = (meta.needs || []).filter(function(c) {{ return resolved.cats.indexOf(c) < 0; }})
                .map(function(c) {{ return DATA.catLabels[c] || c; }});
   var pos = Object.keys(meta.need_pos || {{}}).filter(function(g) {{ return resolved.pos.indexOf(g) < 0; }});
-  return cats.concat(pos);
+  return {{ cats: cats, pos: pos }};
 }}
 
-function sugChip(side, x) {{
-  var why = x.r.length ? x.r[0] : 'top value chip';
-  return '<span class="sugchip" onclick="toggle(\'' + side + '\',\'' + x.p.id + '\')">'
-    + '<span class="plus">+</span>' + x.p.name
+// Renders a "You need"/"They need" line with categories (blue) and positions (LIME) visually
+// distinct -- a category need and a position need are different kinds of gaps, so they no
+// longer read as one flattened list.
+function needLine(lbl, split) {{
+  var bits = [];
+  if (split.cats.length) bits.push('<span class="needcat">' + split.cats.join(', ') + '</span>');
+  if (split.pos.length) bits.push('<span class="needpos">' + split.pos.join(', ') + ' slot</span>');
+  return '<div class="ctxline"><span class="lbl">' + lbl + ':</span> ' + (bits.join(' &middot; ') || 'balanced everywhere') + '</div>';
+}}
+
+// One suggestion chip. Renders the SAME badges every other roster row shows (p.badges, pre-baked
+// server-side), prices by demand-side effective value (tval * needMult) instead of raw tval, and
+// shows a simulated accept% + risk glyphs for the deal WITH this candidate added (simulateAdd --
+// the exact acceptPct/myAcceptPct/starReachGap/starSurrenderGap/leavesShort/thinPos fns
+// recompute()'s own verdict uses, so a chip's risk read can never diverge from what clicking it
+// actually produces). `x.fallback` marks a pure-value pad-in with NO need match -- rendered
+// visually distinct (dashed border, a neutral "~" marker instead of the green "+", an honest
+// "no need match" label) so it can never again read as unlabeled advice.
+function sugChip(side, x, bundle) {{
+  var p = x.p, cls = 'sugchip' + (x.fallback ? ' fallback' : '');
+  var marker = x.fallback ? '<span class="tilde">&#8776;</span>' : '<span class="plus">+</span>';
+  var why = x.r.length ? x.r.join('; ') : 'no need match &mdash; pure trade value';
+  var meta = side === 'R' ? bundle.myMeta : bundle.partnerMeta;
+  var eff = p.tval * needMult(p, meta);
+  var sim = simulateAdd(side, p, bundle);
+  var pctCol = sim.pct >= 60 ? '{GREEN}' : (sim.pct >= 30 ? '{YELLOW}' : '{RED}');
+  var pctChip = '<span class="sugpct" style="color:' + pctCol
+    + '" title="Estimated odds this side says yes with this added">' + sim.pct + '%</span>';
+  var risk = '';
+  if (sim.short) risk += '<span class="sugrisk" style="color:{RED}" title="Would drop a roster below startable depth">&#9888; short</span>';
+  else if (sim.thin) risk += '<span class="sugrisk" style="color:{ORANGE}" title="Leaves no backup at a single-slot position">&#9888; thin</span>';
+  if (sim.starRisk) risk += '<span class="sugrisk" style="color:{PURPLE}" title="A star-value piece &mdash; may take a sweetener to land">&#9733;</span>';
+  return '<span class="' + cls + '" onclick="toggle(\'' + side + '\',\'' + p.id + '\')">'
+    + marker + p.name + p.badges
     + '<span class="sugwhy">' + why + '</span>'
-    + '<span class="v">' + x.p.tval.toFixed(1) + '</span></span>';
+    + '<span class="v">' + eff.toFixed(2) + '</span>'
+    + pctChip + risk + '</span>';
 }}
 
-// The Deal Coach: match-up context + value-ranked, clickable add suggestions + a
-// running balance nudge. Reuses targetReasons() from BOTH perspectives — partner
-// players that fill MY needs (get) and my players that fill THEIRS (offer).
-function renderCoach() {{
-  var myTk = document.getElementById('selL').value;
-  var partnerTk = document.getElementById('selR').value;
-  var myMeta = DATA.teamsMeta[myTk] || {{ needs:[], surplus:[], need_pos:{{}} }};
-  var partnerMeta = DATA.teamsMeta[partnerTk] || {{ needs:[], surplus:[], need_pos:{{}} }};
+// Fills up to `capN` suggestion slots: real need-matches first (already ranked), then pads any
+// remaining slots with clearly-tagged value-only chips (fallback:true) -- so a partial or empty
+// need-match list never silently swaps to an unlabeled "just show top value" list (the old
+// behavior the user flagged as reading like leftover bad advice).
+function fillWithFallback(matched, pool, meta, notPickedFn, capN) {{
+  var chips = matched.slice(0, capN).map(function(x) {{ return {{ p:x.p, r:x.r, fallback:false }}; }});
+  if (chips.length < capN) {{
+    var have = {{}};
+    matched.forEach(function(x) {{ have[x.p.id] = 1; }});
+    var extra = pool.filter(notPickedFn).filter(function(p) {{ return !have[p.id]; }})
+      .map(function(p) {{ return {{ p:p, eff: p.tval * needMult(p, meta) }}; }})
+      .sort(function(a, b) {{ return b.eff - a.eff; }});
+    extra.slice(0, capN - chips.length).forEach(function(x) {{ chips.push({{ p:x.p, r:[], fallback:true }}); }});
+  }}
+  return chips;
+}}
 
-  var youNeed = needLabels(myMeta, 'your');
-  var theyNeed = needLabels(partnerMeta, 'their');
-  var leverage = (myMeta.surplus || []).filter(function(c) {{ return (partnerMeta.needs || []).indexOf(c) >= 0; }})
-                   .map(function(c) {{ return DATA.catLabels[c] || c; }});
+function fallbackNote(chips) {{
+  return chips.some(function(c) {{ return c.fallback; }})
+    ? '<div class="sugfallback-note">Some of these don\'t match a listed need &mdash; marked '
+      + '<span class="tilde">&#8776;</span> value-only chips, still worth a look.</div>' : '';
+}}
+
+// The Deal Coach: match-up context + badge-carrying, effective-value-ranked suggestion chips
+// (each with a simulated accept-odds read and risk glyphs) + a running balance nudge. Takes the
+// SAME bundle recompute() builds for the verdict (myMeta/partnerMeta/giveArr/getArr/netVal/netMe/
+// netThem/pfTier/isMega/counterAddon) instead of re-deriving the selected teams/deal state itself
+// -- the Coach and the verdict can no longer disagree about what's in the deal or what it resolves.
+function renderCoach(bundle) {{
+  var myTk = bundle.myTk, partnerTk = bundle.partnerTk;
+  var myMeta = bundle.myMeta, partnerMeta = bundle.partnerMeta;
+
+  var youNeed = needSplit(myMeta, 'your');
+  var theyNeed = needSplit(partnerMeta, 'their');
+  var leverageCats = (myMeta.surplus || []).filter(function(c) {{ return (partnerMeta.needs || []).indexOf(c) >= 0; }})
+                       .map(function(c) {{ return DATA.catLabels[c] || c; }});
+  var leveragePos = (myMeta.surplus_pos || []).filter(function(g) {{ return (partnerMeta.need_pos || {{}}).hasOwnProperty(g); }});
+  var levBits = [];
+  if (leverageCats.length) levBits.push('<span class="needcat">' + leverageCats.join(', ') + '</span>');
+  if (leveragePos.length) levBits.push('<span class="needpos">' + leveragePos.join(', ') + '</span> position');
+  var leverageHtml = levBits.length
+    ? '<div class="ctxline"><span class="lbl">Your leverage:</span> ' + levBits.join(' &amp; ') + ' &mdash; deep for you, thin for them</div>'
+    : '';
 
   function notPicked(p) {{ return !picked.L[p.id] && !picked.R[p.id]; }}
   function rank(pool, meta, poss) {{
     var out = pool.filter(notPicked).map(function(p) {{ return {{ p:p, r:targetReasons(p, meta, poss) }}; }})
                   .filter(function(x) {{ return x.r.length; }});
-    out.sort(function(a, b) {{ return b.p.tval - a.p.tval; }});
+    out.sort(function(a, b) {{ return (b.p.tval * needMult(b.p, meta)) - (a.p.tval * needMult(a.p, meta)); }});
     return out;
   }}
   // GET = partner players that fill MY needs; OFFER = my players that fill THEIRS.
-  var getSug = rank(flatPool(partnerTk), myMeta, 'your');
-  var giveSug = rank(flatPool(myTk), partnerMeta, 'their');
+  var getSugMatched = rank(flatPool(partnerTk), myMeta, 'your');
+  var giveSugMatched = rank(flatPool(myTk), partnerMeta, 'their');
   // Strategy gates the OFFER list: the harder I favor myself, the more I protect my
   // studs (value ceiling) and the cheaper the need-filler I lead with (ascending value).
   var ceil = STUD_CEIL[strategy];
-  giveSug = giveSug.filter(function(x) {{ return x.p.tval <= ceil; }});
-  if (strategy !== 'fair') giveSug.sort(function(a, b) {{ return a.p.tval - b.p.tval; }});
-  // Fallback so the biggest chips still surface when nothing squarely fills a need.
-  if (!getSug.length) {{
-    getSug = flatPool(partnerTk).filter(notPicked).map(function(p) {{ return {{ p:p, r:[] }}; }})
-               .sort(function(a, b) {{ return b.p.tval - a.p.tval; }}).slice(0, 4);
-  }}
-  var getHtml = getSug.slice(0, 4).map(function(x) {{ return sugChip('R', x); }}).join('') || '<span class="empty">none</span>';
-  var giveHtml = giveSug.slice(0, 4).map(function(x) {{ return sugChip('L', x); }}).join('')
-                 || '<span class="empty">nothing spare that they need &mdash; lead with value</span>';
+  giveSugMatched = giveSugMatched.filter(function(x) {{ return x.p.tval <= ceil; }});
+  if (strategy !== 'fair') giveSugMatched.sort(function(a, b) {{ return a.p.tval - b.p.tval; }});
 
-  var net = sumVal(picked.R) - sumVal(picked.L);
-  var nSel = Object.keys(picked.L).length + Object.keys(picked.R).length;
+  var getSug = fillWithFallback(getSugMatched, flatPool(partnerTk), myMeta, notPicked, 4);
+  var giveSug = fillWithFallback(giveSugMatched,
+    flatPool(myTk).filter(function(p) {{ return p.tval <= ceil; }}), partnerMeta, notPicked, 4);
+  var getHtml = getSug.length
+    ? fallbackNote(getSug) + getSug.map(function(x) {{ return sugChip('R', x, bundle); }}).join('')
+    : '<span class="empty">none</span>';
+  var giveHtml = giveSug.length
+    ? fallbackNote(giveSug) + giveSug.map(function(x) {{ return sugChip('L', x, bundle); }}).join('')
+    : '<span class="empty">nothing spare that they need &mdash; lead with value</span>';
+
+  var net = bundle.netVal || 0;
+  var nSel = bundle.giveCount + bundle.getCount;
   var target = TARGET_NET[strategy];
   var label = {{ fair:'fair', favor:'favor-me', fleece:'fleece' }}[strategy];
   var diff = net - target;
   var nudge;
-  if (!nSel) nudge = 'Pick a player to give and a target to get &mdash; the suggestions above rank by trade value and update as you go.';
+  if (!nSel) nudge = 'Pick a player to give and a target to get &mdash; the suggestions above rank by how much they fill a real need and update as you go.';
   else if (diff > 0.1) nudge = 'Ahead of your ' + label + ' target (net ' + (net >= 0 ? '+' : '') + net.toFixed(2) + '). You could add a give to sweeten it, or expect them to counter.';
   else if (diff < -0.1) nudge = 'Below your ' + label + ' target (net ' + (net >= 0 ? '+' : '') + net.toFixed(2) + '). Add a get piece, or drop one of yours.';
   else nudge = 'On target for a ' + label + ' deal (net ' + (net >= 0 ? '+' : '') + net.toFixed(2) + '). Make sure it fills a real need for both sides.';
+
+  // Promote the counter-suggestion (already computed once per recompute()) and a live blockbuster
+  // read into the Coach panel itself, instead of leaving them buried in the small verdict text.
+  var counterHtml = '';
+  if (bundle.counterAddon) {{
+    var add = bundle.counterAddon;
+    var rz = add._cr && add._cr.length ? ' (' + add._cr.join(', ') + ')' : '';
+    counterHtml = '<div class="coachcounter">&#128161; Countering? Ask them to add '
+      + '<b class="counteradd" onclick="toggle(\'R\',\'' + add.id + '\')">' + add.name + '</b>' + rz + '.</div>';
+  }}
+  var megaHtml = '';
+  if (bundle.isMega) {{
+    megaHtml = '<div class="coachmega">&#128171; This deal is a blockbuster win-win &mdash; see the banner above.</div>';
+  }} else if (bundle.giveCount === 2 && bundle.getCount <= 2 && bundle.label === 'ACCEPT' && bundle.pfTier === 'yes') {{
+    megaHtml = '<div class="coachmega dim">One more spare piece away from a &#128171; Blockbuster shape.</div>';
+  }}
 
   function stratBtn(s, lab) {{
     return '<button class="stratbtn' + (strategy === s ? ' active' : '') + '" onclick="setStrategy(\'' + s + '\')">' + lab + '</button>';
@@ -1516,18 +1606,19 @@ function renderCoach() {{
   var body = coachFold ? '' :
       '<div class="stratrow"><span class="stratlbl">Strategy</span>'
       + stratBtn('fair', 'Fair') + stratBtn('favor', 'Favor me') + stratBtn('fleece', 'Fleece') + '</div>'
-    + '<div class="ctxline"><span class="lbl">You need:</span> ' + (youNeed.join(', ') || 'balanced everywhere') + '</div>'
-    + '<div class="ctxline"><span class="lbl">They need:</span> ' + (theyNeed.join(', ') || 'balanced everywhere') + '</div>'
-    + (leverage.length ? '<div class="ctxline"><span class="lbl">Your leverage:</span> ' + leverage.join(', ') + ' &mdash; deep for you, thin for them</div>' : '')
+    + needLine('You need', youNeed)
+    + needLine('They need', theyNeed)
+    + leverageHtml
     + '<div class="sugblock"><div class="sughdr">Add to get &mdash; fills your needs</div>' + getHtml + '</div>'
     + '<div class="sugblock"><div class="sughdr">Offer them &mdash; fills their needs</div>' + giveHtml + '</div>'
+    + counterHtml + megaHtml
     + '<div class="nudge">' + nudge + '</div>';
   document.getElementById('coach').innerHTML =
       '<div class="coachhdr" onclick="toggleCoach()"><span class="caret">' + (coachFold ? '&#9654;' : '&#9660;') + '</span>DEAL COACH</div>'
     + body;
 }}
 
-function toggleCoach() {{ coachFold = !coachFold; renderCoach(); }}
+function toggleCoach() {{ coachFold = !coachFold; recompute(); }}
 
 // When a COUNTER verdict is driven by overpaying, name the single best partner
 // add-on to REQUEST — a spare piece that closes the value gap without a fresh
@@ -1671,6 +1762,33 @@ function needMult(p, meta) {{
 }}
 function sumEff(arr, meta) {{ var s = 0; arr.forEach(function(p) {{ s += (p.tval || 0) * needMult(p, meta); }}); return s; }}
 
+// Simulates adding candidate `p` on top of the CURRENT in-progress deal (bundle.giveArr/getArr)
+// -- mirrors the exact acceptance-layer fns recompute()'s own verdict uses (targetRelief/thinPos/
+// leavesShort/starReachGap/starSurrenderGap/acceptPct/myAcceptPct), so a suggestion chip's
+// accept%/risk read can never diverge from what actually happens once you click it into the deal.
+function simulateAdd(side, p, bundle) {{
+  var giveArr = bundle.giveArr, getArr = bundle.getArr;
+  var myMeta = bundle.myMeta, partnerMeta = bundle.partnerMeta;
+  if (side === 'R') {{                                   // candidate joins GET (I acquire p)
+    var getArr2 = getArr.concat([p]);
+    var relief2 = targetRelief(getArr2, myMeta);
+    var thinThem2  = thinPos(partnerMeta.pos_count, getArr2, giveArr);
+    var shortThem2 = leavesShort(partnerMeta.pos_count, getArr2, giveArr);
+    var netThemRead2 = sumEff(giveArr, partnerMeta) - sumEff(getArr2, partnerMeta)
+                     - (DATA.tune.thinPosPenalty || 0) * thinThem2.length;
+    var reachGap2 = starReachGap(getArr2, giveArr, relief2);
+    var pct = Math.round(acceptPct(bundle.netVal + p.tval, netThemRead2, reachGap2));
+    return {{ pct: pct, thin: !!thinThem2.length, short: !!shortThem2.length, starRisk: reachGap2 > 0 }};
+  }}
+  var giveArr2 = giveArr.concat([p]);                    // candidate joins OFFER (I surrender p)
+  var thinMe2  = thinPos(myMeta.pos_count, giveArr2, getArr);
+  var shortMe2 = leavesShort(myMeta.pos_count, giveArr2, getArr);
+  var surrGap2 = starSurrenderGap(getArr, giveArr2);
+  var netMe2 = sumEff(getArr, myMeta) - sumEff(giveArr2, myMeta);
+  var pct = Math.round(myAcceptPct(bundle.netVal - p.tval, netMe2, surrGap2));
+  return {{ pct: pct, thin: !!thinMe2.length, short: !!shortMe2.length, starRisk: surrGap2 > 0 }};
+}}
+
 // One row in the "In this deal" recap — same look as a roster prow, but read-only (no
 // select/target/arb markers). The score-pill breakdown starts COLLAPSED (a cleaner-looking
 // recap) and is tappable via openBd, same as a roster row, to expand on demand.
@@ -1726,7 +1844,18 @@ function recompute() {{
   getBox.innerHTML  = rKeys.length ? rKeys.map(function(k){{return ledgerItem('R',R[k]);}}).join('')
                                    : '<div class="empty">&larr; Click theirs</div>';
 
-  renderCoach();
+  // Hoisted above the empty-check: the Deal Coach needs these even with zero picks, and this is
+  // the ONE place they're derived -- renderCoach() never re-derives the selected teams or the
+  // in-progress deal itself (the old duplication that let the Coach and the verdict disagree).
+  // Positional upgrades: an incoming hitter at one of my thin slots whose score clears my avg
+  // there — but redundancy-guarded, so stacking a 4th body at a full slot doesn't count as
+  // filling a need (unless the deal also sheds a body there). Package-aware: give=L, get=R.
+  var myTk = document.getElementById('selL').value;
+  var partnerTk = document.getElementById('selR').value;
+  var myMeta = DATA.teamsMeta[myTk] || {{needs:[],surplus:[],need_pos:{{}},surplus_pos:[],pos_count:{{}},target_pos:[]}};
+  var partnerMeta = DATA.teamsMeta[partnerTk] || {{needs:[],surplus:[],need_pos:{{}},surplus_pos:[],pos_count:{{}},target_pos:[]}};
+  var giveArr = lKeys.map(function(k){{ return L[k]; }});
+  var getArr  = rKeys.map(function(k){{ return R[k]; }});
 
   var vBox = document.getElementById('verdict');
   var reads = document.getElementById('reads');
@@ -1736,25 +1865,17 @@ function recompute() {{
     ['giveSub','getSub','fairbar','dealsum','vdetailBody'].forEach(function(idv){{ var e=document.getElementById(idv); if(e) e.innerHTML=''; }});
     document.getElementById('mid').classList.remove('midmega');
     setDealBar(0, 0, 0, '', '');
+    renderCoach({{ myTk:myTk, partnerTk:partnerTk, myMeta:myMeta, partnerMeta:partnerMeta,
+                  giveArr:giveArr, getArr:getArr, netVal:0, netMe:0, netThem:0,
+                  giveCount:0, getCount:0, label:null, pfTier:'na', isMega:false, counterAddon:null }});
     return;
   }}
 
   var giveVal = sumVal(L), getVal = sumVal(R);
   var netVal = getVal - giveVal;                         // + = I win value
 
-  var myTk = document.getElementById('selL').value;
-  var partnerTk = document.getElementById('selR').value;
-  var myMeta = DATA.teamsMeta[myTk] || {{needs:[],surplus:[],need_pos:{{}}}};
-  var partnerMeta = DATA.teamsMeta[partnerTk] || {{needs:[]}};
-
   // Categories gained (from what I get) vs lost (from what I give).
   var gained = unionCats(R), lost = unionCats(L);
-
-  // Positional upgrades: an incoming hitter at one of my thin slots whose score clears my avg
-  // there — but redundancy-guarded, so stacking a 4th body at a full slot doesn't count as
-  // filling a need (unless the deal also sheds a body there). Package-aware: give=L, get=R.
-  var giveArr = lKeys.map(function(k){{ return L[k]; }});
-  var getArr  = rKeys.map(function(k){{ return R[k]; }});
 
   // Demand-side team-modified value (both POVs): each side re-values the same players by ITS
   // own needs. netMe drives MY verdict; netThem drives the "Would they do it?" read. Base
@@ -1762,7 +1883,7 @@ function recompute() {{
   var netMe   = sumEff(getArr, myMeta) - sumEff(giveArr, myMeta);        // + = I win by MY needs
   var netThem = sumEff(giveArr, partnerMeta) - sumEff(getArr, partnerMeta);  // + = they win by THEIRS
 
-  // Needs the package already resolves — via the SAME resolvedNeeds() helper needLabels() and
+  // Needs the package already resolves — via the SAME resolvedNeeds() helper needSplit() and
   // targetReasons() use, so the verdict, the Deal Coach headline, and the chip wording can never
   // disagree about what this exact in-progress deal already addresses.
   var resolved = resolvedNeeds(myMeta, getArr, giveArr);
@@ -2092,6 +2213,18 @@ function recompute() {{
     + 'My/Their rows re-price it by each side&rsquo;s roster needs.</div>'
     + '<div class="readline" style="margin-top:8px"><span class="readlbl">You gain:</span> ' + gainChips + (posChips?' &nbsp; '+posChips:'') + '</div>'
     + '<div class="readline"><span class="readlbl">You lose:</span> ' + loseChips + '</div>';
+
+  // `add` (the counter-suggestion, if any) is declared via `var` inside the COUNTER/underpay
+  // branch above -- function-scoped, so it's readable here even when that branch never ran
+  // (undefined then, falsy). Reusing it instead of a second counterAddon() call keeps the
+  // verdict `why` text and the Coach's promoted counter-suggestion line always in sync.
+  renderCoach({{
+    myTk: myTk, partnerTk: partnerTk, myMeta: myMeta, partnerMeta: partnerMeta,
+    giveArr: giveArr, getArr: getArr, netVal: netVal, netMe: netMe, netThem: netThem,
+    giveCount: lKeys.length, getCount: rKeys.length,
+    label: label, pfTier: pfTier, isMega: isMega,
+    counterAddon: (typeof add !== 'undefined' && add) ? add : null
+  }});
 }}
 
 function clearAll() {{
