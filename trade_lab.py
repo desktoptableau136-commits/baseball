@@ -488,24 +488,35 @@ def build_partner_fit(pitchers, hitters, roto, team_keys, ranks, n,
                 else:
                     # No candidate cleared the ACCEPT-for-me + realistic-for-them bar, but there's
                     # categorical overlap (i_offer). Before falling back to the generic "worth a
-                    # manual look" text, surface the single best NEAR-MISS deal (ACCEPT for me,
-                    # regardless of the rival-side realism check) if one exists, so a real,
-                    # positive-value ask that only stalls on a star-reach/rival-loss read is
-                    # visible instead of hidden behind a dead-end diagnosis.
-                    near_pool = [d for d in by_team.get(rival, []) if d.get("my_verdict") == "ACCEPT"]
+                    # manual look" text, surface the single best NEAR-MISS deal if one exists —
+                    # widened to BOTH (a) ACCEPT for me but stalling on a star-reach/rival-loss
+                    # read, and (b) COUNTER for me (a real, positive-direction ask that just needs
+                    # me to sweeten it) — so a scarce-position search that only turns up "you'd
+                    # have to pay a bit more" candidates (common when my own needs are thin,
+                    # single-slot positions like C/SS — see CLAUDE.md/docs/trades.md) still shows
+                    # a concrete idea instead of a dead end.
+                    near_pool = [d for d in by_team.get(rival, []) if d.get("my_verdict") in ("ACCEPT", "COUNTER")]
                     near = max(near_pool, key=_score) if near_pool else None
                     if near is not None:
-                        nvp, _nac, _ = _tilt(near)
-                        stuck = _fit_stuck_reason(near.get("ins"), near.get("outs"),
-                                                   near.get("net_val", 0), near.get("net_them"),
-                                                   target_relief=_relief_for(near.get("ins")))
+                        if near.get("my_verdict") == "ACCEPT":
+                            nvp, _nac, _ = _tilt(near)
+                            stuck = _fit_stuck_reason(near.get("ins"), near.get("outs"),
+                                                       near.get("net_val", 0), near.get("net_them"),
+                                                       target_relief=_relief_for(near.get("ins")))
+                            why = f"real value edge for you ({nvp}), but {stuck}"
+                        else:
+                            # COUNTER: the stall is on MY side of the ledger (I'd be paying up),
+                            # not a rival-side realism read — reuse the verdict's own reasoning
+                            # so this can't drift from what the live Deal Coach would say about
+                            # the same package.
+                            why = near.get("my_verdict_why") or "it would take a bit more to get there"
                         records.append({
                             "team": rival, "tier": "SLIM",
                             "get": [{"name": p.get("PlayerName", ""), "pos": _fit_pos_disp(p)}
                                     for p in near["ins"]],
                             "give": [{"name": p.get("PlayerName", ""), "pos": _fit_pos_disp(p)}
                                      for p in near["outs"]],
-                            "why": f"Closest look: real value edge for you ({nvp}), but {stuck}",
+                            "why": f"Closest look: {why}",
                             "acceptPct": _accept_pct(near),
                         })
                     else:

@@ -124,6 +124,9 @@ def _set_trade_caps(max_cards=None, per_team_cap=None):
 
 
 _TRADE_POOL_WIDTH   = 4     # top-N of each side fed into the 2-for-2 combinations
+_TRADE_POS_POOL_WIDTH = 3   # guaranteed slots for genuine position-need fillers that would
+                            # otherwise be truncated out of in_pool/out_pool by a category-driven
+                            # _tscore ranking they were never competing to win (see _ensure_pos_fillers)
 
 
 # --- Consolidation megadeals (Trade Lab strip + the digest Trade Radar's single +1 slot) ---
@@ -404,6 +407,20 @@ def _non_redundant_get_pos(get_pos, outs, ins, my_pos_count):
         if not (post > cap and shed == 0):
             keep.add(P)
     return keep
+
+
+def _ensure_pos_fillers(pool, eligible, fills_fn, width):
+    """Top up `pool` with up to `width` genuine position-need-fillers from `eligible` (the SAME
+    filtered candidate list `pool` was truncated from) that didn't survive the top-N _tscore cut --
+    ranked by _tval, since positional fit is what matters here, not a transient score. Guards
+    against a rival's lone spare C/SS losing a pool-slot ranking fight against their unrelated
+    category-driven trade chips before any combination is ever tried (see CLAUDE.md /
+    _TRADE_POS_POOL_WIDTH). Adds no new eligibility -- every candidate here already passed the
+    same filter `pool` was built from."""
+    have = {id(r) for r in pool}
+    extra = sorted([r for r in eligible if fills_fn(r) and id(r) not in have],
+                   key=lambda r: -r["_tval"])[:width]
+    return pool + extra
 
 
 def _give_pos_sources(r):
@@ -755,7 +772,8 @@ def _grade_package(outs, ins, ctx):
     # Stored on the card so the Partner-Fit board can tier on it, AND used as a hard gate on
     # the prescriptive surfaces (below) so the radar can only ever surface a deal the
     # verdict itself would ACCEPT — the two surfaces can no longer disagree.
-    my_verdict = _pending_verdict(net_me, bool(gcov or gpos), timing, incoming=True)[0]
+    my_verdict, _my_verdict_color, my_verdict_why = _pending_verdict(
+        net_me, bool(gcov or gpos), timing, incoming=True)
     # Season fit: deeper need cats/positions addressed (higher rank number) score more.
     # FAVOR mode tilts to me — their benefit down-weighted (0.3), reward my value edge
     # (+5·net_val). FAIR mode optimizes for a realistic, accepted deal — weight THEIR
@@ -771,7 +789,8 @@ def _grade_package(outs, ins, ctx):
                  + 4.0 * timing - 0.5 * (len(ins) - 1))
     return {
         "team": team, "outs": outs, "ins": ins, "net_val": net_val, "score": score,
-        "net_them": net_them, "net_me": net_me, "my_verdict": my_verdict, "thin_note": thin_note,
+        "net_them": net_them, "net_me": net_me, "my_verdict": my_verdict,
+        "my_verdict_why": my_verdict_why, "thin_note": thin_note,
         "my_give_val": my_give_val, "my_get_val": my_get_val,
         "their_give_val": their_give_val, "their_get_val": their_get_val,
         "lane": mode, "sell_out": sell_out, "buy_in": buy_in,
@@ -905,15 +924,27 @@ def find_trades(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
         # fair return — but still protects a franchise anchor from being auto-offered (the value
         # gate keeps the return fair either way).
         _give_ceil = _TRADE_FAIR_MAX_VAL if mode == "fair" else _TRADE_MAX_VAL
-        out_pool = sorted([r for r in my_players
+        _out_candidates = [r for r in my_players
                            if ((r["_tcats"] & send_cats) or _fills_their_need_pos(r))
                            and (r["_tgroups"] & surplus_pos)
                            and (r["_tval"] <= _give_ceil or r["_tsell"])
-                           and not _is_protected(r, my_key)],
-                          key=lambda r: -r["_tscore"])[:_TRADE_POOL_WIDTH]
+                           and not _is_protected(r, my_key)]
+        out_pool = sorted(_out_candidates, key=lambda r: -r["_tscore"])[:_TRADE_POOL_WIDTH]
+        # Guaranteed top-up: a rival-needed sweetener at one of THEIR thin positions shouldn't
+        # lose a pool-slot fight against my unrelated category-driven trade chips (see
+        # _ensure_pos_fillers / _TRADE_POS_POOL_WIDTH) -- same truncation-vs-eligibility fix as
+        # the in_pool top-up below.
+        out_pool = _ensure_pos_fillers(out_pool, _out_candidates, _fills_their_need_pos,
+                                       _TRADE_POS_POOL_WIDTH)
         # Incoming: helps a category I need OR upgrades a thin position of mine.
-        in_pool  = sorted([r for r in t_players if (r["_tcats"] & get_cats) or _fills_need_pos(r)],
-                          key=lambda r: -r["_tscore"])[:_TRADE_POOL_WIDTH]
+        _in_candidates = [r for r in t_players if (r["_tcats"] & get_cats) or _fills_need_pos(r)]
+        in_pool  = sorted(_in_candidates, key=lambda r: -r["_tscore"])[:_TRADE_POOL_WIDTH]
+        # Guaranteed top-up: a rival's lone spare C/SS is eligible via _fills_need_pos above, but
+        # can still be truncated out of the top-N _tscore cut by their unrelated category-driven
+        # trade chips -- rescue it here so it always reaches the combinatorics below (this is the
+        # fix for the Partner Fit board going near-empty for a team whose only needs are scarce
+        # single-slot positions like SS/C; see CLAUDE.md / docs/trades.md).
+        in_pool = _ensure_pos_fillers(in_pool, _in_candidates, _fills_need_pos, _TRADE_POS_POOL_WIDTH)
         if not out_pool or not in_pool:
             continue
         for r in in_pool:
