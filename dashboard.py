@@ -856,12 +856,12 @@ def render_trade_radar(ctx):
         n_off = len(offer_cards)
         sub = (f'{n_off} incoming offer{"s" if n_off != 1 else ""} to review '
                f'&middot; then 1 idea')
-        # Whenever a live offer leads the tile the body scrolls (the ONLY dashboard scroll
-        # region besides Lineup Watch, per user preference) — so every incoming offer PLUS
-        # the one fresh-partner idea is always reachable, none clipped.
-        body = f'<div style="height:100%;overflow-y:auto;">{body}</div>'
     else:
         title, sub = "Trade Radar", "top mutual-benefit swaps &middot; hover a badge for why"
+    # The tile body always scrolls (one of a small set of dashboard scroll regions, per user
+    # preference) — with 2 radar cards the second one could get clipped by tile-body's
+    # overflow:hidden otherwise, same reason the offer-card path already scrolled.
+    body = f'<div style="height:100%;overflow-y:auto;">{body}</div>'
     # Deep-link the header to the hosted pocket Trade Lab (same URL the digest's trade cards
     # open) so a swap can be dragged out interactively straight from the dashboard.
     tl_link = (
