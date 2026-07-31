@@ -1128,20 +1128,43 @@ function dealSoFar(poss) {{
   }};
 }}
 
+// Which of meta's needs (categories from meta.needs, positions from meta.need_pos) are ALREADY
+// addressed by `addedList` (bodies arriving on the roster being judged), given `shedList` (bodies
+// leaving it) -- the same package-aware criteria dealSoFar/posStacked already use elsewhere:
+// unionCats intersection for categories, score-over-avg + non-stacked for positions. Caller
+// supplies addedList/shedList (straight from dealSoFar(poss), or with a candidate player excluded
+// -- see targetReasons) so this is the single source of truth for "already resolved by the
+// in-progress deal", shared by needLabels, targetReasons, and recompute.
+function resolvedNeeds(meta, addedList, shedList) {{
+  var needPos = meta.need_pos || {{}};
+  var cats = unionCats(addedList || []).filter(function(c) {{ return (meta.needs || []).indexOf(c) >= 0; }});
+  var pos = Object.keys(needPos).filter(function(g) {{
+    var hit = (addedList || []).some(function(x) {{
+      return x.role === 'hit' && (x.tgroups || []).indexOf(g) >= 0 && x.score > needPos[g];
+    }});
+    return hit && !posStacked(g, meta, shedList, addedList);
+  }});
+  return {{ cats: cats, pos: pos }};
+}}
+
 // Why a partner player is worth targeting for MY (left) team: fills a category need
 // or (hitter) upgrades one of my thin positions. Reused from the digest's need logic.
 function targetReasons(p, myMeta, poss) {{
   poss = poss || 'your';
   var out = [];
-  var nc = (p.tcats || []).filter(function(c) {{ return (myMeta.needs || []).indexOf(c) >= 0; }});
+  // Judge BOTH clauses ON TOP of whatever's already picked in the in-progress deal, not the
+  // candidate alone — otherwise a 2nd/3rd same-need pick still reads as a reason to add another
+  // even after an earlier pick in THIS deal already fills it (e.g. a counter-suggestion piling a
+  // 2nd SB bat onto a deal that already lands the category, or a 2nd SS onto one slot).
+  var ds = dealSoFar(poss);
+  var addedOthers = ds.added.filter(function(x) {{ return x.id !== p.id; }});
+  var resolved = resolvedNeeds(myMeta, addedOthers, ds.shed);
+  var nc = (p.tcats || []).filter(function(c) {{
+    return (myMeta.needs || []).indexOf(c) >= 0 && resolved.cats.indexOf(c) < 0;
+  }});
   if (nc.length) out.push('fills ' + poss + ' ' + nc.map(function(c) {{ return DATA.catLabels[c] || c; }}).join('/') + ' need');
   if (p.role === 'hit' && myMeta.need_pos) {{
-    // Judge this add ON TOP of whatever's already picked in the in-progress deal, not the
-    // candidate alone — otherwise a 2nd/3rd same-position piece still reads "upgrades" even
-    // after an earlier pick in THIS deal already fills the slot (e.g. a counter-suggestion
-    // piling a 2nd SS onto a deal that already lands one at that position).
-    var ds = dealSoFar(poss);
-    var getList = ds.added.filter(function(x) {{ return x.id !== p.id; }}).concat([p]);
+    var getList = addedOthers.concat([p]);
     (p.tgroups || []).forEach(function(pos) {{
       if ((pos in myMeta.need_pos) && p.score > myMeta.need_pos[pos] && !posStacked(pos, myMeta, ds.shed, getList))
         out.push('upgrades ' + poss + ' ' + pos);
@@ -1421,9 +1444,13 @@ function flatPool(tk) {{
   return (pl.hit || []).concat(pl.sp || [], pl.rp || []);
 }}
 
-function needLabels(meta) {{
-  var cats = (meta.needs || []).map(function(c) {{ return DATA.catLabels[c] || c; }});
-  return cats.concat(Object.keys(meta.need_pos || {{}}));
+function needLabels(meta, poss) {{
+  var ds = dealSoFar(poss || 'your');
+  var resolved = resolvedNeeds(meta, ds.added, ds.shed);
+  var cats = (meta.needs || []).filter(function(c) {{ return resolved.cats.indexOf(c) < 0; }})
+               .map(function(c) {{ return DATA.catLabels[c] || c; }});
+  var pos = Object.keys(meta.need_pos || {{}}).filter(function(g) {{ return resolved.pos.indexOf(g) < 0; }});
+  return cats.concat(pos);
 }}
 
 function sugChip(side, x) {{
@@ -1443,8 +1470,8 @@ function renderCoach() {{
   var myMeta = DATA.teamsMeta[myTk] || {{ needs:[], surplus:[], need_pos:{{}} }};
   var partnerMeta = DATA.teamsMeta[partnerTk] || {{ needs:[], surplus:[], need_pos:{{}} }};
 
-  var youNeed = needLabels(myMeta);
-  var theyNeed = needLabels(partnerMeta);
+  var youNeed = needLabels(myMeta, 'your');
+  var theyNeed = needLabels(partnerMeta, 'their');
   var leverage = (myMeta.surplus || []).filter(function(c) {{ return (partnerMeta.needs || []).indexOf(c) >= 0; }})
                    .map(function(c) {{ return DATA.catLabels[c] || c; }});
 
@@ -1719,11 +1746,9 @@ function recompute() {{
   var partnerTk = document.getElementById('selR').value;
   var myMeta = DATA.teamsMeta[myTk] || {{needs:[],surplus:[],need_pos:{{}}}};
   var partnerMeta = DATA.teamsMeta[partnerTk] || {{needs:[]}};
-  var myNeeds = myMeta.needs || [];
 
   // Categories gained (from what I get) vs lost (from what I give).
   var gained = unionCats(R), lost = unionCats(L);
-  var needFilled = gained.filter(function(c){{ return myNeeds.indexOf(c) >= 0; }});
 
   // Positional upgrades: an incoming hitter at one of my thin slots whose score clears my avg
   // there — but redundancy-guarded, so stacking a 4th body at a full slot doesn't count as
@@ -1737,16 +1762,12 @@ function recompute() {{
   var netMe   = sumEff(getArr, myMeta) - sumEff(giveArr, myMeta);        // + = I win by MY needs
   var netThem = sumEff(giveArr, partnerMeta) - sumEff(getArr, partnerMeta);  // + = they win by THEIRS
 
-  var posFilled = {{}};
-  rKeys.forEach(function(k){{
-    var p = R[k];
-    if (p.role !== 'hit') return;
-    (p.tgroups||[]).forEach(function(pos){{
-      if (myMeta.need_pos && (pos in myMeta.need_pos) && p.score > myMeta.need_pos[pos]
-          && !posStacked(pos, myMeta, giveArr, getArr)) posFilled[pos]=1;
-    }});
-  }});
-  var posList = Object.keys(posFilled);
+  // Needs the package already resolves — via the SAME resolvedNeeds() helper needLabels() and
+  // targetReasons() use, so the verdict, the Deal Coach headline, and the chip wording can never
+  // disagree about what this exact in-progress deal already addresses.
+  var resolved = resolvedNeeds(myMeta, getArr, giveArr);
+  var needFilled = resolved.cats;
+  var posList = resolved.pos;
   var addressesNeed = needFilled.length > 0 || posList.length > 0;
 
   // Timing: + = I sell-high / buy-low ; - = a trap (dealing a riser / buying a regressor).
