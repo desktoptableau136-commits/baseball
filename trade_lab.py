@@ -991,6 +991,13 @@ var dealPickFold = {{ L:false, R:false }};  // side -> bool; "In this deal" box 
 var coachFold = false;               // Deal Coach collapsed? persists across re-renders
 var TARGET_NET = {{ fair:0.0, favor:0.30, fleece:0.70 }};   // value edge the coach steers toward
 var STUD_CEIL  = {{ fair:99, favor:1.6, fleece:1.2 }};      // don't suggest offering my pieces above this value
+// How much the Coach's own ranking (coachScore, below) cares about whether the HOLDER would
+// actually part with a candidate -- REACH_W penalizes a star premium, SPARE_W rewards a
+// candidate that's surplus (low needMult) for whoever currently rosters him. 'fair' leans
+// hardest into safe/landable pieces; 'fleece' barely cares (a big value edge often requires
+// reaching for a better player, matching TARGET_NET.fleece's own big ask).
+var REACH_W = {{ fair:0.9, favor:0.45, fleece:0.10 }};
+var SPARE_W = {{ fair:1.0, favor:0.55, fleece:0.20 }};
 
 function setStrategy(s) {{ strategy = s; recompute(); }}
 
@@ -1518,13 +1525,16 @@ function sugChip(side, x, bundle) {{
 // remaining slots with clearly-tagged value-only chips (fallback:true) -- so a partial or empty
 // need-match list never silently swaps to an unlabeled "just show top value" list (the old
 // behavior the user flagged as reading like leftover bad advice).
-function fillWithFallback(matched, pool, meta, notPickedFn, capN) {{
+function fillWithFallback(matched, pool, meta, notPickedFn, capN, holderMeta) {{
   var chips = matched.slice(0, capN).map(function(x) {{ return {{ p:x.p, r:x.r, fallback:false }}; }});
   if (chips.length < capN) {{
     var have = {{}};
     matched.forEach(function(x) {{ have[x.p.id] = 1; }});
+    // Padding still favors a realistic (holder-willing) pick over a pure top-value one --
+    // coachScore, not raw tval*needMult -- so a "no strict need match" chip doesn't default to
+    // the holder's single best/star player.
     var extra = pool.filter(notPickedFn).filter(function(p) {{ return !have[p.id]; }})
-      .map(function(p) {{ return {{ p:p, eff: p.tval * needMult(p, meta) }}; }})
+      .map(function(p) {{ return {{ p:p, eff: coachScore(p, meta, holderMeta) }}; }})
       .sort(function(a, b) {{ return b.eff - a.eff; }});
     extra.slice(0, capN - chips.length).forEach(function(x) {{ chips.push({{ p:x.p, r:[], fallback:true }}); }});
   }}
@@ -1559,24 +1569,44 @@ function renderCoach(bundle) {{
     : '';
 
   function notPicked(p) {{ return !picked.L[p.id] && !picked.R[p.id]; }}
-  function rank(pool, meta, poss) {{
+  // Never SUGGEST a candidate that would objectively wreck the ask -- drop a hitter position
+  // below startable depth on whichever side receives him. `simulateAdd`'s `short` flag already
+  // catches this (it's what lights up the red "short" glyph on a chip), but until now that was
+  // display-only: a candidate could still win the ranking and occupy a suggestion slot, THEN get
+  // flagged as a bad idea. `_leaves_position_short` is a hard veto everywhere else this engine
+  // generates a deal (find_trades/_grade_package); the Coach's own suggestions are held to the
+  // same bar now. 'thin' (at the floor, no backup, but still meets it) stays a soft, visible
+  // warning on whatever DOES get suggested -- only 'short' (drops below the floor) is excluded
+  // from the candidate pool outright.
+  function notWrecking(side) {{
+    return function(p) {{ return !simulateAdd(side, p, bundle).short; }};
+  }}
+  // `holderMeta` = the team meta of whoever currently rosters `pool` -- fed into coachScore so
+  // the ranking (not just the need-match filter) reflects whether THAT team would realistically
+  // let a candidate go, tuned by the active strategy (REACH_W/SPARE_W).
+  function rank(pool, meta, poss, holderMeta) {{
     var out = pool.filter(notPicked).map(function(p) {{ return {{ p:p, r:targetReasons(p, meta, poss) }}; }})
                   .filter(function(x) {{ return x.r.length; }});
-    out.sort(function(a, b) {{ return (b.p.tval * needMult(b.p, meta)) - (a.p.tval * needMult(a.p, meta)); }});
+    out.sort(function(a, b) {{ return coachScore(b.p, meta, holderMeta) - coachScore(a.p, meta, holderMeta); }});
     return out;
   }}
-  // GET = partner players that fill MY needs; OFFER = my players that fill THEIRS.
-  var getSugMatched = rank(flatPool(partnerTk), myMeta, 'your');
-  var giveSugMatched = rank(flatPool(myTk), partnerMeta, 'their');
+  // GET = partner players that fill MY needs (holder = partner, so realism is judged against
+  // THEIR roster); OFFER = my players that fill THEIRS (holder = me). Both pools are pre-filtered
+  // to candidates that don't wreck the giving side's depth, so a suggestion can never contradict
+  // its own risk glyph.
+  var getPool = flatPool(partnerTk).filter(notWrecking('R'));
+  var givePool = flatPool(myTk).filter(notWrecking('L'));
+  var getSugMatched = rank(getPool, myMeta, 'your', partnerMeta);
+  var giveSugMatched = rank(givePool, partnerMeta, 'their', myMeta);
   // Strategy gates the OFFER list: the harder I favor myself, the more I protect my
   // studs (value ceiling) and the cheaper the need-filler I lead with (ascending value).
   var ceil = STUD_CEIL[strategy];
   giveSugMatched = giveSugMatched.filter(function(x) {{ return x.p.tval <= ceil; }});
   if (strategy !== 'fair') giveSugMatched.sort(function(a, b) {{ return a.p.tval - b.p.tval; }});
 
-  var getSug = fillWithFallback(getSugMatched, flatPool(partnerTk), myMeta, notPicked, 4);
+  var getSug = fillWithFallback(getSugMatched, getPool, myMeta, notPicked, 4, partnerMeta);
   var giveSug = fillWithFallback(giveSugMatched,
-    flatPool(myTk).filter(function(p) {{ return p.tval <= ceil; }}), partnerMeta, notPicked, 4);
+    givePool.filter(function(p) {{ return p.tval <= ceil; }}), partnerMeta, notPicked, 4, myMeta);
   var getHtml = getSug.length
     ? fallbackNote(getSug) + getSug.map(function(x) {{ return sugChip('R', x, bundle); }}).join('')
     : '<span class="empty">none</span>';
@@ -1636,17 +1666,32 @@ function toggleCoach() {{ coachFold = !coachFold; recompute(); }}
 // overpay, preferring one that fills a need of mine (then buy-low, then the value
 // closest to the gap). Mirrors send_digest _counter_suggestion. Returns a player
 // (with _cr = the need-reasons array) or null. gap = how much I'm overpaying (>0).
-function counterAddon(partnerTk, myMeta, gap) {{
+// giveArr/getArr = the deal ALREADY in progress -- used only to guard against a candidate that
+// would itself wreck the ask (see below), not to re-derive the gap.
+function counterAddon(partnerTk, myMeta, partnerMeta, giveArr, getArr, gap) {{
   if (gap <= 0.1) return null;
   var lo = 0.7 * gap, hi = gap + 0.45;                  // enough to close it, not a new overpay
   var cands = flatPool(partnerTk).filter(function(p) {{
-    return !picked.L[p.id] && !picked.R[p.id] && p.tval >= lo && p.tval <= hi;
+    if (picked.L[p.id] || picked.R[p.id]) return false;
+    if (p.tval < lo || p.tval > hi) return false;
+    // A star is never a mere "sweetener" -- if he clears the star-premium floor, a rival
+    // wouldn't toss him in just to even out someone else's deal (that IS the deal at that
+    // point). Also refuse a 2nd body at a position already represented in what I'm acquiring,
+    // if it would leave the partner short there (e.g. their backup SS is already in the deal --
+    // don't also ask for the starter SS, which guts their only scarce-position depth).
+    if (starPremium(p.tvalStar != null ? p.tvalStar : p.tval) > 0.01) return false;
+    if (leavesShort(partnerMeta.pos_count, (getArr || []).concat([p]), giveArr || []).length) return false;
+    return true;
   }});
   if (!cands.length) return null;
-  cands.forEach(function(p) {{ p._cr = targetReasons(p, myMeta, 'your'); }});
+  cands.forEach(function(p) {{
+    p._cr = targetReasons(p, myMeta, 'your');
+    p._spare = spareScore(p, partnerMeta);
+  }});
   cands.sort(function(a, b) {{
     var an = a._cr.length ? 1 : 0, bn = b._cr.length ? 1 : 0;
     if (bn !== an) return bn - an;                       // need-fillers first
+    if (Math.abs(b._spare - a._spare) > 0.05) return b._spare - a._spare;  // then a genuinely spare piece
     var ab = a.buy ? 1 : 0, bb = b.buy ? 1 : 0;
     if (bb !== ab) return bb - ab;                       // then buy-low pieces
     return Math.abs(a.tval - gap) - Math.abs(b.tval - gap);  // then closest to the gap
@@ -1772,6 +1817,29 @@ function needMult(p, meta) {{
   return Math.max(T.needClamp[0], Math.min(T.needClamp[1], m));
 }}
 function sumEff(arr, meta) {{ var s = 0; arr.forEach(function(p) {{ s += (p.tval || 0) * needMult(p, meta); }}); return s; }}
+
+// How willing the HOLDER (whoever currently rosters p) is to part with him -- the inverse of
+// needMult(p, holderMeta): a LOW need-multiplier there means p only helps where the holder is
+// already deep, i.e. a low-resistance, realistic ask. Same signal arbMarker's gap already uses,
+// exposed on its own so the Deal Coach's ranking (coachScore, below) can lean on it directly.
+function spareScore(p, holderMeta) {{
+  return DATA.tune.needClamp[1] - needMult(p, holderMeta || {{}});
+}}
+
+// The Deal Coach's own ranking score -- NOT the trade value/verdict math (that stays pure
+// tval * needMult everywhere else). Blends in whether the CURRENT HOLDER would realistically
+// let this player go: a star premium (starPremium, defined above) hurts the score, being surplus
+// for the holder (spareScore) helps it, both tuned by the active strategy (REACH_W/SPARE_W) so
+// 'fair' leads with safe/landable role players and 'fleece' is willing to reach for a star.
+// holderMeta is optional -- omit it (e.g. a candidate with no clear holder context) to fall back
+// to plain effective value.
+function coachScore(p, meta, holderMeta) {{
+  var eff = (p.tval || 0) * needMult(p, meta);
+  if (!holderMeta) return eff;
+  var reach = starPremium(p.tvalStar != null ? p.tvalStar : p.tval) * (REACH_W[strategy] || 0);
+  var spare = spareScore(p, holderMeta) * (SPARE_W[strategy] || 0);
+  return eff * (1 + spare - reach);
+}}
 
 // Simulates adding candidate `p` on top of the CURRENT in-progress deal (bundle.giveArr/getArr)
 // -- mirrors the exact acceptance-layer fns recompute()'s own verdict uses (targetRelief/thinPos/
@@ -1919,7 +1987,7 @@ function recompute() {{
   }} else if (addressesNeed) {{
     label='COUNTER'; color='{YELLOW}';
     if (netMe < -0.1) {{
-      var add = counterAddon(partnerTk, myMeta, -netVal);
+      var add = counterAddon(partnerTk, myMeta, partnerMeta, giveArr, getArr, -netVal);
       if (add) {{
         var rz = add._cr && add._cr.length ? ' (' + add._cr.join(', ') + ')' : '';
         why = "right direction but you'd be paying up &mdash; counter: ask them to add "

@@ -1548,12 +1548,21 @@ def _fmt_trade_expiry(iso, today_str):
 
 
 def _counter_suggestion(gap, partner_key, pitchers, hitters, my_needs, need_pos,
-                        best_recent_p, best_recent_h, hit_pctile, pit_pctile, exclude_keys):
+                        best_recent_p, best_recent_h, hit_pctile, pit_pctile, exclude_keys,
+                        ins=None, outs=None, t_pos_count=None):
     """When an incoming offer has me overpaying by `gap` (my give value − their get value),
     suggest the single best ADD-ON to request from the partner: a spareable piece that
     closes the value gap and, ideally, helps a category/positional need of mine. Reuses the
     Trade Radar enrich/value machinery so the ask stays realistic (won't request a stud far
-    above what evens the deal). Returns a phrase like 'ask them to add X (adds SB, C)'."""
+    above what evens the deal). Returns a phrase like 'ask them to add X (adds SB, C)'.
+    `ins`/`outs`/`t_pos_count` (the offer's already-incoming pieces, already-outgoing pieces,
+    and the partner's rostered position counts) guard the pick: a candidate who is himself a
+    star (_star_premium) is never suggested as a mere sweetener, and a candidate that would
+    leave the partner short at a hitter position already represented in `ins` is skipped too
+    (e.g. their backup SS is already incoming -- don't also ask for their starter SS, which
+    guts their only depth at a scarce slot). All three optional so a caller that can't supply
+    them degrades to the old value-range-only behavior. Mirrored byte-for-byte in the Trade
+    Lab JS `counterAddon` -- keep the two guards in sync."""
     if gap <= 0.1:
         return ""
     def _roster(source):
@@ -1571,6 +1580,10 @@ def _counter_suggestion(gap, partner_key, pitchers, hitters, my_needs, need_pos,
         v = r["_tval"]
         if v <= 0 or v > gap + _TRADE_MAX_EDGE:     # nothing to add / an unrealistic overreach
             continue
+        if _star_premium(r.get("_tval_star", v)) > 0.01:   # a star is never a mere sweetener
+            continue
+        if t_pos_count is not None and _leaves_position_short(t_pos_count, (ins or []) + [r], outs or []):
+            continue   # would gut the partner's depth at a position already incoming
         need_hit = bool(r["_tcats"] & my_needs) or bool(_hitter_fills_need_pos(r, need_pos))
         closes   = v >= gap * 0.7
         key = (closes, need_hit, bool(r.get("_tbuy")), -abs(v - gap))
@@ -1665,9 +1678,11 @@ def _grade_pending_trades(pending, pitchers, hitters, roto, my_team,
         counter = ""
         if verdict and verdict[0] == "COUNTER":
             exclude = {_badge_name_key(nm) for (_r, nm) in get_rows + give_rows}
+            t_pos_count = _team_position_counts(hitters, partner)
             counter = _counter_suggestion(-net_val, partner, pitchers, hitters, my_needs,
                                           need_pos, best_recent_p, best_recent_h,
-                                          hit_pctile, pit_pctile, exclude)
+                                          hit_pctile, pit_pctile, exclude,
+                                          ins=ins, outs=outs, t_pos_count=t_pos_count)
 
         gains = ([_CAT_DISPLAY.get(c, c) for c in sorted(gcov, key=lambda c: -ranks[my_key][c])]
                  + [f"{p} slot" for p in sorted(gpos, key=lambda p: -need_pos[p][0])])
