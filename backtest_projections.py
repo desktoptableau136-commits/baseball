@@ -349,6 +349,8 @@ def main():
     recency_pairs = []   # (signed FIP-vs-xERA gap, ER residual = actual-projected) per flagged start
     recency_bucket = {"declining": Acc(), "improving": Acc(), "noise": Acc()}
     _RECENCY_GAP = args.recency_gap
+    shipped_bucket = {"bounceback": Acc(), "regression": Acc(), "noise": Acc()}  # calls the REAL
+    # sd.pitcher_bounceback_flag/_recent_fip directly (not a parallel copy) -- the shipped design
     csv_rows = []
     lg_ops = sd._LG.get("team_ops") or 0.717
     lg_k = sd._LG.get("team_k") or 0.22
@@ -464,6 +466,15 @@ def main():
                             if rflag in ("declining", "improving"):
                                 signed = gap / _RECENCY_GAP
                                 recency_pairs.append((signed, a_er - p_er))
+                        # ---- SHIPPED-CODE validation: calls the REAL sd.pitcher_bounceback_flag
+                        # / sd._recent_fip (fantasy/scoring.py) directly, not a parallel copy --
+                        # same "test the exact formula that ships" standard as the LIVE ER/K/IP
+                        # comparison above. Uses the trailing-30-day recent_row already built.
+                        if r30_ip > 0:
+                            ship_recent_row = {"IP": r30_ip, "HR": r30_hr, "BB": r30_bb, "K": r30_k}
+                            ship_flag = sd.pitcher_bounceback_flag(skill_row, ship_recent_row)
+                            if ship_flag in shipped_bucket:
+                                shipped_bucket[ship_flag].add(p_er, a_er)
                     scored += 1
                     if args.csv:
                         csv_rows.append([name, g["date"], hva, f"{p_ip:.2f}", p_er, p_k,
@@ -582,6 +593,34 @@ def main():
               f"(want CLEARLY positive -- worse recent FIP should predict a worse residual)")
     else:
         print(f"  (only {len(recency_pairs)} flagged starts -- need >=40; run without --limit.)")
+
+    print("\nSHIPPED sd.pitcher_bounceback_flag / sd._recent_fip (fantasy/scoring.py) -- calls the")
+    print("REAL production code directly (fixed thresholds: _BOUNCEBACK_MIN_IP/_BOUNCEBACK_GAP_ERA/")
+    print("_FIP_CONSTANT), trailing-30-day recent_row, NOT a parallel copy or a swept parameter.")
+    n_bb, n_rg, n_ns = (shipped_bucket["bounceback"].n, shipped_bucket["regression"].n,
+                        shipped_bucket["noise"].n)
+    print(f"  n bounceback={n_bb}  regression={n_rg}  noise={n_ns}")
+    ship_base_pairs = (shipped_bucket["bounceback"].pairs + shipped_bucket["regression"].pairs
+                       + shipped_bucket["noise"].pairs)
+    ship_base_worse = (sum(1 for p, a in ship_base_pairs if a > p) / len(ship_base_pairs)) if ship_base_pairs else 0.0
+    if shipped_bucket["bounceback"].pairs:
+        bp = shipped_bucket["bounceback"].pairs
+        # bounceback = badge claims next start trends BETTER than the recent line -> want a
+        # LOW worse-than-projected rate (below the population base rate).
+        br = sum(1 for p, a in bp if a > p) / len(bp)
+        print(f"  BOUNCEBACK badge: actual worse-than-projected rate={br:.1%}  "
+              f"(base rate={ship_base_worse:.1%}, ratio={br/ship_base_worse if ship_base_worse else 0:.2f}x "
+              f"-- want CLEARLY <1.0x)")
+    if shipped_bucket["regression"].pairs:
+        rp = shipped_bucket["regression"].pairs
+        # regression = badge claims next start trends WORSE than the recent line -> want a HIGH
+        # worse-than-projected rate (above the population base rate).
+        rr = sum(1 for p, a in rp if a > p) / len(rp)
+        print(f"  REGRESSION badge: actual worse-than-projected rate={rr:.1%}  "
+              f"(base rate={ship_base_worse:.1%}, ratio={rr/ship_base_worse if ship_base_worse else 0:.2f}x "
+              f"-- want CLEARLY >1.0x)")
+    print("  (this is the pass/fail check for what actually shipped -- confirms the production")
+    print("  formula/thresholds reproduce the validated direction, not just the design concept.)")
 
     if args.csv:
         os.makedirs("scratchpad", exist_ok=True)
