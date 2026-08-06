@@ -246,6 +246,8 @@ def build_data(snap, my_team):
         "posStarters": {p: sd.POS_STARTERS.get(p, 1) for p in ("C","1B","2B","3B","SS","OF")},
         "posScarcity": {p: round(sd._POS_SCARCITY.get(p, 1.0), 3) for p in ("C","1B","2B","3B","SS","OF")},
         "posSlack":  sd._POS_DEPTH_SLACK,   # redundancy guard: bench/flex bodies allowed beyond starters
+        "posNeedSwapSlack": sd._POS_NEED_SWAP_SLACK,  # extra cap credit for an already-thin/need position
+            # (posStacked is only ever called on a need_pos position -- see _non_redundant_get_pos mirror)
         # Acceptance-model tuning baked from send_digest so the Lab JS can't drift from the digest:
         # graduated star reluctance + aggressive realistic band + demand-side need multiplier.
         "tune": {
@@ -1104,14 +1106,20 @@ var ROLE_LABEL = {{ hit:'Hitters', sp:'Starting Pitchers', rp:'Relief Pitchers' 
 var POS_GROUPS = ['C','1B','2B','3B','SS','OF','DH'];   // hitters group under EACH eligible slot (mirrors _POS_ORDER)
 
 // Redundancy guard (mirrors send_digest._non_redundant_get_pos): a position is "stacked"
-// when acquiring these players leaves me more eligible bodies than startable slots + one
-// bench (posStarters[P] + posSlack) AND I shed nobody eligible there. So a 4th catcher
-// stops reading as "fills your C" unless the deal also deals a catcher back (a swap).
+// when acquiring these players leaves me more eligible bodies than startable slots + bench
+// slack + the one-time need-swap credit (posStarters[P] + posSlack + posNeedSwapSlack) AND I
+// shed nobody eligible there. So a 4th catcher still stops reading as "fills your C" unless
+// the deal also deals a catcher back (a swap) -- but BOTH callers (resolvedNeeds/targetReasons)
+// only ever call this on a position already listed in need_pos, so the extra credit never
+// loosens a genuinely-deep, non-need position: it exists so a single real upgrade at an
+// already-thin spot (I own one mediocre body there) still counts even without a same-position
+// give-back, since the expectation is the weak incumbent gets dropped separately afterward
+// (a normal waiver move), not swapped away inside the trade itself.
 function posStacked(pos, myMeta, giveList, getList) {{
   var added = (getList  || []).filter(function(p) {{ return (p.tgroups || []).indexOf(pos) >= 0; }}).length;
   var shed  = (giveList || []).filter(function(p) {{ return (p.tgroups || []).indexOf(pos) >= 0; }}).length;
   var post  = (((myMeta.pos_count || {{}})[pos]) || 0) - shed + added;
-  var cap   = ((DATA.posStarters || {{}})[pos] || 1) + (DATA.posSlack || 0);
+  var cap   = ((DATA.posStarters || {{}})[pos] || 1) + (DATA.posSlack || 0) + (DATA.posNeedSwapSlack || 0);
   return post > cap && shed === 0;
 }}
 
