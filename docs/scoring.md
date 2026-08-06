@@ -92,13 +92,21 @@ every other matchup-dependent section's empty-state guard).
   column, sharing the same `slots_left`/`_used_drops` state so the two columns' drop picks still
   never collide). `_GAMEPLAN_MAX_MOVES` = the sum (4), kept only for the section subtitle. Ranking
   within each column is by **matchup-level lift** (`_move_win_delta`), not a single category's swing:
-  - **`_pickup_contrib(cand_row, role, remaining_frac, today_str, week_end_str, weeks_played)`** →
+  - **`_pickup_contrib(cand_row, role, remaining_frac, today_str, week_end_str, weeks_played, team_game_dates=None, opp_starter_by_date=None, pitchers_by_name=None)`** →
     `{cat: delta}` — the role-aware remaining-production estimate, extracted out of
     `pickup_win_delta` (the FA-table "Cats" column's swing chip) so both the chip and the Game Plan
     ranking share the exact same contribution math and can't disagree about what an add actually
-    produces. SP uses actual remaining starts × per-start rate; RP/hit rate-pace the season total by
-    `weeks_played` × `remaining_frac`. `pickup_win_delta` now calls this helper (its own
-    gating/return shape is unchanged — verify with `render_diff.py check`).
+    produces. SP uses actual remaining starts × per-start rate; RP rate-paces the season total by
+    `weeks_played` × `remaining_frac`. **hit rate-paces by `weeks_played` × a quality-weighted
+    fraction** — the SAME per-day opposing-starter-quality weighting as `compute_hit_proj`'s Tier 2
+    (via `_opp_starter_quality_mult`, `send_digest.py`), just scoped to this ONE candidate's own MLB
+    team instead of a whole fantasy roster: walks his team's remaining scheduled dates (from
+    `team_game_dates`), scores each day's opposing probable starter via `qs_probability`
+    (`opp_starter_by_date` → `pitchers_by_name` lookup), and uses the resulting weighted fraction in
+    place of the flat `remaining_frac`. Falls back to flat `remaining_frac` when any of the three
+    optional args is missing or his team can't be resolved to scheduled games (old snapshots degrade
+    cleanly). `pickup_win_delta`/`_move_win_delta` both thread these three args straight through to
+    this helper (its own gating/return shape is unchanged — verify with `render_diff.py check`).
   - **`_move_win_delta(cand_row, role, winprob_ctx, per_cat, remaining_frac, today_str,
     week_end_str, weeks_played)`** → `(best_cat, cat_before%, cat_after%, week_before%, week_after%)`
     or `None`. Folds `_pickup_contrib`'s deltas into a COPY of `per_cat` (never mutates the shared
