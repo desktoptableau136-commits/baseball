@@ -12,6 +12,10 @@ Run:
   python backtest_projections.py                 # broad starter set, cached
   python backtest_projections.py --limit 30 --no-cache   # quick smoke test
   python backtest_projections.py --csv           # dump per-start rows
+  python backtest_projections.py --recency-metric kwera --recency-window 60
+      # sweep the recency-vs-xERA diagnostic (see fantasy.scoring's pitcher_bounceback_flag /
+      # disabled pitcher_recency_flag docstrings for what this validated and why) with a
+      # different recent-window metric [era|fip|kwera] / calendar-day window / gap threshold
 
 Simplification (noted in the report): the pitcher's own line is strictly
 walk-forward, but the OPPONENT OPS/K adjustment uses each team's full-season
@@ -22,6 +26,7 @@ import json
 import math
 import os
 import time
+from datetime import date as _date
 import requests
 
 import send_digest as sd
@@ -62,6 +67,38 @@ def _proj_legacy(era, kip, ip_per_g, opp_ops, opp_k, hva, lg_ops, lg_k):
     er = round(raw_er * opp_factor * park_factor)
     k = round(kip * ip * k_factor) if kip > 0 else 0
     return ip, er, k
+
+
+def _parse_date(s):
+    try:
+        y, m, d = str(s).split("-")
+        return _date(int(y), int(m), int(d))
+    except (ValueError, TypeError):
+        return None
+
+
+_FIP_CONSTANT = 3.10  # standard-ish MLB FIP constant; only used for a relative recent-vs-season
+                       # comparison, so a fixed reasonable value (not season-recalibrated) is fine
+
+
+def _fip(hr, bb, hbp, k, ip):
+    """Fielding-Independent Pitching: only counts K/BB/HBP/HR (outcomes a pitcher controls
+    independent of defense/BABIP/strand-rate luck), unlike raw ERA which is dominated by
+    sequencing variance over a small sample. Candidate FIX #1 for the recency flag's
+    inverted-direction bug (see pitcher_recency_flag's DISABLED docstring)."""
+    if ip <= 0:
+        return 0.0
+    return (13.0 * hr + 3.0 * (bb + hbp) - 2.0 * k) / ip + _FIP_CONSTANT
+
+
+def _kwera(k, bb, bf):
+    """kwERA: ERA-scale estimate from K% and BB% ONLY (no HR term) -- excludes the
+    lowest-frequency, highest-variance FIP component (HR is a rare event; over 20-30 IP its
+    rate is itself extremely noisy). Candidate FIX #2: tests whether FIP's reversal was really
+    about HR-rate noise specifically, not BABIP/strand-rate in general."""
+    if bf <= 0:
+        return 0.0
+    return 5.40 - 12.0 * (k / bf) + 10.0 * (bb / bf)
 
 
 def _nk(name):
@@ -161,6 +198,9 @@ def get_game_log(pid, season, use_cache=True):
             "k": float(st.get("strikeOuts") or 0),
             "pitches": float(st.get("numberOfPitches") or 0),
             "bf": float(st.get("battersFaced") or 0),
+            "hr": float(st.get("homeRuns") or 0),
+            "bb": float(st.get("baseOnBalls") or 0),
+            "hbp": float(st.get("hitBatsmen") or 0),
         })
     games.sort(key=lambda g: g["date"])
     return games
@@ -252,6 +292,12 @@ def main():
                     help="min prior IP before a start is scored")
     ap.add_argument("--no-cache", action="store_true")
     ap.add_argument("--csv", action="store_true")
+    ap.add_argument("--recency-window", type=int, default=30,
+                    help="trailing calendar days for the recency experiment")
+    ap.add_argument("--recency-gap", type=float, default=1.50,
+                    help="recent-metric-vs-xERA gap threshold to flag declining/improving")
+    ap.add_argument("--recency-metric", choices=["era", "fip", "kwera"], default="fip",
+                    help="which recent-window metric to test against season xERA")
     args = ap.parse_args()
     use_cache = not args.no_cache
 
@@ -300,6 +346,11 @@ def main():
     er_bucket = {"weak": Acc(), "avg": Acc(), "strong": Acc()}
 
     risk_pairs = []      # (blowup_risk score, actual_blowup 0/1) per scored start
+    recency_pairs = []   # (signed FIP-vs-xERA gap, ER residual = actual-projected) per flagged start
+    recency_bucket = {"declining": Acc(), "improving": Acc(), "noise": Acc()}
+    _RECENCY_GAP = args.recency_gap
+    shipped_bucket = {"bounceback": Acc(), "regression": Acc(), "noise": Acc()}  # calls the REAL
+    # sd.pitcher_bounceback_flag/_recent_fip directly (not a parallel copy) -- the shipped design
     csv_rows = []
     lg_ops = sd._LG.get("team_ops") or 0.717
     lg_k = sd._LG.get("team_k") or 0.22
@@ -315,7 +366,7 @@ def main():
         # cumulative-through-prior totals
         c_ip = c_er = c_k = c_pitches = c_bf = 0.0
         c_games = c_starts = 0
-        recent = []                       # trailing (ip, er) of prior STARTS (walk-forward L15 proxy)
+        recent = []                       # trailing (date, ip, er, hr, bb, hbp, k, bf) of prior STARTS
         skill_row = skill_by_name.get(_nk(name))
         for g in games:
             prior_ip = c_ip
@@ -373,12 +424,57 @@ def main():
                         ip_pred["pitches/inn (eff.)"].add(c_pitches / c_ip, a_ip)
                     # ---- BLOWUP-RISK validation (skill propensity + walk-forward L15) ----
                     if skill_row is not None:
-                        r3ip = sum(x[0] for x in recent[-3:])
-                        r3er = sum(x[1] for x in recent[-3:])
+                        r3ip = sum(x[1] for x in recent[-3:])
+                        r3er = sum(x[2] for x in recent[-3:])
                         rec_era = (9.0 * r3er / r3ip) if r3ip > 0 else None
                         risk = sd.blowup_risk(skill_row, recent_era=rec_era)
                         if risk > 0:
                             risk_pairs.append((risk, 1 if _is_blowup(a_ip, a_er) else 0))
+                    # ---- RECENCY-FIP validation (candidate FIX for the disabled ERA-based
+                    # pitcher_recency_flag). Trailing-30-calendar-day window (walk-forward: only
+                    # starts strictly before this one). Tests recent FIP (K/BB/HBP/HR only --
+                    # defense/BABIP/strand-rate independent) vs season xERA, instead of the old
+                    # noisy recent-ERA-vs-xERA comparison, against THIS start's residual (actual
+                    # ER minus the live opp/park-adjusted projection).
+                    if skill_row is not None and vals is not None:
+                        xera = sd._n(skill_row.get("xERA"))
+                        cutoff = _parse_date(g["date"])
+                        r30_ip = r30_er = r30_hr = r30_bb = r30_hbp = r30_k = r30_bf = 0.0
+                        if cutoff:
+                            for d_str, ip_, er_, hr_, bb_, hbp_, k_, bf_ in recent:
+                                d_ = _parse_date(d_str)
+                                if d_ and 0 <= (cutoff - d_).days <= args.recency_window:
+                                    r30_ip += ip_
+                                    r30_er += er_
+                                    r30_hr += hr_
+                                    r30_bb += bb_
+                                    r30_hbp += hbp_
+                                    r30_k += k_
+                                    r30_bf += bf_
+                        if r30_ip > 0 and xera > 0:
+                            if args.recency_metric == "fip":
+                                recent_val = _fip(r30_hr, r30_bb, r30_hbp, r30_k, r30_ip)
+                            elif args.recency_metric == "kwera":
+                                recent_val = _kwera(r30_k, r30_bb, r30_bf)
+                            else:
+                                recent_val = 9.0 * r30_er / r30_ip
+                            gap = recent_val - xera
+                            rflag = ("declining" if gap >= _RECENCY_GAP
+                                      else "improving" if gap <= -_RECENCY_GAP else "noise")
+                            if rflag in recency_bucket:
+                                recency_bucket[rflag].add(p_er, a_er)
+                            if rflag in ("declining", "improving"):
+                                signed = gap / _RECENCY_GAP
+                                recency_pairs.append((signed, a_er - p_er))
+                        # ---- SHIPPED-CODE validation: calls the REAL sd.pitcher_bounceback_flag
+                        # / sd._recent_fip (fantasy/scoring.py) directly, not a parallel copy --
+                        # same "test the exact formula that ships" standard as the LIVE ER/K/IP
+                        # comparison above. Uses the trailing-30-day recent_row already built.
+                        if r30_ip > 0:
+                            ship_recent_row = {"IP": r30_ip, "HR": r30_hr, "BB": r30_bb, "K": r30_k}
+                            ship_flag = sd.pitcher_bounceback_flag(skill_row, ship_recent_row)
+                            if ship_flag in shipped_bucket:
+                                shipped_bucket[ship_flag].add(p_er, a_er)
                     scored += 1
                     if args.csv:
                         csv_rows.append([name, g["date"], hva, f"{p_ip:.2f}", p_er, p_k,
@@ -392,7 +488,7 @@ def main():
             c_games += 1
             if g["gs"] >= 1:
                 c_starts += 1
-                recent.append((g["ip"], g["er"]))
+                recent.append((g["date"], g["ip"], g["er"], g["hr"], g["bb"], g["hbp"], g["k"], g["bf"]))
         if i % 25 == 0:
             print(f"  [{i}/{len(pool)}] processed, {scored} starts scored so far")
 
@@ -464,6 +560,67 @@ def main():
               "real, useful floor read -- swapping raw ERA for the xERA regression moves AUC <0.01.)")
     else:
         print(f"  (only {len(risk_pairs)} risk-scored starts -- need >=100; run without --limit.)")
+
+    print("\nRECENCY-FIP CANDIDATE FIX (recent FIP vs season xERA, NOT wired into any score) --")
+    print("does trailing-30-day FIP predict THIS start's residual (actual ER minus the live")
+    print("opp/park-adjusted projection), where recent raw ERA (the disabled design) did not?")
+    n_decl, n_impr, n_noise = (recency_bucket["declining"].n, recency_bucket["improving"].n,
+                                recency_bucket["noise"].n)
+    print(f"  n declining={n_decl}  improving={n_impr}  noise={n_noise}")
+    if n_decl:
+        print("  " + recency_bucket["declining"].row("decl."))
+    if n_impr:
+        print("  " + recency_bucket["improving"].row("impr."))
+    base_pairs = (recency_bucket["declining"].pairs + recency_bucket["improving"].pairs
+                  + recency_bucket["noise"].pairs)
+    base_worse_rate = (sum(1 for p, a in base_pairs if a > p) / len(base_pairs)) if base_pairs else 0.0
+    if recency_bucket["declining"].pairs:
+        dp = recency_bucket["declining"].pairs
+        dr = sum(1 for p, a in dp if a > p) / len(dp)
+        print(f"  DECLINING: actual worse-than-projected rate={dr:.1%}  "
+              f"(base rate={base_worse_rate:.1%}, lift={dr/base_worse_rate if base_worse_rate else 0:.2f}x "
+              f"-- expect >1.0x if the flag confirms a real ongoing decline)")
+    if recency_bucket["improving"].pairs:
+        ip_ = recency_bucket["improving"].pairs
+        ir = sum(1 for p, a in ip_ if a < p) / len(ip_)
+        base_better_rate = 1.0 - base_worse_rate
+        print(f"  IMPROVING: actual better-than-projected rate={ir:.1%}  "
+              f"(base rate={base_better_rate:.1%}, lift={ir/base_better_rate if base_better_rate else 0:.2f}x "
+              f"-- expect >1.0x if the flag confirms a real ongoing improvement)")
+    if len(recency_pairs) >= 40:
+        r = _pearson(recency_pairs)
+        print(f"  signed FIP-gap vs residual: n={len(recency_pairs)}  Pearson r={r:+.3f}  "
+              f"(want CLEARLY positive -- worse recent FIP should predict a worse residual)")
+    else:
+        print(f"  (only {len(recency_pairs)} flagged starts -- need >=40; run without --limit.)")
+
+    print("\nSHIPPED sd.pitcher_bounceback_flag / sd._recent_fip (fantasy/scoring.py) -- calls the")
+    print("REAL production code directly (fixed thresholds: _BOUNCEBACK_MIN_IP/_BOUNCEBACK_GAP_ERA/")
+    print("_FIP_CONSTANT), trailing-30-day recent_row, NOT a parallel copy or a swept parameter.")
+    n_bb, n_rg, n_ns = (shipped_bucket["bounceback"].n, shipped_bucket["regression"].n,
+                        shipped_bucket["noise"].n)
+    print(f"  n bounceback={n_bb}  regression={n_rg}  noise={n_ns}")
+    ship_base_pairs = (shipped_bucket["bounceback"].pairs + shipped_bucket["regression"].pairs
+                       + shipped_bucket["noise"].pairs)
+    ship_base_worse = (sum(1 for p, a in ship_base_pairs if a > p) / len(ship_base_pairs)) if ship_base_pairs else 0.0
+    if shipped_bucket["bounceback"].pairs:
+        bp = shipped_bucket["bounceback"].pairs
+        # bounceback = badge claims next start trends BETTER than the recent line -> want a
+        # LOW worse-than-projected rate (below the population base rate).
+        br = sum(1 for p, a in bp if a > p) / len(bp)
+        print(f"  BOUNCEBACK badge: actual worse-than-projected rate={br:.1%}  "
+              f"(base rate={ship_base_worse:.1%}, ratio={br/ship_base_worse if ship_base_worse else 0:.2f}x "
+              f"-- want CLEARLY <1.0x)")
+    if shipped_bucket["regression"].pairs:
+        rp = shipped_bucket["regression"].pairs
+        # regression = badge claims next start trends WORSE than the recent line -> want a HIGH
+        # worse-than-projected rate (above the population base rate).
+        rr = sum(1 for p, a in rp if a > p) / len(rp)
+        print(f"  REGRESSION badge: actual worse-than-projected rate={rr:.1%}  "
+              f"(base rate={ship_base_worse:.1%}, ratio={rr/ship_base_worse if ship_base_worse else 0:.2f}x "
+              f"-- want CLEARLY >1.0x)")
+    print("  (this is the pass/fail check for what actually shipped -- confirms the production")
+    print("  formula/thresholds reproduce the validated direction, not just the design concept.)")
 
     if args.csv:
         os.makedirs("scratchpad", exist_ok=True)

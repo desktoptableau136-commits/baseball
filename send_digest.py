@@ -529,10 +529,10 @@ def opponent_week_intel(pitchers, hitters, opp_team, best_recent_h, today_str, w
 # the rows stay hidden there and the badge link is a harmless no-op — the score badge
 # itself always shows. The user reads the attachment, where the reveal works.
 
-def _sp_badge_context(row, qs_fires, k_fires, two_start_n, recent_era=None):
-    """Explain the SP badges (2-START / QS / 5K+ / ⚠ RISK) actually shown on a row. Fed the
-    already-computed fire flags + recent ERA from the render site so the panel can never
-    disagree with the chips beside the name."""
+def _sp_badge_context(row, qs_fires, k_fires, two_start_n, recent_era=None, idx_recent_p=None):
+    """Explain the SP badges (2-START / QS / 5K+ / ⚠ RISK / bounce-back ↑↓) actually shown on
+    a row. Fed the already-computed fire flags + recent ERA from the render site so the panel
+    can never disagree with the chips beside the name."""
     lines = []
     vals = _proj_line_vals(row)
     ip_g, er, k = vals if vals else (0, 0, 0)
@@ -553,6 +553,22 @@ def _sp_badge_context(row, qs_fires, k_fires, two_start_n, recent_era=None):
         lines.append(f'{blowup_badge(row, recent_era)} low floor &mdash; blowup-prone this start{tail}. '
                      f'Skill profile plus how tough the opposing lineup is for THIS start '
                      f'(can raise or lower the flag). A floor warning only; it doesn&rsquo;t lower the score.')
+    bb_flag = None
+    bb_rec = idx_recent_p.get(row.get("PlayerName", "")) if idx_recent_p else None
+    if bb_rec:
+        bb_flag = pitcher_bounceback_flag(row, bb_rec)
+    if bb_flag in ("bounceback", "regression"):
+        badge = pitcher_bounceback_badge(row, idx_recent=idx_recent_p)
+        xera = _n(row.get("xERA"))
+        fip = _recent_fip(bb_rec)
+        if bb_flag == "bounceback":
+            lines.append(f'{badge} recent FIP {fip:.2f} vs season {xera:.2f} xERA &mdash; rough recent '
+                         f'results, but FIP strips out batted-ball/strand-rate luck. Backtesting shows '
+                         f'starts like this tend to bounce back, not keep sliding.')
+        else:
+            lines.append(f'{badge} recent FIP {fip:.2f} vs season {xera:.2f} xERA &mdash; hot recent '
+                         f'results, but he&rsquo;s outpitching his skill level. Backtesting shows starts '
+                         f'like this tend to cool off, not keep rolling.')
     # The $/▼ regression badge is explained by `_pitcher_badge_context`, appended inside
     # `_pitcher_score_breakdown` (which every SP render pairs with this fn) so RP + Trade Lab
     # + positional-breakdown panels get it too — do NOT re-add it here or SP panels double it.
@@ -2627,11 +2643,23 @@ def build_glossary_section():
                "flags that the recent-games check has weighed in; a <b>bare</b> ↗/↘ with no $/▼/▽ fill means the "
                "season aggregate hasn't moved enough yet to trip the season-level badge, but recent games are "
                "already trending that way — an early read that can graduate into a full $/▼ later, or fade back to "
-               "nothing. For <b>hitters</b> the read is xBA/xSLG vs actual AVG/SLG; for <b>pitchers</b> it's xERA "
-               "vs ERA (relative to the league's typical xERA-vs-ERA offset). When recent games trend the "
-               "<i>opposite</i> direction of the season call, hover text flags the contradiction. Display-only — "
-               "never changes a Score — and powers Trade Radar's buy-low/sell-high timing. <b>Hover</b> for the "
-               "numbers."),
+               "nothing. For <b>hitters</b> the read is xBA/xSLG vs actual AVG/SLG (this recent-games check is "
+               "<b>hitters only</b> — see the pitcher ↑/↓ entry below for why the pitcher analog was retired). "
+               "When recent games trend the <i>opposite</i> direction of the season call, hover text flags the "
+               "contradiction. Display-only — never changes a Score — and powers Trade Radar's buy-low/sell-high "
+               "timing. <b>Hover</b> for the numbers."),
+        _entry(f'↑ / ↓ bounce-back (pitchers){_hit_badge("&#8593;", GREEN)}{_hit_badge("&#8595;", RED)}',
+               "A starter's recent <b>FIP</b> (strikeouts/walks/homers only — excludes batted-ball luck) diverges "
+               "sharply from his season <b>xERA</b> skill baseline. This is deliberately the <b>opposite read</b> "
+               "you'd expect: green <b>↑ bounce-back</b> = his last few outings were rough, but walk-forward "
+               "backtesting shows starts like this tend to <b>improve</b> next time, not keep sliding — don't "
+               "bench or sell him off the ugly recent line alone. Red <b>↓ regression</b> = he's been running hot, "
+               "but backtesting shows starts like this tend to <b>cool off</b> next time, not keep rolling — don't "
+               "chase the streak. (A season-level hitter recency check that assumed the <i>opposite</i, trend-"
+               "confirming direction was tested for pitchers and found to be backwards — see the $/▽/▼ entry "
+               "above; this is the corrected, validated replacement.) This is a <b>single-start</b> confidence "
+               "read, separate from the season $/▼/▽ trade-value badge and from ⚠ blowup risk — trade cards stay "
+               "neutral to it, same as ⚠. <b>Hover</b> for the FIP/xERA numbers."),
 
         _subhead("Weekly Game Plan"),
         _entry("&#127942; Win the week",
@@ -3412,7 +3440,8 @@ def build_todays_games_section(todays_games, my_team, opp_team, max_games=4,
             row = pit_rows.get(key)
             if not row:
                 return ""
-            return blowup_badge(row, recent_era.get(key)) + pitcher_regression_badge(row, idx_recent=idx_recent_p)
+            return (blowup_badge(row, recent_era.get(key)) + pitcher_regression_badge(row, idx_recent=idx_recent_p)
+                    + pitcher_bounceback_badge(row, idx_recent=idx_recent_p))
         row = hit_rows.get(key)
         return hitter_badges(row, hit_pctile, idx_recent=idx_recent) if row else ""
 
@@ -4251,7 +4280,8 @@ def build_game_plan(matchup, winprob_ctx, per_cat, winprob_rf, winprob_weeks,
                         if k >= 5:
                             badges += k5_badge(k, r)
                     if role == "sp":
-                        badges += blowup_badge(r) + pitcher_regression_badge(r, idx_recent=best_recent_p)
+                        badges += (blowup_badge(r) + pitcher_regression_badge(r, idx_recent=best_recent_p)
+                                   + pitcher_bounceback_badge(r, idx_recent=best_recent_p))
                     bd = _pitcher_score_breakdown(r, best_recent_p)
                     score_val = _score_p(r, best_recent_p)
                 uid = _bd_uid("gp", r.get("PlayerName", "")) if bd else None
@@ -4760,10 +4790,12 @@ def build_email(snap, override_team=None):
                     start_badges.append(k5_badge(_pjs_k, r))
                 start_badges.append(blowup_badge(r, p15r.get("ERA")))
                 start_badges.append(pitcher_regression_badge(r, idx_recent=best_recent_p))
+                start_badges.append(pitcher_bounceback_badge(r, idx_recent=best_recent_p))
                 start_badge = "".join(start_badges)
                 proj_line_s = _proj_line_html(r)
                 _mus_bd = (_pitcher_score_breakdown(r, best_recent_p)
-                           + _sp_badge_context(r, qs_fires_s, k_fires_s, _n_starts_s, p15r.get("ERA"))
+                           + _sp_badge_context(r, qs_fires_s, k_fires_s, _n_starts_s, p15r.get("ERA"),
+                                                idx_recent_p=best_recent_p)
                            + _move_badge_context(name, move_registry))
                 _cell, _bdrow = score_reveal(
                     _score_p(r, best_recent_p), _mus_bd,
@@ -4992,6 +5024,7 @@ def build_email(snap, override_team=None):
                     name_border = f"border-left:3px solid {YELLOW};"
                 pickup_badges.append(blowup_badge(r, p15r.get("ERA")))
                 pickup_badges.append(pitcher_regression_badge(r, idx_recent=best_recent_p))
+                pickup_badges.append(pitcher_bounceback_badge(r, idx_recent=best_recent_p))
                 pickup_badge = "".join(pickup_badges)
                 # Two-start flag always shows — a 2-start FA is a top streaming target
                 _n_starts_fa = _starts_this_week(r, today_str, week_end_str)
@@ -5009,7 +5042,8 @@ def build_email(snap, override_team=None):
                 )
                 proj_line_str = _proj_line_html(r)
                 _fasp_bd = (_pitcher_score_breakdown(r, best_recent_p)
-                            + _sp_badge_context(r, qs_fires, k_fires, _n_starts_fa, p15r.get("ERA"))
+                            + _sp_badge_context(r, qs_fires, k_fires, _n_starts_fa, p15r.get("ERA"),
+                                                 idx_recent_p=best_recent_p)
                             + _winprob_context(_wd)
                             + _move_badge_context(r.get("PlayerName", ""), move_registry))
                 _cell, _bdrow = score_reveal(
