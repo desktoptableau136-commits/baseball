@@ -161,25 +161,14 @@ def _fv(v, dec=0):
 
 def _reg_chip8(r, idx_recent=None):
     """Tiny 8px pitcher buy-low ($) / sell-high (▼ confirmed / ▽ predicted) chip, matching
-    the QS/5K+/⚠ chips in My Pitching. Same $/▼/▽ glyphs + green/red as everywhere else
-    (sd.pitcher_regression_*). `idx_recent` (best_recent_p) checks a sell-high flag against
-    sd.pitcher_recency_flag, same solid-vs-hollow split as the digest badge."""
-    flag = sd.pitcher_regression_flag(r)
-    if not flag:
+    the QS/5K+/⚠ chips in My Pitching. Glyph/color/tooltip come from the shared
+    sd._regression_badge_parts (fantasy/scoring.py) -- the exact decision the digest's own
+    badge renders -- so this local 8px markup can't drift from it again (it previously
+    re-derived the same decision independently and the tooltip wording had already diverged)."""
+    parts = sd._regression_badge_parts(r, idx_recent)
+    if not parts:
         return ""
-    era, xera = _n(r.get("ERA")), _n(r.get("xERA"))
-    if flag == "buy":
-        col, glyph, tip = GREEN, "$", f"ERA {era:.2f} vs xERA {xera:.2f} &mdash; buy-low (unlucky, positive regression likely)"
-    else:
-        rec = idx_recent.get(r.get("PlayerName", "")) if idx_recent else None
-        rflag = sd.pitcher_recency_flag(r, rec) if rec else None
-        col = RED
-        if rflag == "declining":
-            glyph = "&#9660;" + sd._CONFIRM_DOWN
-            tip = f"ERA {era:.2f} vs xERA {xera:.2f} &mdash; sell-high, confirmed by his recent games (regression risk)"
-        else:
-            glyph = "&#9661;"
-            tip = f"ERA {era:.2f} vs xERA {xera:.2f} &mdash; sell-high (lucky, regression risk)"
+    glyph, col, tip = parts
     rr, gg, bb = int(col[1:3], 16), int(col[3:5], 16), int(col[5:7], 16)
     return (f' <span title="{tip}" style="font-size:8px;font-weight:700;color:{col};'
             f'background:rgba({rr},{gg},{bb},0.12);border:1px solid rgba({rr},{gg},{bb},0.35);'
@@ -208,10 +197,7 @@ def _tile(title, body, flex=1.0, accent=ACCENT, sub="", header_right=""):
 
 def _mini_badge(score):
     s = int(score or 0)
-    if s >= 72:   bg = "#16a34a"
-    elif s >= 52: bg = "#2563eb"
-    elif s >= 32: bg = "#d97706"
-    else:         bg = "#dc2626"
+    bg = sd._score_bg_hex(s)
     return f'<span style="background:{bg};color:#fff;padding:1px 6px;border-radius:9px;font-size:10px;font-weight:800;">{s}</span>'
 
 
@@ -985,11 +971,10 @@ def render_season(ctx):
 # ── Legend / key ────────────────────────────────────────────────────────────────
 
 def _legend_chip(glyph, color, size=8):
-    """A tinted badge chip matching the QS/5K+/PWR visual style, for the legend."""
-    r, g, b = int(color[1:3], 16), int(color[3:5], 16), int(color[5:7], 16)
-    return (f'<span style="font-size:{size}px;font-weight:700;color:{color};'
-            f'background:rgba({r},{g},{b},0.12);border:1px solid rgba({r},{g},{b},0.35);'
-            f'border-radius:3px;padding:0 3px;vertical-align:middle;">{glyph}</span>')
+    """A tinted badge chip matching the QS/5K+/PWR visual style, for the legend. Delegates to
+    the shared sd._hit_badge with this row's tighter pad/no-margin (it sits in an
+    already-gapped flex row, unlike the inline player-row badges)."""
+    return sd._hit_badge(glyph, color, size=size, pad="0 3px", margin_left=False)
 
 
 def _legend_items():

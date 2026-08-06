@@ -103,14 +103,19 @@ def two_start_badge(title=""):
     )
 
 
-def _hit_badge(text, color, title=""):
-    """A translucent hitter badge chip in the QS/5K+ visual style (color-tinted bg + border)."""
+def _hit_badge(text, color, title="", size=9, pad="1px 5px", margin_left=True):
+    """A translucent hitter badge chip in the QS/5K+ visual style (color-tinted bg + border).
+    `size`/`pad`/`margin_left` let other formats (dashboard/Trade Lab legend rows, which sit
+    in an already-gapped flex row and want tighter padding + no extra margin) reuse this
+    instead of hand-rolling the same rgba-tint chip markup; defaults match every existing
+    call site byte-for-byte."""
     r, g, b = int(color[1:3], 16), int(color[3:5], 16), int(color[5:7], 16)
     tt = f' title="{title}"' if title else ""
+    ml = "margin-left:5px;" if margin_left else ""
     return (
-        f'<span{tt} style="font-size:9px;font-weight:700;color:{color};'
+        f'<span{tt} style="font-size:{size}px;font-weight:700;color:{color};'
         f'background:rgba({r},{g},{b},0.12);border:1px solid rgba({r},{g},{b},0.35);'
-        f'border-radius:3px;padding:1px 5px;margin-left:5px;vertical-align:middle;">{text}</span>'
+        f'border-radius:3px;padding:{pad};{ml}vertical-align:middle;">{text}</span>'
     )
 
 

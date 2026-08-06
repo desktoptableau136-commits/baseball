@@ -322,8 +322,8 @@ better than raw ERA at the same window; only kwERA — K%/BB% only, no HR term �
 never positive). Conclusion: at these sample sizes, a recent-window-vs-season-xERA gap for a
 **starting pitcher** is dominated by regression to the mean, not trend persistence — gating on
 "diverges sharply from the skill anchor" selects for noisy extremes almost by construction.
-Contrast with `hitter_recency_flag`/`hitter_recency_severity` (unaffected, still live) — never
-itself backtested this way, so it's "not yet disproven," not "proven safe."
+Contrast with `hitter_recency_flag`/`hitter_recency_severity` — **now backtested too, see below,
+and it validates** (unlike the pitcher flag).
 
 Every caller of `pitcher_recency_flag` already treats a non-`'declining'`/`'improving'` return as
 the safe no-confirmation state (hollow chip, no standalone arrow), so disabling it at the source
@@ -357,6 +357,30 @@ Starters. **Deliberately NOT wired:** Trade Radar / Pending Trades / Trade Lab (
 gets matchup-neutralized rather than removed there (a trade shouldn't flicker based on a next-start
 read), except here there's no season-durable core to preserve, so omission is simpler than
 neutralization. Glossary: "Buy-low / sell-high" group, own entry ("↑ / ↓ bounce-back (pitchers)").
+
+### Hitter recency: backtested, validates (unlike the pitcher flag) — stays live
+
+`hitter_recency_flag`/`hitter_recency_severity` (`fantasy/scoring.py`) is the hitter analog of
+the disabled `pitcher_recency_flag` above — same architecture (a recent-window stat vs. a season
+skill anchor, confirming or contradicting the season buy-low/sell-high call) and, until this
+backtest, never tested for the same inversion bug. `backtest_hitter_recency.py` (per-hitter MLB
+game logs, walk-forward: a trailing `--recency-window` (default 15 calendar days) window built
+strictly from games before each read, evaluated at a fresh cadence every window-length — not
+every game, which would make consecutive reads ~90%+ overlapping) calls the REAL shipped
+`sd.hitter_recency_flag`/`sd.hitter_recency_severity` directly, then checks whether the FORWARD
+window (the same length, strictly after the read) landed above/below the season xBA/xSLG anchor.
+
+**Result (season-to-date, n=1975 reads / 261 hitters / 142 flagged declining+improving):** both
+directions validate, for both AVG and SLG — `DECLINING` lift 1.12x (AVG) / 1.10x (SLG),
+`IMPROVING` lift 1.09x (AVG) / 1.05x (SLG), all `> 1.0x` as hoped; signed-severity-vs-residual
+Pearson r **+0.109** (AVG) / **+0.165** (SLG), both positive as hoped. The effect is modest, not
+dramatic — nothing like `pitcher_bounceback_flag`'s n=409/consistent-across-windows strength —
+but it is **consistently in the correct direction on every metric checked**, the opposite of the
+pitcher flag's clean inversion. Conclusion: `hitter_recency_flag`/`hitter_recency_severity` moves
+from "not yet disproven" to **validated** — stays live, no code change from this backtest. A
+future re-run with a longer season-to-date sample (more scored reads) would sharpen the r/lift
+numbers but isn't expected to flip the sign given how consistent the current read already is
+across both AVG and SLG.
 
 ### Hitter tactical badges (PWR / SB / BUY / SELL)
 Glance flags next to a **hitter's** name, mirroring the SP badges — **display-only, never folded into any score** (rationale → NOTES). Shared source `hitter_badges(row, hit_pctile=None, cap=None)` in send_digest.py (dashboard imports `sd.hitter_badges`), chips via `_hit_badge(text, color, title)`. Each carries a hover `title` naming the justifying stat. Priority **PWR → SB → BUY/SELL**; `cap=None` → all applicable badges show (`_hit_badge_context` matches with the same order + `cap=None`). Four flags (tunable constants, ~10–25% of the qualified YEAR pool):
