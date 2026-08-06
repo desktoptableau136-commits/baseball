@@ -272,7 +272,9 @@ def _serialize(r, role, best_recent_h, best_recent_p, hit_pctile, is_drop=False)
         breakdown = sd._hitter_score_breakdown(r, best_recent_h, hit_pctile)
     elif role == "sp":
         # Season skill (QS / K+) first, then the risk flags (blowup ⚠ / regression $ ▼▽).
-        badges    = sd.sp_skill_badges(r) + sd.blowup_badge(r) + sd.pitcher_regression_badge(r, idx_recent=best_recent_p)
+        # blowup_badge is matchup-neutralized (Team_OPS_Value:-1) so a trade card's badge
+        # doesn't flicker based on who's next on the schedule -- mirrors fantasy/trades.py.
+        badges    = sd.sp_skill_badges(r) + sd.blowup_badge({**r, "Team_OPS_Value": -1}) + sd.pitcher_regression_badge(r, idx_recent=best_recent_p)
         breakdown = sd._pitcher_score_breakdown(r, best_recent_p) + sd._sp_skill_context(r)
     else:
         badges    = sd.pitcher_regression_badge(r, idx_recent=best_recent_p)

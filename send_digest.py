@@ -550,8 +550,9 @@ def _sp_badge_context(row, qs_fires, k_fires, two_start_n, recent_era=None):
     if _is_blowup_risk(row, recent_era):
         drivers = _risk_drivers(row, recent_era)
         tail = ": " + " &middot; ".join(drivers) if drivers else ""
-        lines.append(f'{blowup_badge(row, recent_era)} low floor &mdash; blowup-prone{tail}. '
-                     f'A floor warning only; it doesn&rsquo;t lower the score.')
+        lines.append(f'{blowup_badge(row, recent_era)} low floor &mdash; blowup-prone this start{tail}. '
+                     f'Skill profile plus how tough the opposing lineup is for THIS start '
+                     f'(can raise or lower the flag). A floor warning only; it doesn&rsquo;t lower the score.')
     # The $/▼ regression badge is explained by `_pitcher_badge_context`, appended inside
     # `_pitcher_score_breakdown` (which every SP render pairs with this fn) so RP + Trade Lab
     # + positional-breakdown panels get it too — do NOT re-add it here or SP panels double it.
@@ -2528,13 +2529,16 @@ def build_glossary_section():
                "column shows season quality-start probability separately. (The <b>same QS / K+ letters mean "
                "something different on trade cards</b> — see Trade cards below.)"),
         _entry(f'⚠ low floor{_hit_badge("&#9888;", ORANGE)}',
-               "Warns a starter is <b>blowup-prone</b> — a skill profile at risk of the disaster outing (5+ ER) "
-               "that wrecks your ERA/WHIP and can't be undone once it's in your lineup. Blends baserunner traffic "
-               "(WHIP), a strikeout escape hatch (K% / whiff), effective run prevention (ERA regressed toward "
-               "xERA), and hard contact allowed, then escalates when the arm is <b>cold lately</b> (high L15 ERA). "
-               "<b>Hover</b> for the worst 2–3 drivers. A floor warning only — it never lowers the Score, and the "
-               "digest steers pickups away from flagged arms. Distinct from ▼/▽ sell-high — ⚠ is single-start "
-               "<i>tail</i> risk, ▼/▽ is <i>mean</i> regression."),
+               "Warns a starter is <b>blowup-prone this start</b> — a skill profile at risk of the disaster outing "
+               "(5+ ER) that wrecks your ERA/WHIP and can't be undone once it's in your lineup. Blends baserunner "
+               "traffic (WHIP), a strikeout escape hatch (K% / whiff), effective run prevention (ERA regressed "
+               "toward xERA), and hard contact allowed, then two escalators layer on top: <b>cold lately</b> (high "
+               "L15 ERA, one-directional — a hot stretch doesn't erase it) and the <b>opposing lineup for this "
+               "start</b> (bidirectional — a tough lineup raises the flag, a weak one can lower it). <b>Hover</b> "
+               "for the worst 2–3 drivers. A floor warning only — it never lowers the Score, and the digest steers "
+               "pickups away from flagged arms. Distinct from ▼/▽ sell-high — ⚠ is single-start <i>tail</i> risk, "
+               "▼/▽ is <i>mean</i> regression. Trade cards show the matchup-neutral skill-only read, since a "
+               "trade shouldn't flicker based on next week's schedule."),
         _entry(f'PWR{_hit_badge("PWR", PURPLE)}',
                "Next to a hitter's name — a top-tier power/HR threat (highest modeled HR-probability tier). "
                "Shown first when several badges apply. Hover (or tap the Score pill) for the drivers."),

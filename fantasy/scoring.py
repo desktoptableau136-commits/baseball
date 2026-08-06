@@ -622,6 +622,12 @@ _RISK_RECENT_W   = 0.25   # weight of the recent-form escalator when a recent ER
 _RISK_RECENT_SPAN = 2.50  # recent ERA this far ABOVE the pitcher's own baseline = max cold-form risk
 
 
+_RISK_OPP_W      = 0.20   # weight of the opponent-lineup-quality escalator (SYMMETRIC, unlike recent-form)
+
+
+_RISK_OPP_SPAN   = 0.060  # opponent OPS this far above/below league team-OPS = max escalation/de-escalation
+
+
 def _effective_era(r):
     """Actual ERA regressed toward xERA (IP-weighted, same shrinkage as the proj line's
     _ERA_REG_PRIOR_IP). Better than pure xERA for a FLOOR read: a pitcher genuinely running
@@ -729,12 +735,17 @@ def _rec_avg_slg_str(recent_row):
 
 
 def blowup_risk(r, recent_era=None):
-    """0-100 skill-based blowup (disaster-start) risk for a starter — higher = lower floor.
-    Combines baserunner traffic (WHIP), strikeout escape hatch (K%/whiff), effective run
-    prevention (`_effective_era` — ERA regressed toward xERA), and loud contact allowed
-    (HardHit%). League-anchored via `_LG`. When `recent_era` (e.g. L15 ERA) is supplied, a
-    cold recent stretch escalates the score (a currently-scuffling arm has a lower floor).
-    Display-only; never fed into any quality score. See _is_blowup_risk."""
+    """0-100 skill + THIS-START-matchup blowup (disaster-start) risk for a starter — higher =
+    lower floor. Skill base combines baserunner traffic (WHIP), strikeout escape hatch
+    (K%/whiff), effective run prevention (`_effective_era` — ERA regressed toward xERA), and
+    loud contact allowed (HardHit%); league-anchored via `_LG`. Two escalators layer on top:
+    `recent_era` (e.g. L15 ERA) — a cold recent stretch raises the score, ADDITIVE-ONLY (a hot
+    stretch doesn't lower it — a good week doesn't cure a structurally shaky arm's floor); and
+    the opposing lineup's `Team_OPS_Value` (already merged onto the row, scoped to the
+    pitcher's current earliest upcoming start) — SYMMETRIC, since a genuinely weak lineup
+    should lower risk for this start just as a brutal one raises it, unlike the recent-form
+    guard against small-sample noise. Display-only; never fed into any quality score.
+    See _is_blowup_risk."""
     whip = _n(r.get("WHIP"))
     if whip <= 0:
         return 0.0
@@ -768,6 +779,16 @@ def blowup_risk(r, recent_era=None):
     risk01 = base
     if rec > 0 and eff > 0:
         risk01 = _clamp(base + _RISK_RECENT_W * _clamp((rec - eff) / _RISK_RECENT_SPAN))
+
+    # Opponent-matchup escalator: SYMMETRIC (unlike recent-form above). A tough lineup for
+    # THIS start raises risk; a weak one genuinely lowers it — this is what makes the badge
+    # answer "will he implode in this matchup" rather than just "is he generally shaky."
+    opp = _n(r.get("Team_OPS_Value"))
+    if opp > 0:
+        lg_opp = _LG.get("team_ops") or 0.730
+        opp_signed = max(-1.0, min(1.0, (opp - lg_opp) / _RISK_OPP_SPAN))
+        risk01 = _clamp(risk01 + _RISK_OPP_W * opp_signed)
+
     return round(100.0 * risk01, 1)
 
 
@@ -800,14 +821,19 @@ def _risk_drivers(r, recent_era=None, cap=3):
     rec = _n(recent_era) if recent_era is not None else 0.0
     if rec > 0 and eff > 0:
         drivers.append(((rec - eff) / _RISK_RECENT_SPAN, f"{rec:.2f} L15 ERA (cold)"))
+    opp = _n(r.get("Team_OPS_Value"))
+    if opp > 0:
+        lg_opp = _LG.get("team_ops") or 0.730
+        drivers.append(((opp - lg_opp) / _RISK_OPP_SPAN, f"{opp:.3f} opp OPS (tough matchup)"))
     drivers.sort(key=lambda d: -d[0])
     return [txt for score, txt in drivers[:cap] if score > 0]
 
 
 def blowup_badge(r, recent_era=None):
-    """Red ⚠ RISK chip for a low-floor (blowup-prone) starter, or '' when not flagged.
-    Hover title names the worst 2-3 drivers. `recent_era` (L15) escalates on cold form.
-    Display-only, steer-aware."""
+    """Red ⚠ RISK chip for a low-floor (blowup-prone) starter THIS matchup, or '' when not
+    flagged. Hover title names the worst 2-3 drivers. `recent_era` (L15) escalates on cold
+    form; the opposing lineup's `Team_OPS_Value` (already on the row) escalates OR
+    de-escalates based on how tough this start's matchup is. Display-only, steer-aware."""
     if not _is_blowup_risk(r, recent_era):
         return ""
     drivers = _risk_drivers(r, recent_era)
