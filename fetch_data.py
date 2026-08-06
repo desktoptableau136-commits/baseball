@@ -397,7 +397,7 @@ _PROJECTED_MIN_DAYS_OUT = 2
 _ESPN_SCOREBOARD = "https://site.api.espn.com/apis/site/v2/sports/baseball/mlb/scoreboard?dates={ymd}"
 
 
-def get_probable_starters(days: int = SP_DAYS_OUT) -> pd.DataFrame:
+def get_probable_starters(days: int = SP_DAYS_OUT):
     """Probable starters for the next `days` days from ESPN's public MLB scoreboard.
 
     One scoreboard call per day; each game's home/away `probables` entry gives the starter.
@@ -407,11 +407,16 @@ def get_probable_starters(days: int = SP_DAYS_OUT) -> pd.DataFrame:
     from days-out (< _PROJECTED_MIN_DAYS_OUT -> confirmed). Team display names match MLB's
     exactly, so PSP_HomeVAway keeps the 'vs/@  <full team name>' form the opponent-OPS merge
     and opp_logo already expect. Names are accent-stripped so 'Martin Perez' merges cleanly.
-    Returns the _attach_start_lists output (adds PSP_Dates/PSP_HomeVAways for two-start
-    detection). Empty DataFrame (never raises) on total failure -> downstream degrades to
+    Returns `(df, opp_starter_by_date)`: df is the _attach_start_lists output (adds
+    PSP_Dates/PSP_HomeVAways for two-start detection); opp_starter_by_date is
+    {date_str: {batting_team_full_name: probable_starter_name}} -- the same per-event loop's
+    opponent/date/name, indexed the other way round (by the BATTING team, not the pitcher), for
+    send_digest.compute_hit_proj to look up "who does team X face on day Y" at zero extra fetch
+    cost. Empty DataFrame + {} (never raises) on total failure -> downstream degrades to
     'no upcoming starts', same as an MLB outage under the old method."""
     today  = datetime.now().date()
     frames = []
+    opp_starter_by_date = {}
     for off in range(days):
         d = today + timedelta(days=off)
         try:
@@ -443,16 +448,18 @@ def get_probable_starters(days: int = SP_DAYS_OUT) -> pd.DataFrame:
                         "PSP_Date":      date_str,
                         "PSP_Projected": bool(projected),
                     })
+                    if opp:
+                        opp_starter_by_date.setdefault(date_str, {})[opp] = _strip_accents(nm)
     if not frames:
         log("  Probable starters (ESPN): 0 entries (scoreboard empty or unreachable)")
         return pd.DataFrame(columns=["PlayerName", "PSP_HomeVAway", "PSP_Date",
-                                     "PSP_Projected", "PSP_Dates", "PSP_HomeVAways"])
+                                     "PSP_Projected", "PSP_Dates", "PSP_HomeVAways"]), opp_starter_by_date
     # confirmed (False) sorts before projected (True), so the _attach_start_lists dedup keeps
     # a confirmed entry over a projected one for the same pitcher/date.
     df = pd.DataFrame(frames).sort_values(["PSP_Date", "PSP_Projected"])
     n_conf = int((~df["PSP_Projected"]).sum())
     log(f"  Probable starters (ESPN): {len(df)} entries ({n_conf} confirmed + {len(df) - n_conf} projected) over {days} days")
-    return _attach_start_lists(df)
+    return _attach_start_lists(df), opp_starter_by_date
 
 
 def _attach_start_lists(df: pd.DataFrame) -> pd.DataFrame:
@@ -1051,11 +1058,11 @@ def _seed_offfp_hitters(fp, espn_hit) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def build_pitcher_data(league) -> list:
+def build_pitcher_data(league):
     log("Fetching pitcher stats from FantasyProsâ€¦")
     fp = fetch_fantasypros("pitchers")
     if fp.empty:
-        return []
+        return [], {}
     fp["Source"] = "FP"
 
     # Widen the universe: FantasyPros is the base frame and every downstream enrichment is a
@@ -1117,7 +1124,7 @@ def build_pitcher_data(league) -> list:
     merged["RosterStatus"] = merged["FreeAgentInjuryStatus"].astype(str) + merged["FantasyTeam"].astype(str)
 
     log("Fetching probable startersâ€¦")
-    sp = get_probable_starters()
+    sp, opp_starter_by_date = get_probable_starters()
     merged = merge_on_name(merged, sp, list(sp.columns))   # suffix/accent-safe (Jr./II)
     merged["PSP_Date"]      = merged["PSP_Date"].fillna("1999-01-01")
     merged["PSP_HomeVAway"] = merged["PSP_HomeVAway"].fillna("")
@@ -1201,7 +1208,7 @@ def build_pitcher_data(league) -> list:
         if col in merged.columns:
             merged.drop(columns=[col], inplace=True)
 
-    return merged.to_dict(orient="records")
+    return merged.to_dict(orient="records"), opp_starter_by_date
 
 
 # â”€â”€ HITTER PIPELINE â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -1594,6 +1601,13 @@ def get_matchup_dates(league) -> dict:
     today_str = today.strftime("%Y-%m-%d")
     team_win_games = {}   # mlb_team_id -> games in the whole window
     team_rem_games = {}   # mlb_team_id -> games with date > today
+    # batting_team_full_name -> [date_str, ...] (1 entry/game; doubleheader = 2 entries) for
+    # send_digest.compute_hit_proj's per-day opposing-starter-quality projection. Keyed by full
+    # NAME (not mlb_team_id like team_win_games above) to match the ESPN-scoreboard-sourced
+    # opp_starter_by_date (fetch_data.get_probable_starters) -- same join convention already
+    # used by the Team_OPS_Value merge (fetch_data.py ~1135-1140), since that data has no
+    # ESPN proTeamId to resolve an id-based join through.
+    team_game_dates = {}
     try:
         sched = requests.get(
             f"https://statsapi.mlb.com/api/v1/schedule"
@@ -1607,10 +1621,13 @@ def get_matchup_dates(league) -> dict:
             gd = d.get("date", "")
             for g in d.get("games", []):
                 for side in ("home", "away"):
-                    tid = (((g.get("teams") or {}).get(side) or {}).get("team") or {}).get("id")
+                    side_team = (((g.get("teams") or {}).get(side) or {}).get("team") or {})
+                    tid, tname = side_team.get("id"), side_team.get("name", "")
                     if not tid:
                         continue
                     team_win_games[tid] = team_win_games.get(tid, 0) + 1
+                    if tname:
+                        team_game_dates.setdefault(tname, []).append(gd)
                     if gd >= today_str:
                         team_rem_games[tid] = team_rem_games.get(tid, 0) + 1
     except Exception:
@@ -1650,6 +1667,7 @@ def get_matchup_dates(league) -> dict:
         "matchup_game_days":          matchup_game_days,
         "matchup_game_days_elapsed":  game_days_elapsed,
         "team_hit_sched_frac":        team_hit_sched_frac,
+        "team_game_dates":            team_game_dates,
     }
 
 
@@ -2320,7 +2338,7 @@ def main():
         sys.exit("Could not connect to ESPN â€” check credentials in ESPN_CONFIG.")
 
     print("\n[2/10] Building pitcher data (FantasyPros + ESPN + FanGraphs advanced)...")
-    pitchers = build_pitcher_data(league)
+    pitchers, opp_starter_by_date = build_pitcher_data(league)
     print(f"       {len(pitchers)} pitcher rows")
 
     print("\n[3/10] Building hitter data (FantasyPros + ESPN + FanGraphs + Statcast)...")
@@ -2438,6 +2456,7 @@ def main():
         "league_year":     CURRENT_YEAR,
         "standings":       standings,
         "pitchers":        pitchers,
+        "opp_starter_by_date": opp_starter_by_date,
         "hitters":         hitters,
         "roto":            roto,
         "season_cat_totals": season_cat_totals,

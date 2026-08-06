@@ -3652,16 +3652,70 @@ def compute_pit_proj(pitchers, my_team, opp_team, today_str, week_end_str):
 # _project's rate-blend still handles.
 _HIT_PROJ_CATS = ["R", "HR", "RBI", "SB", "B_SO"]
 
-def compute_hit_proj(weekly_avgs, my_team, opp_team, team_hit_sched_frac):
-    """Hitter counting-stat projections (R/HR/RBI/SB/B_SO) for the REST of the matchup,
-    scaled by each team's ACTUAL remaining bat-games instead of a league-wide time
-    fraction — the hitter analog of compute_pit_proj. Returns a remaining_proj slice
+_HITPROJ_OPP_MULT = 0.15   # max +/- hitter-production swing from opposing-starter quality
+_HITPROJ_OPP_SPAN = 30.0   # qs_probability pts away from league-avg QS% (~38) for max swing
+_ABBREV_TO_FULLNAME = {v: k for k, v in _FULLNAME_TO_ABBREV.items()}
+_ABBREV_TO_FULLNAME["ATH"] = "Athletics"   # _FULLNAME_TO_ABBREV has 3 keys -> ATH (relocation
+                                            # renames); pin the reverse map to the current
+                                            # MLB StatsAPI name explicitly
+
+
+def _opp_starter_quality_mult(team_full_name, date_str, opp_starter_by_date, pitchers_by_name):
+    """Per-day hitter production multiplier from the opposing probable starter's quality.
+    Neutral (1.0) on ANY missing data -- no starter on record (TBD / off-day / beyond ESPN's
+    SP_DAYS_OUT=7 projection window), unresolved name, or a non-qualifying qs_probability."""
+    nm = (opp_starter_by_date.get(date_str) or {}).get(team_full_name)
+    if not nm:
+        return 1.0
+    row = pitchers_by_name.get(_badge_name_key(nm))
+    if not row:
+        return 1.0
+    qsp = qs_probability(row)
+    if qsp is None:
+        return 1.0
+    delta = max(-1.0, min(1.0, (qsp - 38) / _HITPROJ_OPP_SPAN))
+    return 1.0 - _HITPROJ_OPP_MULT * delta
+
+
+def _team_win_rem(team_key, hitters, team_game_dates, opp_starter_by_date,
+                   pitchers_by_name, today_str, week_end_str):
+    """(games in the whole window, opponent-quality-weighted remaining games) for one
+    fantasy team's hitters, via each hitter's MLB `Team` abbrev -> full name -> scheduled
+    game dates. Feeds compute_hit_proj's Tier-2 per-day path."""
+    roster = [h for h in hitters
+              if " ".join((h.get("FantasyTeam") or "").split()) == team_key
+              and int(h.get("Dataset", 0) or 0) == YEAR]
+    sum_win = sum_rem = 0.0
+    for h in roster:
+        full = _ABBREV_TO_FULLNAME.get((h.get("Team") or "").upper())
+        if not full:
+            continue
+        for d in (team_game_dates.get(full) or []):
+            sum_win += 1
+            if today_str <= d <= week_end_str:
+                sum_rem += _opp_starter_quality_mult(full, d, opp_starter_by_date, pitchers_by_name)
+    return sum_win, sum_rem
+
+
+def compute_hit_proj(weekly_avgs, my_team, opp_team, team_hit_sched_frac,
+                      hitters=None, pitchers=None, team_game_dates=None,
+                      opp_starter_by_date=None, today_str=None, week_end_str=None):
+    """Hitter counting-stat projections (R/HR/RBI/SB/B_SO) for the REST of the matchup —
+    the hitter analog of compute_pit_proj. Returns a remaining_proj slice
     {cat: {"my": remaining, "opp": remaining}} to merge into compute_pit_proj's dict; the
     build_category_pulse / classify_categories `rp = remaining_proj.get(cat)` branch then
-    uses it verbatim (pm = current + remaining). `team_hit_sched_frac` (from the snapshot,
-    fetch_data.get_matchup_dates) is each fantasy team's roster-weighted fraction of window
-    bat-games still to come. Empty / unmatched -> {} so the existing league-fraction
-    _project path is used unchanged (graceful fallback for old snapshots)."""
+    uses it verbatim (pm = current + remaining).
+
+    Three tiers, each falling back to the one below on missing data:
+      - Tier 2 (best): when hitters/pitchers/team_game_dates/opp_starter_by_date/today_str/
+        week_end_str are ALL supplied, scale each team's weekly average by a day-by-day sum
+        weighted by the QUALITY of the opposing probable starter each remaining day (via
+        _team_win_rem/_opp_starter_quality_mult) instead of one flat fraction.
+      - Tier 1 (fallback): any of those args missing -> today's exact flat
+        `weekly_avg[cat] * team_hit_sched_frac[team]` formula (also the per-team fallback
+        when Tier 2 can't resolve a specific team's roster to any scheduled games).
+      - Tier 0: team_hit_sched_frac itself empty/unmatched -> {} (existing league-fraction
+        _project path, unchanged -- graceful degrade for old snapshots / --team runs)."""
     fracs = team_hit_sched_frac or {}
     if not fracs:
         return {}
@@ -3676,6 +3730,18 @@ def compute_hit_proj(weekly_avgs, my_team, opp_team, team_hit_sched_frac):
     opp_frac = norm.get(opp_key)
     if my_frac is None or opp_frac is None:
         return {}
+
+    if hitters is not None and pitchers is not None and team_game_dates and \
+            opp_starter_by_date is not None and today_str and week_end_str:
+        pitchers_by_name = {_badge_name_key(r["PlayerName"]): r for r in pitchers
+                             if int(_n(r.get("Dataset")) or 0) == YEAR}
+        my_win, my_rem   = _team_win_rem(my_key,  hitters, team_game_dates, opp_starter_by_date,
+                                          pitchers_by_name, today_str, week_end_str)
+        opp_win, opp_rem = _team_win_rem(opp_key, hitters, team_game_dates, opp_starter_by_date,
+                                          pitchers_by_name, today_str, week_end_str)
+        my_frac  = (my_rem / my_win)   if my_win  > 0 else my_frac
+        opp_frac = (opp_rem / opp_win) if opp_win > 0 else opp_frac
+
     out = {}
     for cat in _HIT_PROJ_CATS:
         if cat in my_avgs and cat in opp_avgs:
@@ -4302,7 +4368,11 @@ def build_email(snap, override_team=None):
     # both pick it up. Empty on old snapshots -> hitter cats keep the league-fraction path.
     pit_proj.update(compute_hit_proj(weekly_avgs, my_team,
                                      matchup.get("opp_team", "") if matchup else "",
-                                     snap.get("team_hit_sched_frac")))
+                                     snap.get("team_hit_sched_frac"),
+                                     hitters=hitters, pitchers=pitchers,
+                                     team_game_dates=snap.get("team_game_dates"),
+                                     opp_starter_by_date=snap.get("opp_starter_by_date"),
+                                     today_str=today_str, week_end_str=week_end_str))
 
     # Marginal-win% context (for pickup_win_delta) — same projection/sigma setup as Category
     # Pulse, so an FA streamer's "does this flip a category?" chip can't drift from the card.

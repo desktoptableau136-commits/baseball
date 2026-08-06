@@ -69,6 +69,8 @@ _EXPECTED = {
     "matchup_game_days":         int,
     "matchup_game_days_elapsed": int,
     "team_hit_sched_frac":       dict,   # per-team remaining-bat-games fraction (schedule-aware hitter proj)
+    "team_game_dates":           dict,   # per-MLB-team full-window game dates (day-by-day hitter proj)
+    "opp_starter_by_date":       dict,   # date -> {batting_team_full_name: probable starter name}
     "league_total_roster_max":   int,
     "league_active_roster_max":  int,
     "league_il_roster_max":      int,

@@ -86,7 +86,11 @@ def build_context(snap, my_team):
                                    today_str, week_end_str)
     pit_proj.update(sd.compute_hit_proj(weekly_avgs, my_team,
                                         matchup.get("opp_team", "") if matchup else "",
-                                        snap.get("team_hit_sched_frac")))
+                                        snap.get("team_hit_sched_frac"),
+                                        hitters=hitters, pitchers=pitchers,
+                                        team_game_dates=snap.get("team_game_dates"),
+                                        opp_starter_by_date=snap.get("opp_starter_by_date"),
+                                        today_str=today_str, week_end_str=week_end_str))
 
     classification = sd.classify_categories(
         matchup, weekly_avgs=weekly_avgs, days_elapsed=days_elapsed, remaining_proj=pit_proj,
