@@ -160,8 +160,11 @@ every other matchup-dependent section's empty-state guard).
       doesn't survive AB-weighted regression toward xBA/xSLG is a no-op (`'noise'`, mult 1.0), so this
       still can't reopen the original bug; only a REAL, magnitude-scaled decline moves a hitter's
       eligibility score down. Pitchers stay plain season score — no continuous pitcher-side severity
-      signal exists yet (only the 3-way `pitcher_recency_flag`); a `pitcher_recency_severity` analog is
-      a tracked follow-up, not built yet.
+      signal exists (a `pitcher_recency_severity` analog was investigated via walk-forward backtest
+      and found backwards for pitchers at these sample sizes — see "Pitcher recency: disabled
+      confirmation flag + validated bounce-back replacement" below; the disabled `pitcher_recency_flag`
+      and its `pitcher_bounceback_flag` replacement are both THIS-START-scoped display signals, not
+      durable-value ones, so neither is a candidate for this eligibility discount).
     - **Path B (relative / outclassed at the same spot, NEW).** `_outclasses(cand, cand_score,
       pending_add)`: `cand` shares a `POS_GROUPS` label with the specific `pending_add` being offered
       in THIS card/bullet, and `pending_add`'s blended score beats `cand`'s by `>= _UPGRADE_MARGIN` —
@@ -303,6 +306,57 @@ A burnt-orange (`ORANGE`) glyph-only **⚠** chip next to a startable arm's name
   - **Trade surfaces are matchup-neutralized:** `fantasy/trades.py`'s `_trade_skill_badges` and `trade_lab.py`'s `_serialize` both call `blowup_badge({**r, "Team_OPS_Value": -1})` so a trade card's ⚠ doesn't flicker based on who's next on the schedule — mirrors the existing `_sp_qs_season` precedent (`fantasy/scoring.py:981-986`, `qs_probability({**row, "Team_OPS_Value": -1})`), which strips the same term for the same reason on the season-skill badge.
 
 **Wired:** inline chip in My Upcoming Starts + FA SP (`blowup_badge(r, p15r.get("ERA"))`), dashboard My Pitching (8px) + FA Radar Starters (9px); the tap-to-expand dropdown explains it via `_sp_badge_context(..., recent_era=p15r.get("ERA"))`. **Steer:** best-FA-SP pick deprioritizes flagged arms; `_roster_suggestion` pitch-stabilizer pool excludes them (`and not _is_blowup_risk(r)`).
+
+### Pitcher recency: disabled confirmation flag + validated bounce-back replacement
+`pitcher_recency_flag` (the pitcher analog of `hitter_recency_flag` — did a recent-window stat
+already confirm the season $/▼ regression call?) is **DISABLED as of 2026-08-06 — always returns
+`None`.** A walk-forward backtest (`backtest_projections.py`, per-pitcher MLB game logs, cumulative
+stats strictly through the day before each start) found its confirmation direction **inverted**:
+starts flagged `'declining'` (recent form worse than season xERA) beat their next-start projection
+MORE often than a random start, and starts flagged `'improving'` beat it LESS often — both
+backwards. A 9-way sweep (3 recent metrics [raw ERA / FIP / kwERA] × 3 windows [15/30/60 calendar
+days]) ruled out two easy explanations: **not small-sample noise** (wider windows made raw-ERA/FIP
+results WORSE, not better — Pearson r on signed-gap-vs-residual went from −0.067 at 15 days to
+−0.282 at 60 days) and **not "wrong stat"** (FIP, which strips BABIP/strand-rate luck, was no
+better than raw ERA at the same window; only kwERA — K%/BB% only, no HR term — got close to zero,
+never positive). Conclusion: at these sample sizes, a recent-window-vs-season-xERA gap for a
+**starting pitcher** is dominated by regression to the mean, not trend persistence — gating on
+"diverges sharply from the skill anchor" selects for noisy extremes almost by construction.
+Contrast with `hitter_recency_flag`/`hitter_recency_severity` (unaffected, still live) — never
+itself backtested this way, so it's "not yet disproven," not "proven safe."
+
+Every caller of `pitcher_recency_flag` already treats a non-`'declining'`/`'improving'` return as
+the safe no-confirmation state (hollow chip, no standalone arrow), so disabling it at the source
+was enough to stop the bad advice with **zero call-site changes** — `fantasy/scoring.py`
+(`pitcher_regression_badge`, the standalone early-read arrow), `fantasy/analytics.py`
+(`_pitcher_badge_context`), `fantasy/trades.py` (`_trade_skill_badges`), `dashboard.py` (`_reg_chip8`
++ the Trade Radar tile) all degrade automatically.
+
+**The replacement — `pitcher_bounceback_flag(season_row, recent_row)` / `pitcher_bounceback_badge`**
+(`fantasy/scoring.py`) — is the OPPOSITE-polarity signal the same backtest actually validated
+(n up to 409 flagged starts, FIP metric, consistent across window sizes): a recent FIP notably
+**worse** than season xERA predicts a **bounce-back** next start (green **↑**, glyph
+`&#8593;`), not a continued slide; a recent FIP notably **better** than xERA predicts a
+**letdown** next start (red **↓**, glyph `&#8595;`), not continued excellence. `_recent_fip`
+computes `(13·HR + 3·BB − 2·K)/IP + _FIP_CONSTANT` (`_FIP_CONSTANT = 3.10`, a fixed relative
+constant — no HBP term, since FantasyPros' short-range pitcher scrape (the dominant tier in
+`best_recent_p`) doesn't carry one, matching the common "simple FIP" convention). Gated on
+`_BOUNCEBACK_MIN_IP = 20` (the 15-day tier's thinner sample showed a much weaker backtest effect
+than the 30-day tier) and `_BOUNCEBACK_GAP_ERA = 1.50` (same threshold scale as the disabled flag).
+**Deliberately a SEPARATE badge, not a repolarized `pitcher_regression_badge`** — this is a
+THIS-START confidence read (like ⚠ blowup risk), not a durable season-value signal like $/▼/▽, so
+it needs its own glyph/color and its own trade-neutrality story (pass `idx_recent=None`, or simply
+never wire it into a trade surface — mirrors `blowup_badge`'s `Team_OPS_Value:-1` neutralization
+in spirit, but by omission rather than input-stripping since there's nothing to neutralize when the
+badge is never called there). SP-only (`_is_sp` gate, mirrors `blowup_badge`).
+
+**Wired:** My Upcoming Starts + FA SP (`_sp_badge_context` also explains it in the tap-to-expand
+dropdown), Today's MLB Games, Weekly Game Plan cards, dashboard My Pitching (8px) + FA Radar
+Starters. **Deliberately NOT wired:** Trade Radar / Pending Trades / Trade Lab (`fantasy/trades.py`,
+`trade_lab.py`) — stays out of the season-value trade engine entirely, same reasoning as why ⚠
+gets matchup-neutralized rather than removed there (a trade shouldn't flicker based on a next-start
+read), except here there's no season-durable core to preserve, so omission is simpler than
+neutralization. Glossary: "Buy-low / sell-high" group, own entry ("↑ / ↓ bounce-back (pitchers)").
 
 ### Hitter tactical badges (PWR / SB / BUY / SELL)
 Glance flags next to a **hitter's** name, mirroring the SP badges — **display-only, never folded into any score** (rationale → NOTES). Shared source `hitter_badges(row, hit_pctile=None, cap=None)` in send_digest.py (dashboard imports `sd.hitter_badges`), chips via `_hit_badge(text, color, title)`. Each carries a hover `title` naming the justifying stat. Priority **PWR → SB → BUY/SELL**; `cap=None` → all applicable badges show (`_hit_badge_context` matches with the same order + `cap=None`). Four flags (tunable constants, ~10–25% of the qualified YEAR pool):

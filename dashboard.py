@@ -440,7 +440,8 @@ def render_tv_games(ctx):
             k = sd._badge_name_key(p.get("name", ""))
             if p.get("is_p"):
                 row = pit_rows.get(k)
-                return (sd.blowup_badge(row, rec_era.get(k)) + sd.pitcher_regression_badge(row, idx_recent=ctx["best_recent_p"])) if row else ""
+                return (sd.blowup_badge(row, rec_era.get(k)) + sd.pitcher_regression_badge(row, idx_recent=ctx["best_recent_p"])
+                        + sd.pitcher_bounceback_badge(row, idx_recent=ctx["best_recent_p"])) if row else ""
             row = hit_rows.get(k)
             return sd.hitter_badges(row, hit_pctile, cap=2, idx_recent=ctx.get("best_recent_h")) if row else ""
 
@@ -585,6 +586,21 @@ def render_pitching(ctx):
                        f'background:rgba(234,88,12,0.12);border:1px solid rgba(234,88,12,0.35);'
                        f'border-radius:3px;padding:0 3px;vertical-align:middle;">&#9888;</span>')
         badges += _reg_chip8(r, ctx["best_recent_p"])   # $ buy-low / ▼▽ sell-high (ERA vs xERA)
+        # bounce-back ↑ / regression ↓ — recent FIP vs season xERA; validated OPPOSITE polarity
+        # from a naive "recent form confirms" read (backtest_projections.py), same rule as the
+        # digest's badge, so a flag here never contradicts it.
+        _bb_rec = ctx["best_recent_p"].get(r.get("PlayerName", "")) if ctx.get("best_recent_p") else None
+        _bb_flag = sd.pitcher_bounceback_flag(r, _bb_rec) if _bb_rec else None
+        if _bb_flag in ("bounceback", "regression"):
+            _bb_col = GREEN if _bb_flag == "bounceback" else RED
+            _bb_glyph = "&#8593;" if _bb_flag == "bounceback" else "&#8595;"
+            _bb_tip = ("Rough recent line, but FIP strips out batted-ball luck &mdash; backtesting shows a bounce-back is more likely than a continued slide"
+                       if _bb_flag == "bounceback" else
+                       "Hot recent line, but FIP-adjusted he's outpitching his skill &mdash; backtesting shows a cool-off is more likely than continued excellence")
+            badges += (f' <span title="{_bb_tip}" style="font-size:8px;font-weight:700;color:{_bb_col};'
+                       f'background:rgba({"34,197,94" if _bb_flag=="bounceback" else "239,68,68"},0.12);'
+                       f'border:1px solid rgba({"34,197,94" if _bb_flag=="bounceback" else "239,68,68"},0.35);'
+                       f'border-radius:3px;padding:0 3px;vertical-align:middle;">{_bb_glyph}</span>')
         rows.append(
             f'<div style="display:flex;justify-content:space-between;gap:6px;padding:2px 0;white-space:nowrap;border-bottom:1px solid {BORDER};">'
             f'<span style="overflow:hidden;text-overflow:ellipsis;">{sd.team_logo(r.get("Team"), 14)}<span style="color:{TEXT};font-weight:600;">{r.get("PlayerName")}</span>{two} '
@@ -909,7 +925,8 @@ def render_fa_radar(ctx):
         qs = sd.qs_probability(r)
         _l15 = (ctx["p15"].get(r.get("PlayerName", "")) or ctx["rec_p"].get(r.get("PlayerName", ""), {})).get("ERA")
         parts.append(spline(r, r.get("_score", 0), f'{_n(r.get("ERA")):.2f} ERA &middot; QS{qs}%',
-                            badges=sd.blowup_badge(r, _l15) + sd.pitcher_regression_badge(r, idx_recent=ctx["best_recent_p"])))
+                            badges=sd.blowup_badge(r, _l15) + sd.pitcher_regression_badge(r, idx_recent=ctx["best_recent_p"])
+                            + sd.pitcher_bounceback_badge(r, idx_recent=ctx["best_recent_p"])))
     parts.append(hdr("Relievers"))
     for r in ctx["fa_rp"][:2]:
         parts.append(spline(r, r.get("_rp_score", 0), f'{int(_n(r.get("ESPN_SVHD")) or _n(r.get("SVHD")))} SV+H &middot; {_n(r.get("ERA")):.2f}',

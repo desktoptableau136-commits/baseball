@@ -874,46 +874,106 @@ def _rec_era_str(recent_row):
     return f"recent ERA {era:.2f}"
 
 
-_PIT_RECENCY_MIN_IP   = 8     # min recent IP so a pitcher ERA read isn't 1-2 shaky starts of
-                              # noise (IP analog of _HIT_RECENCY_MIN_AB)
-_PIT_RECENCY_PRIOR_IP = 25.0  # recent-IP shrinkage strength toward season xERA when checking
-                              # confirmation (pitcher analog of _HIT_REG_PRIOR_AB)
-_PIT_RECENCY_GAP_ERA  = 1.50  # effective recent ERA vs xERA gap that counts as "confirmed" --
-                              # ~1.5x the season _XREG_ERA bar, same margin-over-the-season-
-                              # threshold pattern as _HIT_RECENCY_GAP_BA/SLG vs _XREG_BA/SLG
-
-
-def _effective_era_recent(season_row, recent_row):
-    """Recent-window ERA regressed toward season xERA (skill estimate), IP-weighted -- same
-    shrinkage pattern as _effective_avg/_effective_slg, adapted for a pitcher's ERA."""
-    era, ip = _n(recent_row.get("ERA")), _n(recent_row.get("IP"))
-    if era <= 0 or ip <= 0:
-        return 0.0
-    target = _n(season_row.get("xERA")) or (_LG.get("era") or 4.10)
-    return (era * ip + target * _PIT_RECENCY_PRIOR_IP) / (ip + _PIT_RECENCY_PRIOR_IP)
-
-
 def pitcher_recency_flag(season_row, recent_row):
-    """Pitcher analog of hitter_recency_flag: does a pitcher's recent ERA already show the
-    season regression flag's predicted move (relative to his season xERA skill anchor), or does
-    IP-shrinkage mostly erase it? 'declining' = recent ERA already worse than xERA (confirms a
-    sell-high call -- he's already getting hit harder, not just statistically 'due'); 'improving'
-    = recent ERA already better than xERA (confirms a buy-low call); 'noise' = the recent sample
-    doesn't clear the anchor either way; None = below the IP reliability floor or no xERA. ERA is
-    lower-is-better, so the sign convention is flipped vs hitter_recency_flag's AVG/SLG
-    (higher-is-better)."""
+    """DISABLED (2026-08-06) -- always returns None. A walk-forward backtest
+    (backtest_projections.py) found this flag's confirmation direction is INVERTED: starts
+    flagged 'declining' beat their next-start projection MORE often than a random start, and
+    starts flagged 'improving' beat it LESS often -- both backwards. A 9-way sweep (3 recent
+    metrics [raw ERA / FIP / kwERA] x 3 windows [15/30/60 days]) ruled out small-sample noise
+    as the cause (wider windows made raw ERA/FIP WORSE, not better) and ruled out 'wrong stat'
+    too (FIP, which strips BABIP/strand-rate luck, was no better than raw ERA; only the
+    HR-free kwERA got close to zero, never positive). Conclusion: for starting pitchers at
+    these sample sizes, a recent-window-vs-season-xERA gap is dominated by regression to the
+    mean, not trend persistence -- selecting on 'diverges sharply from skill anchor' selects
+    for noisy extremes almost by construction. See pitcher_bounceback_flag below for the
+    OPPOSITE-polarity signal the same backtest actually validated. Every caller already treats
+    a non-'declining'/'improving' return as the safe no-confirmation state (hollow chip, no
+    standalone arrow), so disabling here was sufficient to stop the bad advice -- no call site
+    needed to change."""
+    return None
+
+
+_BOUNCEBACK_MIN_IP  = 20    # min recent IP before trusting a FIP read (backtest: window~15d/
+                             # ~12-18 IP showed a weak effect, r=-0.067; window~30d/more IP
+                             # showed a much cleaner one, r=-0.208 -- gate out the thin tier)
+_BOUNCEBACK_GAP_ERA = 1.50   # recent-FIP-vs-season-xERA gap that counts as a real divergence,
+                              # same scale validated in the backtest sweep
+_FIP_CONSTANT       = 3.10   # standard-ish MLB FIP constant; only used for a RELATIVE recent-
+                              # vs-season comparison, so a fixed value (not season-recalibrated
+                              # per year) is fine here
+
+
+def _recent_fip(recent_row):
+    """Recent-window FIP from HR/BB/K only (no HBP -- not a field FantasyPros' short-range
+    pitcher scrape carries; the common 'simple FIP' variant already omits it). FIP counts only
+    the outcomes a pitcher controls independent of defense/BABIP/strand-rate luck -- the
+    walk-forward backtest (backtest_projections.py) is what identifies this as the metric to
+    use here, not raw ERA. See pitcher_bounceback_flag."""
+    ip = _n(recent_row.get("IP"))
+    if ip <= 0:
+        return 0.0
+    hr, bb, k = _n(recent_row.get("HR")), _n(recent_row.get("BB")), _n(recent_row.get("K"))
+    return (13.0 * hr + 3.0 * bb - 2.0 * k) / ip + _FIP_CONSTANT
+
+
+def pitcher_bounceback_flag(season_row, recent_row):
+    """'bounceback' | 'regression' | 'noise' | None -- the REPLACEMENT for pitcher_recency_flag
+    (disabled above), using the OPPOSITE polarity a walk-forward backtest actually validated
+    (n up to 409 flagged starts, consistent across FIP at multiple windows): a recent FIP
+    notably WORSE than a pitcher's own season xERA does NOT predict a continued decline --
+    it predicts a bounce-back in his very next start (regression to the mean). A recent FIP
+    notably BETTER than xERA does NOT predict continued excellence -- it predicts a letdown.
+    'bounceback' = recent FIP >= xERA + _BOUNCEBACK_GAP_ERA (rough recent line, but the next
+    start trends better than that line suggests -- a confidence booster, not a red flag).
+    'regression' = recent FIP <= xERA - _BOUNCEBACK_GAP_ERA (hot recent line, but the next
+    start trends worse -- a caution flag, not extra confidence). 'noise' = gap doesn't clear
+    the threshold. None = below the IP reliability floor or no xERA. THIS-START-scoped, like
+    blowup_risk -- NOT a durable/season value signal, so trade surfaces must stay neutral to it
+    (pass idx_recent=None to pitcher_bounceback_badge, mirroring blowup_badge's
+    Team_OPS_Value:-1 neutralization)."""
     ip = _n(recent_row.get("IP")) if recent_row else 0
-    if ip < _PIT_RECENCY_MIN_IP:
+    if ip < _BOUNCEBACK_MIN_IP:
         return None
     xera = _n(season_row.get("xERA"))
     if xera <= 0:
         return None
-    gap = _effective_era_recent(season_row, recent_row) - xera
-    if gap >= _PIT_RECENCY_GAP_ERA:
-        return "declining"
-    if gap <= -_PIT_RECENCY_GAP_ERA:
-        return "improving"
+    gap = _recent_fip(recent_row) - xera
+    if gap >= _BOUNCEBACK_GAP_ERA:
+        return "bounceback"
+    if gap <= -_BOUNCEBACK_GAP_ERA:
+        return "regression"
     return "noise"
+
+
+def pitcher_bounceback_badge(row, idx_recent=None):
+    """Small next-start-confidence chip for a starter whose recent FIP diverges sharply from
+    his season xERA -- see pitcher_bounceback_flag for the validated (counter-intuitive)
+    direction. SEPARATE from the season $/▼/▽ buy-low/sell-high badge (durable value, not
+    next-start form) and from ⚠ blowup risk (skill + matchup floor, not recent-form direction).
+    '' when not flagged, no idx_recent passed (e.g. a trade surface deliberately staying
+    THIS-START-neutral), no season xERA, or below the IP floor. SP-only (mirrors
+    blowup_badge's _is_sp gate -- the next-start framing doesn't translate to relief usage)."""
+    if not _is_sp(row):
+        return ""
+    rec = idx_recent.get(row.get("PlayerName", "")) if idx_recent else None
+    if not rec:
+        return ""
+    flag = pitcher_bounceback_flag(row, rec)
+    if flag not in ("bounceback", "regression"):
+        return ""
+    xera = _n(row.get("xERA"))
+    fip = _recent_fip(rec)
+    if flag == "bounceback":
+        return _hit_badge("&#8593;", GREEN,
+                           f"Recent FIP {fip:.2f} vs season {xera:.2f} xERA &mdash; rough recent "
+                           "results, but FIP (K/BB/HR only) strips out batted-ball/strand-rate "
+                           "luck. Backtesting shows starts like this tend to bounce back, not "
+                           "keep sliding &mdash; don't bench or sell off the ugly recent line alone.")
+    return _hit_badge("&#8595;", RED,
+                       f"Recent FIP {fip:.2f} vs season {xera:.2f} xERA &mdash; hot recent "
+                       "results, but FIP-adjusted he's outpitching his skill level. Backtesting "
+                       "shows starts like this tend to cool off, not keep rolling &mdash; "
+                       "don't chase the hot streak.")
 
 
 def compute_xera_offset(pitchers):
