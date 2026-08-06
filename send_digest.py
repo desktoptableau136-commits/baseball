@@ -550,8 +550,9 @@ def _sp_badge_context(row, qs_fires, k_fires, two_start_n, recent_era=None):
     if _is_blowup_risk(row, recent_era):
         drivers = _risk_drivers(row, recent_era)
         tail = ": " + " &middot; ".join(drivers) if drivers else ""
-        lines.append(f'{blowup_badge(row, recent_era)} low floor &mdash; blowup-prone{tail}. '
-                     f'A floor warning only; it doesn&rsquo;t lower the score.')
+        lines.append(f'{blowup_badge(row, recent_era)} low floor &mdash; blowup-prone this start{tail}. '
+                     f'Skill profile plus how tough the opposing lineup is for THIS start '
+                     f'(can raise or lower the flag). A floor warning only; it doesn&rsquo;t lower the score.')
     # The $/▼ regression badge is explained by `_pitcher_badge_context`, appended inside
     # `_pitcher_score_breakdown` (which every SP render pairs with this fn) so RP + Trade Lab
     # + positional-breakdown panels get it too — do NOT re-add it here or SP panels double it.
@@ -1285,7 +1286,8 @@ def _winprob_ctx(matchup, weekly_avgs=None, weekly_std=None, remaining_proj=None
 _PICKUP_WINDELTA_MIN  = 4    # min percentage-point win% gain to surface a pickup chip
 _PICKUP_CONTESTED_MAX = 60   # only surface a cat I'm not already winning comfortably (before% <)
 
-def _pickup_contrib(cand_row, role, remaining_frac, today_str, week_end_str, weeks_played=None):
+def _pickup_contrib(cand_row, role, remaining_frac, today_str, week_end_str, weeks_played=None,
+                     team_game_dates=None, opp_starter_by_date=None, pitchers_by_name=None):
     """Per-category production delta a free-agent pickup would add to MY remaining
     projected total this matchup, role-aware. Returns {cat: delta} (empty when the
     candidate contributes nothing this week). Extracted from pickup_win_delta so
@@ -1295,7 +1297,14 @@ def _pickup_contrib(cand_row, role, remaining_frac, today_str, week_end_str, wee
       - SP  (role 'sp'):  remaining K/QS/W from actual remaining starts × per-start rate
             (same as compute_pit_proj) — the most accurate case.
       - RP  (role 'rp'):  remaining SVHD from his season SV+H per matchup-week × remaining_frac.
-      - hit (role 'hit'): remaining R/HR/RBI/SB from each season stat per matchup-week × remaining_frac.
+      - hit (role 'hit'): remaining R/HR/RBI/SB from each season stat per matchup-week × a
+            quality-weighted remaining fraction — the SAME per-day opposing-starter-quality
+            weighting as compute_hit_proj's Tier 2 (via _opp_starter_quality_mult), just for
+            this ONE candidate's own MLB team instead of a whole fantasy roster, so a bat
+            picked up specifically because he's facing a soft week of pitching gets credit
+            for that in his own swing-chip number. Falls back to the flat `remaining_frac`
+            when team_game_dates/opp_starter_by_date/pitchers_by_name aren't all supplied, or
+            his team can't be resolved to any scheduled games (old snapshots degrade cleanly).
     RP/hit need `weeks_played` (matchup-weeks the season totals span); SP does not."""
     if role == "sp":
         ns = _starts_this_week(cand_row, today_str, week_end_str)
@@ -1313,19 +1322,32 @@ def _pickup_contrib(cand_row, role, remaining_frac, today_str, week_end_str, wee
             svhd = _n(cand_row.get("ESPN_SVHD")) or _n(cand_row.get("SVHD"))
             return {"SVHD": (svhd / weeks_played) * rf}
         # hit — boost cats only (B_SO is a strikeout cat a bat HURTS, so skip it)
+        if team_game_dates and opp_starter_by_date is not None and pitchers_by_name is not None:
+            full = _ABBREV_TO_FULLNAME.get((cand_row.get("Team") or "").upper())
+            if full:
+                win = rem = 0.0
+                for d in (team_game_dates.get(full) or []):
+                    win += 1
+                    if today_str <= d <= week_end_str:
+                        rem += _opp_starter_quality_mult(full, d, opp_starter_by_date, pitchers_by_name)
+                if win > 0:
+                    rf = rem / win
         return {c: (_n(cand_row.get(c)) / weeks_played) * rf
                 for c in ("R", "HR", "RBI", "SB")}
     return {}
 
 def pickup_win_delta(cand_row, ctx, remaining_frac, today_str, week_end_str,
-                     ptype=None, weeks_played=None):
+                     ptype=None, weeks_played=None,
+                     team_game_dates=None, opp_starter_by_date=None, pitchers_by_name=None):
     """The single contested category a free-agent pickup most improves my win% in —
     (cat, before_pct, after_pct) or None. Folds the candidate's OWN remaining production
     into my projected value and re-runs the CALIBRATED _cat_win_prob. Role-aware:
       - SP  (ptype 'sp' or _is_sp): remaining K/QS/W from actual remaining starts × per-
              start rate (same as compute_pit_proj) — the most accurate case.
       - RP  (ptype 'rp'):  remaining SVHD from his season SV+H per matchup-week × remaining_frac.
-      - hit (ptype 'hit'): remaining R/HR/RBI/SB from each season stat per matchup-week × remaining_frac.
+      - hit (ptype 'hit'): remaining R/HR/RBI/SB from each season stat per matchup-week × a
+             quality-weighted remaining fraction when team_game_dates/opp_starter_by_date/
+             pitchers_by_name are supplied (see _pickup_contrib), else the flat remaining_frac.
     The RP/hitter estimate uses `weeks_played` (matchup-weeks the season totals span), so it
     needs no per-team schedule. Display-only — never changes a projected W/L/T verdict; only
     answers 'does adding him move a category?'. Gated to a contested cat (before% < 60) that
@@ -1335,7 +1357,9 @@ def pickup_win_delta(cand_row, ctx, remaining_frac, today_str, week_end_str,
     role = ptype or ("sp" if _is_sp(cand_row) else None)
     if role not in ("sp", "rp", "hit"):
         return None
-    contrib = _pickup_contrib(cand_row, role, remaining_frac, today_str, week_end_str, weeks_played)
+    contrib = _pickup_contrib(cand_row, role, remaining_frac, today_str, week_end_str, weeks_played,
+                               team_game_dates=team_game_dates, opp_starter_by_date=opp_starter_by_date,
+                               pitchers_by_name=pitchers_by_name)
     if not contrib:
         return None
     best = None
@@ -1353,7 +1377,8 @@ def pickup_win_delta(cand_row, ctx, remaining_frac, today_str, week_end_str,
     return best[:3] if best else None
 
 def _move_win_delta(cand_row, role, winprob_ctx, per_cat, remaining_frac,
-                    today_str, week_end_str, weeks_played=None):
+                    today_str, week_end_str, weeks_played=None,
+                    team_game_dates=None, opp_starter_by_date=None, pitchers_by_name=None):
     """The Weekly Game Plan's matchup-LEVEL ranking signal — distinct from
     pickup_win_delta's single-category chip. Folds the candidate's _pickup_contrib deltas
     into a COPY of `per_cat` (the {cat: (p_win, p_tie)} map from _winprob_joint — never
@@ -1365,10 +1390,14 @@ def _move_win_delta(cand_row, role, winprob_ctx, per_cat, remaining_frac,
     when the candidate doesn't move any category with real production this week.
     Unlike pickup_win_delta, this does NOT gate on _PICKUP_WINDELTA_MIN/_CONTESTED_MAX —
     a candidate whose only production lands in an already-locked or already-conceded cat
-    naturally yields ~0 matchup lift and sorts itself out; the caller ranks by lift."""
+    naturally yields ~0 matchup lift and sorts itself out; the caller ranks by lift.
+    team_game_dates/opp_starter_by_date/pitchers_by_name (see _pickup_contrib) only affect
+    hitter candidates; ignored for sp/rp."""
     if not winprob_ctx or not per_cat:
         return None
-    contrib = _pickup_contrib(cand_row, role, remaining_frac, today_str, week_end_str, weeks_played)
+    contrib = _pickup_contrib(cand_row, role, remaining_frac, today_str, week_end_str, weeks_played,
+                               team_game_dates=team_game_dates, opp_starter_by_date=opp_starter_by_date,
+                               pitchers_by_name=pitchers_by_name)
     if not contrib:
         return None
     week_before, _, _ = _matchup_win_prob(list(per_cat.values()))
@@ -2528,13 +2557,16 @@ def build_glossary_section():
                "column shows season quality-start probability separately. (The <b>same QS / K+ letters mean "
                "something different on trade cards</b> — see Trade cards below.)"),
         _entry(f'⚠ low floor{_hit_badge("&#9888;", ORANGE)}',
-               "Warns a starter is <b>blowup-prone</b> — a skill profile at risk of the disaster outing (5+ ER) "
-               "that wrecks your ERA/WHIP and can't be undone once it's in your lineup. Blends baserunner traffic "
-               "(WHIP), a strikeout escape hatch (K% / whiff), effective run prevention (ERA regressed toward "
-               "xERA), and hard contact allowed, then escalates when the arm is <b>cold lately</b> (high L15 ERA). "
-               "<b>Hover</b> for the worst 2–3 drivers. A floor warning only — it never lowers the Score, and the "
-               "digest steers pickups away from flagged arms. Distinct from ▼/▽ sell-high — ⚠ is single-start "
-               "<i>tail</i> risk, ▼/▽ is <i>mean</i> regression."),
+               "Warns a starter is <b>blowup-prone this start</b> — a skill profile at risk of the disaster outing "
+               "(5+ ER) that wrecks your ERA/WHIP and can't be undone once it's in your lineup. Blends baserunner "
+               "traffic (WHIP), a strikeout escape hatch (K% / whiff), effective run prevention (ERA regressed "
+               "toward xERA), and hard contact allowed, then two escalators layer on top: <b>cold lately</b> (high "
+               "L15 ERA, one-directional — a hot stretch doesn't erase it) and the <b>opposing lineup for this "
+               "start</b> (bidirectional — a tough lineup raises the flag, a weak one can lower it). <b>Hover</b> "
+               "for the worst 2–3 drivers. A floor warning only — it never lowers the Score, and the digest steers "
+               "pickups away from flagged arms. Distinct from ▼/▽ sell-high — ⚠ is single-start <i>tail</i> risk, "
+               "▼/▽ is <i>mean</i> regression. Trade cards show the matchup-neutral skill-only read, since a "
+               "trade shouldn't flicker based on next week's schedule."),
         _entry(f'PWR{_hit_badge("PWR", PURPLE)}',
                "Next to a hitter's name — a top-tier power/HR threat (highest modeled HR-probability tier). "
                "Shown first when several badges apply. Hover (or tap the Score pill) for the drivers."),
@@ -3648,16 +3680,70 @@ def compute_pit_proj(pitchers, my_team, opp_team, today_str, week_end_str):
 # _project's rate-blend still handles.
 _HIT_PROJ_CATS = ["R", "HR", "RBI", "SB", "B_SO"]
 
-def compute_hit_proj(weekly_avgs, my_team, opp_team, team_hit_sched_frac):
-    """Hitter counting-stat projections (R/HR/RBI/SB/B_SO) for the REST of the matchup,
-    scaled by each team's ACTUAL remaining bat-games instead of a league-wide time
-    fraction — the hitter analog of compute_pit_proj. Returns a remaining_proj slice
+_HITPROJ_OPP_MULT = 0.15   # max +/- hitter-production swing from opposing-starter quality
+_HITPROJ_OPP_SPAN = 30.0   # qs_probability pts away from league-avg QS% (~38) for max swing
+_ABBREV_TO_FULLNAME = {v: k for k, v in _FULLNAME_TO_ABBREV.items()}
+_ABBREV_TO_FULLNAME["ATH"] = "Athletics"   # _FULLNAME_TO_ABBREV has 3 keys -> ATH (relocation
+                                            # renames); pin the reverse map to the current
+                                            # MLB StatsAPI name explicitly
+
+
+def _opp_starter_quality_mult(team_full_name, date_str, opp_starter_by_date, pitchers_by_name):
+    """Per-day hitter production multiplier from the opposing probable starter's quality.
+    Neutral (1.0) on ANY missing data -- no starter on record (TBD / off-day / beyond ESPN's
+    SP_DAYS_OUT=7 projection window), unresolved name, or a non-qualifying qs_probability."""
+    nm = (opp_starter_by_date.get(date_str) or {}).get(team_full_name)
+    if not nm:
+        return 1.0
+    row = pitchers_by_name.get(_badge_name_key(nm))
+    if not row:
+        return 1.0
+    qsp = qs_probability(row)
+    if qsp is None:
+        return 1.0
+    delta = max(-1.0, min(1.0, (qsp - 38) / _HITPROJ_OPP_SPAN))
+    return 1.0 - _HITPROJ_OPP_MULT * delta
+
+
+def _team_win_rem(team_key, hitters, team_game_dates, opp_starter_by_date,
+                   pitchers_by_name, today_str, week_end_str):
+    """(games in the whole window, opponent-quality-weighted remaining games) for one
+    fantasy team's hitters, via each hitter's MLB `Team` abbrev -> full name -> scheduled
+    game dates. Feeds compute_hit_proj's Tier-2 per-day path."""
+    roster = [h for h in hitters
+              if " ".join((h.get("FantasyTeam") or "").split()) == team_key
+              and int(h.get("Dataset", 0) or 0) == YEAR]
+    sum_win = sum_rem = 0.0
+    for h in roster:
+        full = _ABBREV_TO_FULLNAME.get((h.get("Team") or "").upper())
+        if not full:
+            continue
+        for d in (team_game_dates.get(full) or []):
+            sum_win += 1
+            if today_str <= d <= week_end_str:
+                sum_rem += _opp_starter_quality_mult(full, d, opp_starter_by_date, pitchers_by_name)
+    return sum_win, sum_rem
+
+
+def compute_hit_proj(weekly_avgs, my_team, opp_team, team_hit_sched_frac,
+                      hitters=None, pitchers=None, team_game_dates=None,
+                      opp_starter_by_date=None, today_str=None, week_end_str=None):
+    """Hitter counting-stat projections (R/HR/RBI/SB/B_SO) for the REST of the matchup —
+    the hitter analog of compute_pit_proj. Returns a remaining_proj slice
     {cat: {"my": remaining, "opp": remaining}} to merge into compute_pit_proj's dict; the
     build_category_pulse / classify_categories `rp = remaining_proj.get(cat)` branch then
-    uses it verbatim (pm = current + remaining). `team_hit_sched_frac` (from the snapshot,
-    fetch_data.get_matchup_dates) is each fantasy team's roster-weighted fraction of window
-    bat-games still to come. Empty / unmatched -> {} so the existing league-fraction
-    _project path is used unchanged (graceful fallback for old snapshots)."""
+    uses it verbatim (pm = current + remaining).
+
+    Three tiers, each falling back to the one below on missing data:
+      - Tier 2 (best): when hitters/pitchers/team_game_dates/opp_starter_by_date/today_str/
+        week_end_str are ALL supplied, scale each team's weekly average by a day-by-day sum
+        weighted by the QUALITY of the opposing probable starter each remaining day (via
+        _team_win_rem/_opp_starter_quality_mult) instead of one flat fraction.
+      - Tier 1 (fallback): any of those args missing -> today's exact flat
+        `weekly_avg[cat] * team_hit_sched_frac[team]` formula (also the per-team fallback
+        when Tier 2 can't resolve a specific team's roster to any scheduled games).
+      - Tier 0: team_hit_sched_frac itself empty/unmatched -> {} (existing league-fraction
+        _project path, unchanged -- graceful degrade for old snapshots / --team runs)."""
     fracs = team_hit_sched_frac or {}
     if not fracs:
         return {}
@@ -3672,6 +3758,18 @@ def compute_hit_proj(weekly_avgs, my_team, opp_team, team_hit_sched_frac):
     opp_frac = norm.get(opp_key)
     if my_frac is None or opp_frac is None:
         return {}
+
+    if hitters is not None and pitchers is not None and team_game_dates and \
+            opp_starter_by_date is not None and today_str and week_end_str:
+        pitchers_by_name = {_badge_name_key(r["PlayerName"]): r for r in pitchers
+                             if int(_n(r.get("Dataset")) or 0) == YEAR}
+        my_win, my_rem   = _team_win_rem(my_key,  hitters, team_game_dates, opp_starter_by_date,
+                                          pitchers_by_name, today_str, week_end_str)
+        opp_win, opp_rem = _team_win_rem(opp_key, hitters, team_game_dates, opp_starter_by_date,
+                                          pitchers_by_name, today_str, week_end_str)
+        my_frac  = (my_rem / my_win)   if my_win  > 0 else my_frac
+        opp_frac = (opp_rem / opp_win) if opp_win > 0 else opp_frac
+
     out = {}
     for cat in _HIT_PROJ_CATS:
         if cat in my_avgs and cat in opp_avgs:
@@ -3813,7 +3911,8 @@ def build_game_plan(matchup, winprob_ctx, per_cat, winprob_rf, winprob_weeks,
                     pitchers, hitters, fa_sp, fa_rp, fa_hit, pos_data,
                     my_team, today_str, week_end_str, is_sunday=False,
                     league_active_roster_max=26, league_il_roster_max=2,
-                    best_recent_p=None, best_recent_h=None, hit_pctile=None):
+                    best_recent_p=None, best_recent_h=None, hit_pctile=None,
+                    team_game_dates=None, opp_starter_by_date=None, pitchers_by_name=None):
     """Returns `(html, moves)`. `html` is The Weekly Game Plan: a contest/concede category
     read (Part A) plus up to _GAMEPLAN_MAX_HIT_MOVES ranked hitter move cards +
     _GAMEPLAN_MAX_PIT_MOVES ranked pitcher move cards (Part B), laid out in two columns,
@@ -4079,7 +4178,9 @@ def build_game_plan(matchup, winprob_ctx, per_cat, winprob_rf, winprob_weeks,
             scored = []
             for r, role in candidates:
                 res = _move_win_delta(r, role, winprob_ctx, per_cat, winprob_rf,
-                                      today_str, week_end_str, weeks_played=winprob_weeks)
+                                      today_str, week_end_str, weeks_played=winprob_weeks,
+                                      team_game_dates=team_game_dates, opp_starter_by_date=opp_starter_by_date,
+                                      pitchers_by_name=pitchers_by_name)
                 if not res:
                     continue
                 best_cat, cb, ca, wb, wa = res
@@ -4298,7 +4399,17 @@ def build_email(snap, override_team=None):
     # both pick it up. Empty on old snapshots -> hitter cats keep the league-fraction path.
     pit_proj.update(compute_hit_proj(weekly_avgs, my_team,
                                      matchup.get("opp_team", "") if matchup else "",
-                                     snap.get("team_hit_sched_frac")))
+                                     snap.get("team_hit_sched_frac"),
+                                     hitters=hitters, pitchers=pitchers,
+                                     team_game_dates=snap.get("team_game_dates"),
+                                     opp_starter_by_date=snap.get("opp_starter_by_date"),
+                                     today_str=today_str, week_end_str=week_end_str))
+
+    # Season-YEAR pitcher index for pickup_win_delta/_move_win_delta's hitter-candidate
+    # opponent-quality weighting (_pickup_contrib's hit branch) — built once here, reused at
+    # every call site instead of rebuilt per candidate.
+    pitchers_by_name = {_badge_name_key(r["PlayerName"]): r for r in pitchers
+                         if int(r.get("Dataset", 0) or 0) == YEAR}
 
     # Marginal-win% context (for pickup_win_delta) — same projection/sigma setup as Category
     # Pulse, so an FA streamer's "does this flip a category?" chip can't drift from the card.
@@ -4350,6 +4461,8 @@ def build_email(snap, override_team=None):
         league_active_roster_max=league_active_roster_max,
         league_il_roster_max=league_il_roster_max,
         best_recent_p=best_recent_p, best_recent_h=best_recent_h, hit_pctile=hit_pctile,
+        team_game_dates=snap.get("team_game_dates"), opp_starter_by_date=snap.get("opp_starter_by_date"),
+        pitchers_by_name=pitchers_by_name,
     )
     move_registry = {}
     for _m in (_rs_moves + _gp_moves):
@@ -5071,7 +5184,9 @@ def build_email(snap, override_team=None):
                 )
             bg = f"background:{SURFACE2};" if row_idx % 2 else ""
             row_idx += 1
-            _wd_hit = pickup_win_delta(r, winprob_ctx, winprob_rf, today_str, week_end_str, ptype="hit", weeks_played=winprob_weeks)
+            _wd_hit = pickup_win_delta(r, winprob_ctx, winprob_rf, today_str, week_end_str, ptype="hit", weeks_played=winprob_weeks,
+                                       team_game_dates=snap.get("team_game_dates"), opp_starter_by_date=snap.get("opp_starter_by_date"),
+                                       pitchers_by_name=pitchers_by_name)
             _cell, _bdrow = score_reveal(
                 r["_score"], _hitter_score_breakdown(r, best_recent_h, hit_pctile) + _winprob_context(_wd_hit)
                 + _move_badge_context(r.get("PlayerName", ""), move_registry),

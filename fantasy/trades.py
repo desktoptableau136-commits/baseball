@@ -1390,7 +1390,10 @@ def _trade_skill_badges(r, hit_pctile=None):
     if r.get("_tptype") == "hit":
         return hitter_badges(r, hit_pctile, regression=False)
     if _is_sp(r):
-        return sp_skill_badges(r) + blowup_badge(r)
+        # Trade evaluation stays matchup-neutral (durable skill only) -- a trade card's badge
+        # shouldn't flicker based on who's next on the schedule (mirrors _sp_qs_season's
+        # Team_OPS_Value:-1 strip for the same reason).
+        return sp_skill_badges(r) + blowup_badge({**r, "Team_OPS_Value": -1})
     return ""
 
 
