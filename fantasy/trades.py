@@ -190,6 +190,18 @@ _MEGA_SCAN_PER_TEAM = 2     # keep a couple per team pre-dedup (the dedup then t
 
 _POS_DEPTH_SLACK    = 1     # bodies beyond POS_STARTERS I can still use (bench/flex) before a position reads "stacked"
 
+_POS_NEED_SWAP_SLACK = 1    # extra cap slack _non_redundant_get_pos grants ONLY because every position it
+                             # evaluates is already a listed need_pos position (see _fills_need_pos /
+                             # _hitter_fills_need_pos, which pre-filter get_pos to need_pos keys before it's
+                             # ever passed in). Without this, a real upgrade at an already-thin position (e.g.
+                             # I own one mediocre SS-eligible body and land a clear upgrade) reads as "already
+                             # stacked" and stops counting as filling the need, purely from body count -- even
+                             # though the whole point of the trade is to replace that weak incumbent. The
+                             # expectation is the incumbent gets DROPPED separately afterward (a normal waiver
+                             # move), not swapped away inside the trade itself, so one upgrade-add without a
+                             # same-position give-back should still count. A second concurrent same-position
+                             # add in one deal can still trip the guard once body count clears both slack units.
+
 
 _STAR_TVAL_FLOOR    = 1.10  # _tval below which a player moves freely (no endowment premium) — mid relievers/role bats sit here
 _STAR_TVAL_SLOPE    = 1.4   # premium added per _tval point above the floor
@@ -394,16 +406,18 @@ def _is_drop_candidate(r, team_key, team_pos_counts=None, fa_replacement=None):
 def _non_redundant_get_pos(get_pos, outs, ins, my_pos_count):
     """Filter get-positions to those that AREN'T roster-redundant. A position P is redundant
     when the deal would leave me with more eligible bodies there than my startable slots plus
-    one bench (POS_STARTERS[P] + _POS_DEPTH_SLACK) AND I shed nobody eligible at P — e.g.
-    acquiring a 4th catcher while rostering three and dealing none back. Acquiring an upgrade
-    while shedding a body at P (a swap) still counts as filling the need. Guards against
-    trades that read as 'fills your C slot' when catching is already stacked."""
+    bench/flex slack plus the one-time need-swap credit (POS_STARTERS[P] + _POS_DEPTH_SLACK +
+    _POS_NEED_SWAP_SLACK) AND I shed nobody eligible at P — e.g. acquiring a 4th catcher while
+    rostering three and dealing none back. Acquiring an upgrade while shedding a body at P (a
+    swap) still counts as filling the need. Guards against trades that read as 'fills your C
+    slot' when catching is already stacked. ASSUMES get_pos is already need_pos-filtered by the
+    caller (_fills_need_pos / _hitter_fills_need_pos) — see _POS_NEED_SWAP_SLACK."""
     keep = set()
     for P in get_pos:
         added = sum(1 for i in ins if P in i.get("_tgroups", set()))
         shed  = sum(1 for o in outs if P in o.get("_tgroups", set()))
         post  = my_pos_count.get(P, 0) - shed + added
-        cap   = POS_STARTERS.get(P, 1) + _POS_DEPTH_SLACK
+        cap   = POS_STARTERS.get(P, 1) + _POS_DEPTH_SLACK + _POS_NEED_SWAP_SLACK
         if not (post > cap and shed == 0):
             keep.add(P)
     return keep
