@@ -593,11 +593,9 @@ def build_megadeal_board(pitchers, hitters, roto, team_keys, ranks, n,
 
 def _tl_chip(text, color):
     """A tinted badge chip matching the QS/5K+/PWR visual style used on every player row
-    (mirrors dashboard._legend_chip so the two keys read as one shared design system)."""
-    r, g, b = int(color[1:3], 16), int(color[3:5], 16), int(color[5:7], 16)
-    return (f'<span style="font-size:9px;font-weight:700;color:{color};'
-            f'background:rgba({r},{g},{b},0.12);border:1px solid rgba({r},{g},{b},0.35);'
-            f'border-radius:3px;padding:0 3px;vertical-align:middle;">{text}</span>')
+    (mirrors dashboard._legend_chip so the two keys read as one shared design system) --
+    delegates to the shared sd._hit_badge with this row's tighter pad/no-margin."""
+    return sd._hit_badge(text, color, size=9, pad="0 3px", margin_left=False)
 
 
 def _tl_legend_items():
