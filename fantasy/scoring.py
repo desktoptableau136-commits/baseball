@@ -680,6 +680,10 @@ def _effective_slg(season_row, recent_row):
 _HIT_RECENCY_MIN_AB  = 15     # min recent AB so the read isn't 3-AB noise
 _HIT_RECENCY_GAP_BA  = 0.030  # effective-AVG vs xBA gap that still counts as "survives regression"
 _HIT_RECENCY_GAP_SLG = 0.050  # same for SLG
+_HIT_RECENCY_STRONG_MULT = 1.5  # a SINGLE leg clearing this multiple of its threshold confirms the
+                                #   trend alone (when the other leg merely doesn't CONTRADICT it) —
+                                #   so a real power surge that hasn't yet shown in AVG (e.g. a big
+                                #   SLG jump on a modest AVG bump) isn't dropped as "noise".
 
 
 def hitter_recency_flag(season_row, recent_row):
@@ -696,9 +700,17 @@ def hitter_recency_flag(season_row, recent_row):
         return None
     gap_avg = _effective_avg(season_row, recent_row) - xba
     gap_slg = _effective_slg(season_row, recent_row) - xslg
-    if gap_avg <= -_HIT_RECENCY_GAP_BA and gap_slg <= -_HIT_RECENCY_GAP_SLG:
+    strong_ba, strong_slg = _HIT_RECENCY_STRONG_MULT * _HIT_RECENCY_GAP_BA, _HIT_RECENCY_STRONG_MULT * _HIT_RECENCY_GAP_SLG
+    # 'declining'/'improving' when BOTH legs clear their threshold, OR one leg clears STRONGLY
+    # (>= _HIT_RECENCY_STRONG_MULT x) while the other merely doesn't contradict it (same sign) —
+    # a real power surge shouldn't be voided just because the AVG hasn't fully caught up.
+    if ((gap_avg <= -_HIT_RECENCY_GAP_BA and gap_slg <= -_HIT_RECENCY_GAP_SLG)
+            or (gap_slg <= -strong_slg and gap_avg <= 0)
+            or (gap_avg <= -strong_ba and gap_slg <= 0)):
         return "declining"
-    if gap_avg >= _HIT_RECENCY_GAP_BA and gap_slg >= _HIT_RECENCY_GAP_SLG:
+    if ((gap_avg >= _HIT_RECENCY_GAP_BA and gap_slg >= _HIT_RECENCY_GAP_SLG)
+            or (gap_slg >= strong_slg and gap_avg >= 0)
+            or (gap_avg >= strong_ba and gap_slg >= 0)):
         return "improving"
     return "noise"
 
