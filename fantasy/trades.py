@@ -204,10 +204,36 @@ _POS_NEED_SWAP_SLACK = 1    # extra cap slack _non_redundant_get_pos grants ONLY
 
 
 _STAR_TVAL_FLOOR    = 1.10  # _tval below which a player moves freely (no endowment premium) — mid relievers/role bats sit here
-_STAR_TVAL_SLOPE    = 1.4   # premium added per _tval point above the floor
+_STAR_TVAL_REF      = 1.95  # _tval at which the premium curve reaches its cap (a genuine franchise anchor)
+_STAR_PREM_EXP      = 1.4   # CONVEXITY of the premium curve between floor and ref (>1 => genuine elites
+                            #   pull away from good-not-great regulars instead of scaling linearly). Replaced
+                            #   the old linear _STAR_TVAL_SLOPE so a top-5 bat isn't valued ~1.3x a solid
+                            #   role player the way a linear currency implied.
 
 
-_STAR_PREM_CAP      = 1.10  # ceiling so a franchise anchor can't demand an impossible overpay
+_STAR_PREM_CAP      = 1.50  # ceiling so a franchise anchor can't demand an impossible overpay (raised from
+                            #   1.10 alongside the convex curve so the very top tier separates from the pack)
+
+
+# The "best-player ANCHOR" the summed premium alone can't capture: a package can't buy a genuine
+# star with a COMMITTEE of good-not-great pieces (real managers anchor on the single best player
+# each side surrenders, with strong loss-aversion). anchor_gap = max_premium(acquired) −
+# max_premium(surrendered); it caps the acceptance % as a CEILING (not an additive nudge inside
+# the logistic, which a large need-inflated net_them would simply swamp) and is only PARTIALLY
+# buyable by a raw-value overpay (piling on depth can't pry a franchise player) — the way to
+# lower it is to put a COMPARABLE star on the give side. See _deal_star_reach / _accept_pct.
+_ANCHOR_BUY_FRAC  = 0.15  # fraction of a raw-value overpay that can buy DOWN the star anchor (small
+                          #   on purpose: quantity of depth barely moves a franchise player)
+_ANCHOR_CEIL_K    = 2.8   # steepness of the anchor-gap -> acceptance-ceiling exponential
+_ANCHOR_REACH_MIN = 0.15  # boolean reach gate: an anchor residual above this reads "aggressive ask"
+
+
+# Forced-drop cost: taking on MORE bodies than you ship forces a roster CUT (a full roster has no
+# empty slot), so each excess body a side receives costs it ~a replacement-level player. Deflates
+# the "pile on depth" net_them (extra bodies aren't free value) — the finite-roster reality. Keyed
+# a hair below the league's waiver-replacement level (_fa_replacement_tvals ~0.5-0.8) since the
+# body actually cut is a team's OWN worst, marginally under replacement.
+_FORCED_DROP_COST = 0.35  # per excess body received; subtracted from that side's demand-side net
 
 
 _TRADE_REALISTIC_MAX = 0.05 # rival "realistic" read: most value I may win and still call it realistic (aggressive)
@@ -756,6 +782,12 @@ def _grade_package(outs, ins, ctx):
     my_get_val = sum(i["_tval"] * _need_mult(i, my_needs, my_surplus, need_pos, surplus_pos) for i in ins)
     my_give_val = sum(o["_tval"] * _need_mult(o, my_needs, my_surplus, need_pos, surplus_pos) for o in outs)
     net_me = my_get_val - my_give_val
+    # FORCED-DROP COST (finite-roster reality): a full roster has no empty slot, so whichever side
+    # takes on MORE bodies than it ships must CUT a player (~replacement level) to fit. Each excess
+    # body received costs that side ~_FORCED_DROP_COST, so a "pile on depth" package isn't the free
+    # value a plain need-adjusted sum implies. The rival receives `outs` (my give); I receive `ins`.
+    net_them -= _FORCED_DROP_COST * max(0, len(outs) - len(ins))
+    net_me   -= _FORCED_DROP_COST * max(0, len(ins) - len(outs))
     # HONEST READ: a surviving deal that leaves the rival at exactly the floor at a
     # single-slot position (they give their starting C/1B/2B/3B/SS with no backup) is
     # thin, not clean. Each such slot penalizes net_them so _trade_tilt flips the read
@@ -891,13 +923,11 @@ def find_trades(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
 
     _my_target_pos = _TEAM_TARGET_POS.get(my_key, set())
 
-    def _target_relief(ins):
-        """_TARGET_POS_REACH_RELIEF when any incoming piece fills a personally-declared target
-        position (C/SS) -- see the constant's docstring. 0.0 (no relief) otherwise."""
-        if not _my_target_pos:
-            return 0.0
-        return _TARGET_POS_REACH_RELIEF if any(
-            set(i.get("_tfillpos", [])) & _my_target_pos for i in ins) else 0.0
+    def _target_relief(ins, net_val=0.0):
+        """Apex-scaled + overpay-gated target-position relief for THIS team's targets — delegates
+        to the shared `_target_pos_relief` so generation + display can't drift (see its docstring
+        and `_TARGET_POS_REACH_RELIEF`)."""
+        return _target_pos_relief(ins, net_val, _my_target_pos)
 
     trades = []
     for team in all_teams:
@@ -1128,7 +1158,7 @@ def find_trades(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
             if realistic_only and (t["my_verdict"] != "ACCEPT"
                                    or t["net_them"] < _TRADE_RIVAL_GAIN_MIN
                                    or _deal_star_reach(ins, outs, t["net_val"],
-                                                        target_relief=_target_relief(ins))):
+                                                        target_relief=_target_relief(ins, t["net_val"]))):
                 continue
             trades.append(t)
         # Megadeals are WIN-WIN-ONLY regardless of realistic_only (a big multi-player ask is only
@@ -1139,7 +1169,7 @@ def find_trades(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
             if t is None:
                 continue
             if (t["my_verdict"] != "ACCEPT" or t["net_them"] < _TRADE_RIVAL_GAIN_MIN
-                    or _deal_star_reach(ins, outs, t["net_val"], target_relief=_target_relief(ins))):
+                    or _deal_star_reach(ins, outs, t["net_val"], target_relief=_target_relief(ins, t["net_val"]))):
                 continue
             timing = (sum(1 for o in outs if o.get("_tsell")) + sum(1 for i in ins if i.get("_tbuy"))
                       - sum(1 for o in outs if o.get("_tbuy")) - sum(1 for i in ins if i.get("_tsell")))
@@ -1248,16 +1278,22 @@ def find_megadeals(pitchers, hitters, roto, my_team, best_recent_p, best_recent_
 
 def _star_premium(tval):
     """Graduated endowment/star premium a manager attaches to a player of this trade VALUE:
-    0 below _STAR_TVAL_FLOOR, rising _STAR_TVAL_SLOPE per _tval point, capped at _STAR_PREM_CAP.
-    Acceptance-layer only (NEVER folds into _tval). Keyed on `_tval`, NOT the role score — role
-    score and value diverge structurally (rho~0.82): a vulture-win reliever (Aaron Ashby: score
-    95, _tval 0.88) scores like a star but trades like a role player, and an elite closer scores
-    like every other closer while trading much cheaper. Pricing the premium on the cross-role
-    value currency fixes both, and makes relievers comparable to hitters/starters on ONE axis —
-    so the old `_star_role` exclusion is gone (a mid reliever simply sits below the floor at ~0,
-    an elite closer earns real premium). 0.88->0.00, 1.10->0.00, 1.42->0.45, 1.52->0.59,
-    1.90->1.10."""
-    return max(0.0, min(_STAR_PREM_CAP, (_n(tval) - _STAR_TVAL_FLOOR) * _STAR_TVAL_SLOPE))
+    0 below _STAR_TVAL_FLOOR, rising CONVEXLY (exponent _STAR_PREM_EXP) to _STAR_PREM_CAP at
+    _STAR_TVAL_REF. Acceptance-layer only (NEVER folds into _tval). Keyed on `_tval`, NOT the role
+    score — role score and value diverge structurally (rho~0.82): a vulture-win reliever (Aaron
+    Ashby: score 95, _tval 0.88) scores like a star but trades like a role player, and an elite
+    closer scores like every other closer while trading much cheaper. Pricing the premium on the
+    cross-role value currency fixes both, and makes relievers comparable to hitters/starters on
+    ONE axis — so the old `_star_role` exclusion is gone (a mid reliever simply sits below the
+    floor at ~0, an elite closer earns real premium). The curve is CONVEX (not the old linear
+    slope) so a genuine franchise talent pulls decisively away from a good-not-great regular
+    instead of the ~1.3x gap a linear currency implied — the compression that let a committee of
+    solid role players' summed premium cancel one elite's. 1.10->0.00, 1.19->0.06, 1.33->0.24,
+    1.50->0.52, 1.69->0.90, 1.90->1.38, >=1.95->1.50."""
+    x = (_n(tval) - _STAR_TVAL_FLOOR) / (_STAR_TVAL_REF - _STAR_TVAL_FLOOR)
+    if x <= 0.0:
+        return 0.0
+    return min(_STAR_PREM_CAP, (x ** _STAR_PREM_EXP) * _STAR_PREM_CAP)
 
 
 def _need_mult(row, need_cats, surplus_cats, need_pos=None, surplus_pos=None):
@@ -1284,71 +1320,134 @@ def _need_mult(row, need_cats, surplus_cats, need_pos=None, surplus_pos=None):
     return max(lo, min(hi, m))
 
 
+def _star_premium_sides(surrendered, received):
+    """(sum_gap, anchor_gap) of star premiums for a package, from the POV of a side that
+    SURRENDERS `surrendered` and RECEIVES `received`. Both terms are value-keyed via
+    `_star_premium(_tval_star)`:
+      - sum_gap    = Σprem(surrendered) − Σprem(received): catches shipping MULTIPLE premium
+        assets (e.g. two franchise players for one star + a role player — a lone high-value
+        return can't mask that two stars left).
+      - anchor_gap = max_prem(surrendered) − max_prem(received): the BEST-PLAYER anchor — a
+        COMMITTEE of good-not-great pieces can't buy one genuine star, because real managers
+        anchor on the single best player each side gives up (strong loss-aversion). This is the
+        term summing alone misses: several solid pieces' summed premium can cancel one elite's,
+        but their MAX can't.
+    Shared by `_deal_star_reach`, `_accept_pct` (rival POV) and `_deal_star_surrender` (my POV)."""
+    ps = [_star_premium(p.get("_tval_star", p.get("_tval"))) for p in (surrendered or [])]
+    pr = [_star_premium(o.get("_tval_star", o.get("_tval"))) for o in (received or [])]
+    sum_gap = sum(ps) - sum(pr)
+    anchor_gap = (max(ps) if ps else 0.0) - (max(pr) if pr else 0.0)
+    return sum_gap, anchor_gap
+
+
+def _target_pos_relief(ins, net_val, my_target_pos):
+    """Apex-scaled + overpay-gated target-position reach relief (see `_TARGET_POS_REACH_RELIEF`).
+    Base relief for an incoming piece at one of MY declared target positions, but:
+      - SCALED DOWN toward 0 as that piece nears the star-premium cap -- an APEX C/SS still can't
+        be pried for scraps; the "I'll knowingly pay a premium for a real starter here" premise
+        doesn't extend to "I'll give up almost nothing for a top-3 overall player".
+      - CAPPED by how much I'm ACTUALLY overpaying (`max(0, -net_val)`): me declaring a target
+        doesn't make the RIVAL more willing to ship their guy -- my real overpay does, and
+        `net_them` already reflects that -- so relief only ever credits the overpay portion
+        (this is what stops a fair-value acquisition of a non-apex target from spuriously
+        wiping its own small anchor and reading too high).
+    Shared by `find_trades`' `_target_relief` closure and `build_trade_radar`'s display-time
+    relief so the generation gate and the rendered chip can't drift.
+
+    Tied to the ANCHOR-DRIVING piece (the highest-premium acquisition), NOT the max over all
+    target pieces — otherwise a deal with an apex non-target-scaling piece could be relieved by a
+    lesser target piece that grants a big apex-scaled relief (e.g. acquiring apex Baldwin AND a
+    modest target Witt: Witt's large relief would wrongly wipe the anchor Baldwin drives). Relief
+    only applies when the piece I'm actually reaching for (my biggest acquisition) is itself one
+    of my declared targets."""
+    if not my_target_pos or not ins:
+        return 0.0
+    anchor_piece = max(ins, key=lambda i: _star_premium(i.get("_tval_star", i.get("_tval"))))
+    if not (set(anchor_piece.get("_tfillpos", [])) & my_target_pos):
+        return 0.0
+    prem = _star_premium(anchor_piece.get("_tval_star", anchor_piece.get("_tval")))
+    base = _TARGET_POS_REACH_RELIEF * (1.0 - prem / _STAR_PREM_CAP)
+    return min(base, max(0.0, -float(net_val or 0.0)))
+
+
 def _deal_star_reach(ins, outs, net_val, target_relief=0.0):
     """Market-perception (NOT value) check: would a rival balk because the deal asks them to
-    part with prized players without a real overpay? The premium the rival must be paid to
-    SURRENDER their side (`ins` = what I acquire) is the SUM of `_star_premium(_tval_star)` across
-    those players; the premium they RECEIVE back is the sum across `outs` (what I give). Reach
-    (they balk) when required overpay `req = sum(surrender) - sum(receive)` is positive AND I'm
-    NOT paying up by at least that much (`net_val > -req`). SUMMING (not max-per-side) is what
-    catches "two franchise players for one star + a role player": a lone high-value return can't
-    mask that the rival is shipping two premium assets. Value-keyed via `_star_premium`, so a
-    role-player's inflated role score no longer counts as a star and a mid reliever contributes
-    ~0. Keeps `_tval` a pure value currency; the premium lives in the acceptance layer only.
-    `target_relief` (default 0, see `_TARGET_POS_REACH_RELIEF`) shaves the required overpay when
-    the caller knows the deal fills a personally-declared target position -- I've already signaled
-    I'll pay a premium there, so the generic reach guard shouldn't fully apply. Called by
-    `_trade_tilt`."""
+    part with prized players without a real overpay? The rival SURRENDERS `ins` (what I acquire)
+    and RECEIVES `outs` (what I give). Two independent ways a deal reads as a reach:
+      - SUMMED reach: a genuine raw-value overpay CAN pry multiple non-elite premium assets, so
+        the summed premium gap is offsettable by my overpay (`net_val > -sum_req`). Unchanged
+        from the original guard, and still the thing that catches "two stars for one".
+      - ANCHOR reach: a COMMITTEE can't buy a franchise player. The anchor gap (best acquired −
+        best surrendered) is only PARTIALLY buyable by a raw overpay (`_ANCHOR_BUY_FRAC` — piling
+        on depth barely moves a star); the real way to clear it is to put a COMPARABLE star on
+        the give side (which raises `max_prem(outs)`). This is what makes "4 depth pieces for
+        Elly De La Cruz" read as a reach even at a big raw overpay.
+    Value-keyed via `_star_premium`, so a role-player's inflated role score no longer counts as a
+    star and a mid reliever contributes ~0. Keeps `_tval` a pure value currency; the premium lives
+    in the acceptance layer only. `target_relief` (default 0, see `_TARGET_POS_REACH_RELIEF`)
+    shaves the requirement when the deal fills a personally-declared target position -- but the
+    caller now apex-scales + overpay-gates it, so it barely applies to an APEX target (a genuine
+    franchise C/SS still can't be pried for scraps). Called by `_trade_tilt` + the generation
+    gates."""
     if not ins:
         return False
-    surrender = sum(_star_premium(p.get("_tval_star", p.get("_tval"))) for p in ins)
-    receive   = sum(_star_premium(o.get("_tval_star", o.get("_tval"))) for o in (outs or []))
-    req = max(0.0, surrender - receive - target_relief)
-    return req > 0.0 and net_val > -req
+    sum_gap, anchor_gap = _star_premium_sides(ins, outs)
+    # Both components must clear _ANCHOR_REACH_MIN so a TRIVIAL premium gap (a fair role-player
+    # deal, e.g. a modest target SS for two minor pieces) isn't spuriously flagged as a star reach
+    # and vetoed from generation — only a genuinely star-sized ask is.
+    sum_req = max(0.0, sum_gap - target_relief)
+    sum_reach = sum_req > _ANCHOR_REACH_MIN and net_val > -sum_req
+    anchor_resid = anchor_gap - target_relief - _ANCHOR_BUY_FRAC * max(0.0, -net_val)
+    anchor_reach = anchor_resid > _ANCHOR_REACH_MIN
+    return sum_reach or anchor_reach
 
 
 def _accept_pct(net_val, net_them, ins, outs, target_relief=0.0):
     """Continuous 0-100 read of how likely the RIVAL is to accept -- the same signals
-    `_deal_star_reach` gates on (demand-side net + any unmet star-reach premium), squashed
-    through a logistic centered on 0 so a dead-even demand-side read lands at 50%. NOT a
-    calibrated probability (there's no real acceptance-rate data to fit against) -- a continuous
-    view of the same ACCEPT/COUNTER + realistic/aggressive-ask boundary the tiers already draw,
-    so two BEST-tier cards (or two SLIM near-misses) can be told apart instead of only a coarse
-    label. Clipped to [_ACCEPT_PCT_FLOOR, _ACCEPT_PCT_CEIL] so it never claims a lock or a dead
-    end -- this is a heuristic nudge, not a promise. `net_them` should already carry the
-    thin-position penalty (see `_grade_package`); `target_relief` mirrors whatever was passed to
-    `_deal_star_reach` for the same package, so the two reads can't contradict each other.
-    `net_val` (my raw value edge, + = I win) matters here too: `_deal_star_reach` calls a package
-    clear of any reach once my overpay (-net_val) covers the required premium, so an unmet star
-    gap is credited for whatever overpay already offsets it (`max(0, req - max(0, -net_val))`) --
-    without this, a package that already cleared the boolean reach gate via a real overpay would
-    still show a misleadingly low % from the raw premium alone."""
+    `_deal_star_reach` gates on, squashed through a logistic centered on 0 so a dead-even
+    demand-side read lands at 50%. NOT a calibrated probability (there's no real acceptance-rate
+    data to fit against) -- a continuous view of the same realistic/aggressive-ask boundary, so
+    two similar cards can be told apart instead of only a coarse label. Clipped to
+    [_ACCEPT_PCT_FLOOR, _ACCEPT_PCT_CEIL] so it never claims a lock or a dead end.
+
+    Two star terms, matching `_deal_star_reach` so the % can't contradict the boolean:
+      - The SUMMED residual (offsettable by my raw overpay) is subtracted INSIDE the logistic,
+        alongside `net_them` -- a modest nudge on the demand-side value.
+      - The ANCHOR residual is applied as a hard CEILING on the %, NOT an additive nudge:
+        a large need-inflated `net_them` (piling on need-filling depth) would simply swamp an
+        additive star penalty, so the "committee can't buy a star" rule has to CAP the odds. The
+        ceiling decays exponentially in the unbought anchor gap; the only way to lift it is a
+        comparable star on the give side (which shrinks anchor_gap).
+    `net_them` should already carry the thin-position penalty AND the forced-drop cost (see
+    `_grade_package`/`find_trades`). `target_relief` mirrors whatever `_deal_star_reach` got."""
     # NOTE: deliberately NOT `_n()` here -- `_n` clamps ANY negative to 0 (it's built for raw
     # stat sentinels, where negative means missing), which would silently zero out a real
     # negative net_val/net_them (an overpay or a rival net loss) and break this math. `or 0`
     # only substitutes for None/falsy, never for a legitimate negative float.
     net_val = float(net_val or 0.0)
     net_them = float(net_them or 0.0)
-    surrender = sum(_star_premium(p.get("_tval_star", p.get("_tval"))) for p in (ins or []))
-    receive   = sum(_star_premium(o.get("_tval_star", o.get("_tval"))) for o in (outs or []))
-    req = max(0.0, surrender - receive - target_relief)
-    star_gap = max(0.0, req - max(0.0, -net_val))
-    drive = net_them - star_gap
-    pct = 100.0 / (1.0 + math.exp(-_ACCEPT_PCT_K * drive))
+    sum_gap, anchor_gap = _star_premium_sides(ins, outs)
+    buyable = max(0.0, -net_val)
+    sum_resid = max(0.0, sum_gap - target_relief - buyable)
+    anchor_resid = max(0.0, anchor_gap - target_relief - _ANCHOR_BUY_FRAC * buyable)
+    pct = 100.0 / (1.0 + math.exp(-_ACCEPT_PCT_K * (net_them - sum_resid)))
+    if anchor_resid > 0.0:
+        pct = min(pct, _ACCEPT_PCT_CEIL * math.exp(-_ANCHOR_CEIL_K * anchor_resid))
     return max(_ACCEPT_PCT_FLOOR, min(_ACCEPT_PCT_CEIL, pct))
 
 
 def _deal_star_surrender(ins, outs, net_val):
     """The MY-side mirror of `_deal_star_reach`: would *I* balk at parting with prized players
-    without a real value win? Required premium = SUM of `_star_premium(_tval_star)` across my give
-    (`outs`) minus the sum across my acquire (`ins`) — a star-for-star swap nets ~0. I hold out
-    when that's positive AND I'm NOT winning by at least that much (`net_val < req`). Same
-    value-keyed, summed premium; acceptance-layer only. Used by `_pending_verdict`."""
+    without a real value win? I SURRENDER `outs` (my give) and RECEIVE `ins` (my acquire). I hold
+    out when the requirement is positive AND I'm NOT winning by at least that much
+    (`net_val < req`, where `net_val` is my edge, + = I win). `req = max(sum_gap, anchor_gap)` —
+    the summed premium gap (a star-for-star swap nets ~0) OR the best-player anchor (I won't ship
+    my franchise player for a committee unless the raw value windfall is large), whichever is
+    bigger. Value-keyed, acceptance-layer only. Used by `_pending_verdict`."""
     if not outs:
         return False
-    give_prem = sum(_star_premium(o.get("_tval_star", o.get("_tval"))) for o in outs)
-    get_prem  = sum(_star_premium(p.get("_tval_star", p.get("_tval"))) for p in (ins or []))
-    req = max(0.0, give_prem - get_prem)
+    sum_gap, anchor_gap = _star_premium_sides(outs, ins)   # from MY surrendering POV
+    req = max(sum_gap, anchor_gap)
     return req > 0.0 and net_val < req
 
 
@@ -1675,6 +1774,10 @@ def _grade_pending_trades(pending, pitchers, hitters, roto, my_team,
         # `value` phrase + the counter-gap stay on BASE value (the universal read).
         _mm = lambda r: _need_mult(r, my_needs, my_surplus, my_need_pos, my_surplus_pos)
         net_me = sum(r["_tval"] * _mm(r) for r in ins) - sum(r["_tval"] * _mm(r) for r in outs)
+        # Forced-drop cost (finite roster): if accepting nets me MORE bodies than I ship, I must
+        # cut a ~replacement-level player to fit, so those extra bodies aren't free value. Same
+        # convention as _grade_package/find_trades (I receive `ins`).
+        net_me -= _FORCED_DROP_COST * max(0, len(ins) - len(outs))
         gcov = set().union(*[r["_tcats"] for r in ins]) & my_needs if ins else set()
         gpos = (_non_redundant_get_pos(set().union(*[set(r.get("_tfillpos", [])) for r in ins]),
                                        outs, ins, my_pos_count) if ins else set())
@@ -1929,8 +2032,7 @@ def build_trade_radar(pitchers, hitters, roto, my_team, best_recent_p, best_rece
         get_lbl  = ", ".join(gains) or "depth"
         send_lbl = ", ".join(_CAT_DISPLAY.get(c, c) for c in t["send_cats"])
         net = t.get("net_val", 0.0)
-        _relief = _TARGET_POS_REACH_RELIEF if (_my_target_pos and any(
-            set(i.get("_tfillpos", [])) & _my_target_pos for i in t["ins"])) else 0.0
+        _relief = _target_pos_relief(t["ins"], net, _my_target_pos)   # apex-scaled + overpay-gated, matches generation
         value, accept, acc_color = _trade_tilt(net, t["ins"], t["outs"], net_them=t.get("net_them"),
                                                target_relief=_relief)
         thesis = ("sell-high" if t.get("sell_out") else "") + \

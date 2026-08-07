@@ -251,8 +251,11 @@ def build_data(snap, my_team):
         # Acceptance-model tuning baked from send_digest so the Lab JS can't drift from the digest:
         # graduated star reluctance + aggressive realistic band + demand-side need multiplier.
         "tune": {
-            "starTvalFloor": sd._STAR_TVAL_FLOOR, "starTvalSlope": sd._STAR_TVAL_SLOPE,
-            "starPremCap": sd._STAR_PREM_CAP, "realisticMax": sd._TRADE_REALISTIC_MAX,
+            "starTvalFloor": sd._STAR_TVAL_FLOOR, "starTvalRef": sd._STAR_TVAL_REF,
+            "starPremExp": sd._STAR_PREM_EXP, "starPremCap": sd._STAR_PREM_CAP,
+            "anchorBuyFrac": sd._ANCHOR_BUY_FRAC, "anchorCeilK": sd._ANCHOR_CEIL_K,
+            "anchorReachMin": sd._ANCHOR_REACH_MIN, "forcedDropCost": sd._FORCED_DROP_COST,
+            "realisticMax": sd._TRADE_REALISTIC_MAX,
             "needCat": sd._NEED_MULT_CAT, "needPos": sd._NEED_MULT_POS,
             "needSurplus": sd._NEED_MULT_SURPLUS, "needClamp": list(sd._NEED_MULT_CLAMP),
             "thinPosPenalty": sd._TRADE_THIN_POS_PENALTY,   # depth floor: read penalty per single-slot pos a team is left thin at
@@ -426,18 +429,18 @@ def build_partner_fit(pitchers, hitters, roto, team_keys, ranks, n,
                 i_offer   = sorted(my_surplus & r_needs)    # my categorical reason for them
                 they_offer = sorted(r_surplus & my_needs)   # what they can spare me
 
-                def _relief_for(ins):
-                    return sd._TARGET_POS_REACH_RELIEF if (_pov_target_pos and any(
-                        set(i.get("_tfillpos", [])) & _pov_target_pos for i in (ins or []))) else 0.0
+                def _relief_for(ins, net_val):
+                    # apex-scaled + overpay-gated, matching find_trades' generation gate exactly
+                    return sd._target_pos_relief(ins, net_val, _pov_target_pos)
 
                 def _tilt(d):
                     ins = d.get("ins") or []
                     return sd._trade_tilt(d.get("net_val", 0), ins, d.get("outs"),
-                                          net_them=d.get("net_them"), target_relief=_relief_for(ins))
+                                          net_them=d.get("net_them"), target_relief=_relief_for(ins, d.get("net_val", 0)))
 
                 def _accept_pct(d):
                     return round(sd._accept_pct(d.get("net_val", 0), d.get("net_them"), d.get("ins"),
-                                                d.get("outs"), target_relief=_relief_for(d.get("ins"))))
+                                                d.get("outs"), target_relief=_relief_for(d.get("ins"), d.get("net_val", 0))))
 
                 # Only deals that are ACCEPT for MY side can be a "target" — a deal that's good for
                 # them but not for me (I overpay / fill no need) is exactly what made the board
@@ -506,7 +509,7 @@ def build_partner_fit(pitchers, hitters, roto, team_keys, ranks, n,
                             nvp, _nac, _ = _tilt(near)
                             stuck = _fit_stuck_reason(near.get("ins"), near.get("outs"),
                                                        near.get("net_val", 0), near.get("net_them"),
-                                                       target_relief=_relief_for(near.get("ins")))
+                                                       target_relief=_relief_for(near.get("ins"), near.get("net_val", 0)))
                             why = f"real value edge for you ({nvp}), but {stuck}"
                         else:
                             # COUNTER: the stall is on MY side of the ledger (I'd be paying up),
@@ -570,8 +573,7 @@ def build_megadeal_board(pitchers, hitters, roto, team_keys, ranks, n,
             # so the two surfaces can't drift in voice: names the headliner, a quality/scarcity
             # read off his own score, and what the rival gets out of it too.
             spark = sd._mega_insight_text(d)
-            _relief = sd._TARGET_POS_REACH_RELIEF if (_pov_target_pos and any(
-                set(i.get("_tfillpos", [])) & _pov_target_pos for i in d["ins"])) else 0.0
+            _relief = sd._target_pos_relief(d["ins"], d.get("net_val", 0), _pov_target_pos)
             recs.append({
                 "team": d["team"], "tier": "MEGA",
                 "get": get, "give": give,
@@ -1503,7 +1505,7 @@ function needLine(lbl, split) {{
 // One suggestion chip. Renders the SAME badges every other roster row shows (p.badges, pre-baked
 // server-side), prices by demand-side effective value (tval * needMult) instead of raw tval, and
 // shows a simulated accept% + risk glyphs for the deal WITH this candidate added (simulateAdd --
-// the exact acceptPct/myAcceptPct/starReachGap/starSurrenderGap/leavesShort/thinPos fns
+// the exact acceptPct/myAcceptPct/starPremiumSides/starSurrenderGap/leavesShort/thinPos fns
 // recompute()'s own verdict uses, so a chip's risk read can never diverge from what clicking it
 // actually produces). `x.fallback` marks a pure-value pad-in with NO need match -- rendered
 // visually distinct (dashed border, a neutral "~" marker instead of the green "+", an honest
@@ -1713,69 +1715,87 @@ function counterAddon(partnerTk, myMeta, partnerMeta, giveArr, getArr, gap) {{
 // real premium (relievers now comparable on one axis, so there's no role exclusion).
 function starPremium(tval) {{
   var T = DATA.tune;
-  return Math.max(0, Math.min(T.starPremCap, (tval - T.starTvalFloor) * T.starTvalSlope));
+  var x = (tval - T.starTvalFloor) / (T.starTvalRef - T.starTvalFloor);
+  if (x <= 0) return 0;
+  return Math.min(T.starPremCap, Math.pow(x, T.starPremExp) * T.starPremCap);
 }}
 
-// Raw star-reach gap (req) shared by dealStarReach's boolean gate AND the acceptPct read below,
-// so the two can't disagree: SUM of premium across what the rival surrenders (getArr, = what I
-// acquire) minus the SUM across what they receive back (giveArr). Summing (not max) catches
-// "two franchise players for one star + a role player". `relief` (see targetRelief below) softens
-// this exactly like fantasy.trades._deal_star_reach's target_relief -- WITHOUT it, a deal the
-// Partner-Fit board pointed at (which DOES apply the relief) can read more conservative once
-// actually built here, contradicting the card that suggested it.
-function starReachGap(getArr, giveArr, relief) {{
-  var surrender = 0, receive = 0;
-  getArr.forEach(function(p) {{ surrender += starPremium(p.tvalStar != null ? p.tvalStar : p.tval); }});
-  giveArr.forEach(function(p) {{ receive += starPremium(p.tvalStar != null ? p.tvalStar : p.tval); }});
-  return Math.max(0, surrender - receive - (relief || 0));
+// JS mirror of fantasy.trades._star_premium_sides: (sumGap, anchorGap) of star premiums from the
+// POV of a side that SURRENDERS `surrendered` and RECEIVES `received`.
+//   sumGap    = Σprem(surrendered) − Σprem(received): catches shipping MULTIPLE premium assets.
+//   anchorGap = max_prem(surrendered) − max_prem(received): the BEST-PLAYER anchor -- a COMMITTEE
+//     of good-not-great pieces can't buy one genuine star (their summed premium can cancel an
+//     elite's, but their MAX can't). This is the term summing alone misses.
+function starPremiumSides(surrendered, received) {{
+  var ps = surrendered.map(function(p) {{ return starPremium(p.tvalStar != null ? p.tvalStar : p.tval); }});
+  var pr = received.map(function(o) {{ return starPremium(o.tvalStar != null ? o.tvalStar : o.tval); }});
+  var sumGap = ps.reduce(function(a,b){{return a+b;}},0) - pr.reduce(function(a,b){{return a+b;}},0);
+  var anchorGap = (ps.length ? Math.max.apply(null, ps) : 0) - (pr.length ? Math.max.apply(null, pr) : 0);
+  return {{ sumGap: sumGap, anchorGap: anchorGap }};
 }}
 
-// JS mirror of send_digest._deal_star_reach: would a rival balk at parting with prized players
-// without a real overpay? Reach (they balk) when the required overpay is positive AND I'm not
-// paying up by at least it (net > -req). Drives the "Would they do it?" read.
+// JS mirror of send_digest._deal_star_reach: would a rival balk at parting with prized players?
+// Two independent reaches (the rival surrenders getArr = what I acquire, receives giveArr):
+//   SUMMED reach: a real raw-value overpay CAN pry multiple non-elite premium assets (offsettable
+//     by my overpay); must clear anchorReachMin so a trivial gap isn't a false reach.
+//   ANCHOR reach: a COMMITTEE can't buy a franchise player -- only PARTIALLY buyable by a raw
+//     overpay (anchorBuyFrac); the real lever is a COMPARABLE star on the give side.
 function dealStarReach(getArr, giveArr, netVal, relief) {{
-  var req = starReachGap(getArr, giveArr, relief);
-  return req > 0 && netVal > -req;
+  var T = DATA.tune, g = starPremiumSides(getArr, giveArr);
+  relief = relief || 0;
+  var sumReq = Math.max(0, g.sumGap - relief);
+  var sumReach = sumReq > T.anchorReachMin && netVal > -sumReq;
+  var anchorResid = g.anchorGap - relief - T.anchorBuyFrac * Math.max(0, -netVal);
+  var anchorReach = anchorResid > T.anchorReachMin;
+  return sumReach || anchorReach;
 }}
 
-// This POV's declared target positions (C/SS overlay, see fantasy.trades._TEAM_TARGET_POS) --
-// when what I'm ACQUIRING (getArr) fills one, soften the star-reach gate the same amount the
-// Partner-Fit board/megadeal strip already did when they surfaced this deal as a suggestion.
-function targetRelief(getArr, myMeta) {{
-  var tpos = (myMeta && myMeta.target_pos) || [];
-  if (!tpos.length) return 0;
-  var hits = getArr.some(function(p) {{ return (p.tgroups || []).some(function(g) {{ return tpos.indexOf(g) >= 0; }}); }});
-  return hits ? (DATA.tune.targetPosReachRelief || 0) : 0;
+// JS mirror of fantasy.trades._target_pos_relief: apex-scaled + overpay-gated target-position
+// relief, TIED TO THE ANCHOR-DRIVING piece (my highest-premium acquisition), NOT the max over all
+// target pieces -- otherwise a lesser target piece's big apex-scaled relief could wrongly wipe the
+// anchor an apex acquisition drives. Relief only when my biggest acquisition is itself a declared
+// target; scaled DOWN toward 0 as it nears the cap (an apex C/SS still can't be pried for scraps);
+// capped by my ACTUAL overpay (declaring a target doesn't move the rival; my overpay does).
+function targetRelief(getArr, myMeta, netVal) {{
+  var T = DATA.tune, tpos = (myMeta && myMeta.target_pos) || [];
+  if (!tpos.length || !getArr.length) return 0;
+  var anchorPiece = getArr[0], best = starPremium(getArr[0].tvalStar != null ? getArr[0].tvalStar : getArr[0].tval);
+  getArr.forEach(function(p) {{
+    var pr = starPremium(p.tvalStar != null ? p.tvalStar : p.tval);
+    if (pr > best) {{ best = pr; anchorPiece = p; }}
+  }});
+  if (!(anchorPiece.tgroups || []).some(function(g){{ return tpos.indexOf(g) >= 0; }})) return 0;
+  var base = (T.targetPosReachRelief || 0) * (1 - best / T.starPremCap);
+  return Math.min(base, Math.max(0, -(netVal || 0)));
 }}
 
-// JS mirror of fantasy.trades._accept_pct: a continuous 0-100 "would they say yes" read from
-// the same demand-side net (already thin-position-penalized, see netThemRead below) minus any
-// star-reach premium NOT already covered by my own overpay (mirrors dealStarReach's exact pass
-// boundary: a package clears the reach gate once my overpay, -netVal, covers starGap, so any
-// leftover gap is credited for whatever's already offset), squashed through a logistic centered
-// on 0 (a dead-even demand-side read -> 50%). A heuristic nudge, not a calibrated probability --
-// clipped away from 0%/100% so it never claims a lock or a dead end.
-function acceptPct(netVal, netThem, starGap) {{
-  var T = DATA.tune;
-  var unmetGap = Math.max(0, (starGap || 0) - Math.max(0, -(netVal || 0)));
-  var drive = (netThem || 0) - unmetGap;
-  var pct = 100 / (1 + Math.exp(-T.acceptPctK * drive));
+// JS mirror of fantasy.trades._accept_pct: a continuous 0-100 "would they say yes" read. Two star
+// terms matching dealStarReach so the % can't contradict the boolean: the SUMMED residual is a
+// modest nudge INSIDE the logistic (alongside netThem); the ANCHOR residual is a hard CEILING on
+// the % (a large need-inflated netThem would swamp an additive star penalty, so "a committee can't
+// buy a star" has to CAP the odds). netThem must already carry the thin-pos + forced-drop terms.
+function acceptPct(netVal, netThem, getArr, giveArr, relief) {{
+  var T = DATA.tune, g = starPremiumSides(getArr, giveArr);
+  relief = relief || 0;
+  var buyable = Math.max(0, -(netVal || 0));
+  var sumResid = Math.max(0, g.sumGap - relief - buyable);
+  var anchorResid = Math.max(0, g.anchorGap - relief - T.anchorBuyFrac * buyable);
+  var pct = 100 / (1 + Math.exp(-T.acceptPctK * ((netThem || 0) - sumResid)));
+  if (anchorResid > 0) pct = Math.min(pct, T.acceptPctCeil * Math.exp(-T.anchorCeilK * anchorResid));
   return Math.max(T.acceptPctFloor, Math.min(T.acceptPctCeil, pct));
 }}
 
-// Raw star-surrender gap (req), shared by dealStarSurrender's boolean gate AND myAcceptPct
-// below: SUM of premium across my give (giveArr) minus the SUM across my acquire (getArr).
+// Star-surrender requirement (req = max(sumGap, anchorGap)) from MY surrendering POV (I surrender
+// giveArr, receive getArr), shared by dealStarSurrender's boolean gate AND myAcceptPct below.
 function starSurrenderGap(getArr, giveArr) {{
-  var givePrem = 0, getPrem = 0;
-  giveArr.forEach(function(p) {{ givePrem += starPremium(p.tvalStar != null ? p.tvalStar : p.tval); }});
-  getArr.forEach(function(p) {{ getPrem += starPremium(p.tvalStar != null ? p.tvalStar : p.tval); }});
-  return Math.max(0, givePrem - getPrem);
+  var g = starPremiumSides(giveArr, getArr);
+  return Math.max(0, Math.max(g.sumGap, g.anchorGap));
 }}
 
 // MY-side mirror (send_digest._deal_star_surrender): would *I* balk at parting with prized
-// players without a real value win? I hold out when the required premium is positive AND I'm
-// not winning by at least it (net < req). Same value-keyed, summed premium — drives "Would you
-// do it?".
+// players without a real value win? I hold out when the requirement is positive AND I'm not
+// winning by at least it (net < req). req is now max(sumGap, anchorGap) — the best-player anchor
+// protects my franchise player from a committee too. Drives "Would you do it?".
 function dealStarSurrender(getArr, giveArr, netVal) {{
   var req = starSurrenderGap(getArr, giveArr);
   return req > 0 && netVal < req;
@@ -1851,27 +1871,30 @@ function coachScore(p, meta, holderMeta) {{
 
 // Simulates adding candidate `p` on top of the CURRENT in-progress deal (bundle.giveArr/getArr)
 // -- mirrors the exact acceptance-layer fns recompute()'s own verdict uses (targetRelief/thinPos/
-// leavesShort/starReachGap/starSurrenderGap/acceptPct/myAcceptPct), so a suggestion chip's
+// leavesShort/starPremiumSides/starSurrenderGap/acceptPct/myAcceptPct), so a suggestion chip's
 // accept%/risk read can never diverge from what actually happens once you click it into the deal.
 function simulateAdd(side, p, bundle) {{
   var giveArr = bundle.giveArr, getArr = bundle.getArr;
   var myMeta = bundle.myMeta, partnerMeta = bundle.partnerMeta;
   if (side === 'R') {{                                   // candidate joins GET (I acquire p)
     var getArr2 = getArr.concat([p]);
-    var relief2 = targetRelief(getArr2, myMeta);
+    var nv2 = bundle.netVal + p.tval;
+    var relief2 = targetRelief(getArr2, myMeta, nv2);
     var thinThem2  = thinPos(partnerMeta.pos_count, getArr2, giveArr);
     var shortThem2 = leavesShort(partnerMeta.pos_count, getArr2, giveArr);
     var netThemRead2 = sumEff(giveArr, partnerMeta) - sumEff(getArr2, partnerMeta)
-                     - (DATA.tune.thinPosPenalty || 0) * thinThem2.length;
-    var reachGap2 = starReachGap(getArr2, giveArr, relief2);
-    var pct = Math.round(acceptPct(bundle.netVal + p.tval, netThemRead2, reachGap2));
-    return {{ pct: pct, thin: !!thinThem2.length, short: !!shortThem2.length, starRisk: reachGap2 > 0 }};
+                     - (DATA.tune.thinPosPenalty || 0) * thinThem2.length
+                     - (DATA.tune.forcedDropCost || 0) * Math.max(0, giveArr.length - getArr2.length);
+    var pct = Math.round(acceptPct(nv2, netThemRead2, getArr2, giveArr, relief2));
+    return {{ pct: pct, thin: !!thinThem2.length, short: !!shortThem2.length,
+              starRisk: dealStarReach(getArr2, giveArr, nv2, relief2) }};
   }}
   var giveArr2 = giveArr.concat([p]);                    // candidate joins OFFER (I surrender p)
   var thinMe2  = thinPos(myMeta.pos_count, giveArr2, getArr);
   var shortMe2 = leavesShort(myMeta.pos_count, giveArr2, getArr);
   var surrGap2 = starSurrenderGap(getArr, giveArr2);
-  var netMe2 = sumEff(getArr, myMeta) - sumEff(giveArr2, myMeta);
+  var netMe2 = sumEff(getArr, myMeta) - sumEff(giveArr2, myMeta)
+             - (DATA.tune.forcedDropCost || 0) * Math.max(0, getArr.length - giveArr2.length);
   var pct = Math.round(myAcceptPct(bundle.netVal - p.tval, netMe2, surrGap2));
   return {{ pct: pct, thin: !!thinMe2.length, short: !!shortMe2.length, starRisk: surrGap2 > 0 }};
 }}
@@ -1969,6 +1992,11 @@ function recompute() {{
   // (netVal) stays the universal yardstick, shown alongside. Mirrors send_digest net_me/net_them.
   var netMe   = sumEff(getArr, myMeta) - sumEff(giveArr, myMeta);        // + = I win by MY needs
   var netThem = sumEff(giveArr, partnerMeta) - sumEff(getArr, partnerMeta);  // + = they win by THEIRS
+  // FORCED-DROP COST (finite roster, mirrors _grade_package): whichever side receives MORE bodies
+  // than it ships must cut a ~replacement-level player, so extra depth isn't free value. The rival
+  // receives giveArr; I receive getArr.
+  netThem -= (DATA.tune.forcedDropCost || 0) * Math.max(0, giveArr.length - getArr.length);
+  netMe   -= (DATA.tune.forcedDropCost || 0) * Math.max(0, getArr.length - giveArr.length);
 
   // Needs the package already resolves — via the SAME resolvedNeeds() helper needSplit() and
   // targetReasons() use, so the verdict, the Deal Coach headline, and the chip wording can never
@@ -2047,7 +2075,7 @@ function recompute() {{
   // displayed Their-value row stays pure), so the tilt naturally flips toward "aggressive ask".
   var thinNote = thinThem.length ? ' (no backup at ' + thinThem.join(', ') + ')' : '';
   var netThemRead = netThem - (DATA.tune.thinPosPenalty || 0) * thinThem.length;
-  var relief = targetRelief(getArr, myMeta);
+  var relief = targetRelief(getArr, myMeta, netVal);
   var pfTier, pfReason;
   if (!lKeys.length && !rKeys.length) {{
     pfTier = 'na'; pfReason = '&mdash;';
@@ -2068,7 +2096,7 @@ function recompute() {{
     pfTier = 'maybe'; pfReason = 'doesn\'t address a listed need, but the price is fair &mdash; a coin flip' + thinNote;
   }}
   var pfPct = (lKeys.length || rKeys.length)
-            ? Math.round(acceptPct(netVal, netThemRead, starReachGap(getArr, giveArr, relief))) : null;
+            ? Math.round(acceptPct(netVal, netThemRead, getArr, giveArr, relief)) : null;
 
   // OVERALL-DEAL check: the pill above answers "is this good FOR ME" — but a trade is a
   // two-sided negotiation, so an ACCEPT that the rival would flatly balk at (pfTier no/maybe)
