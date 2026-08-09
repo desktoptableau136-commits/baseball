@@ -7,7 +7,7 @@ on:
     # -- comfortably past ESPN's overnight refresh, so the fetch sees the completed
     # prior day. (Only a rare fast-scheduler day would run it early enough to risk a
     # half-updated day.) Firing earlier -> earlier arrival but more of that risk.
-    - cron: '0 6 * * *'
+    - cron: '0 10 * * *'
   workflow_dispatch:       # allows manual trigger from the GitHub Actions UI
 
 jobs:
