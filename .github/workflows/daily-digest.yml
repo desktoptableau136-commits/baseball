@@ -2,11 +2,7 @@ name: Daily Fantasy Baseball Digest
 
 on:
   schedule:
-    # Once daily, firing at 2 AM EDT (06:00 UTC). GitHub's scheduler typically sits
-    # on the job ~6h before running it, so it actually EXECUTES (and emails) ~8 AM ET
-    # -- comfortably past ESPN's overnight refresh, so the fetch sees the completed
-    # prior day. (Only a rare fast-scheduler day would run it early enough to risk a
-    # half-updated day.) Firing earlier -> earlier arrival but more of that risk.
+    # Once daily, firing at 6 AM EDT (10:00 UTC). 
     - cron: '0 10 * * *'
   workflow_dispatch:       # allows manual trigger from the GitHub Actions UI
 
