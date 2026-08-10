@@ -383,30 +383,59 @@ precedent just above: an unvalidated signal was shipped into a live flag, backte
 found its direction **inverted**, and it had to be disabled rather than repointed because
 callers already depended on its polarity. SIERA must not repeat that at the score level.
 
-**Option A (the lower-risk badge path) HAS shipped, based on the backtest result below:**
-- **`sp_skill_badges`'s third chip, `SI` (silver)** (`fantasy/scoring.py`, `_SIERA_SEASON_MAX =
-  2.95`, same `_SP_SKILL_MIN_IP` floor as `QS`/`K+`) — an absolute "top-fifth of the qualified-
-  SP pool by SIERA" elite-skill flag, exactly mirroring the `_sp_qs_season`/`QS`/`K+` template.
-  **Caveat:** this specific absolute-threshold claim isn't what the backtest tested (the
-  backtest is a *relative* predictive-validity check, not a validation of "top-fifth SIERA is
-  individually meaningful") — it's included on the same low-risk logic as `QS`/`K+`
-  (display-only, trade-surfaces-only, trivially reversible), not because the backtest speaks
-  to it directly.
-- **`siera_regression_badge`, `SI+`/`SI-` (green/red)** (`fantasy/scoring.py`, alongside a new
+**Option A (the lower-risk badge path) HAS shipped, based on the backtest result below —
+and was later revised once badge-proliferation and RP-coverage concerns surfaced (same
+session, see "Badge landscape revision" below):**
+- **`pitcher_skill_badges`'s third chip, `SI` (silver)** (`fantasy/scoring.py`, renamed from
+  `sp_skill_badges` — was SP-only, now also covers RP; `_SIERA_SEASON_MAX = 2.95` for SP,
+  `_SIERA_RP_SEASON_MAX = 2.90` for RP, each with its own qualifying floor — `_SP_SKILL_MIN_IP`
+  for SP, the existing `_pit_viable_min("RP", ...)` GP-or-IP floor for RP) — an absolute
+  "top-fifth of the qualified pool by SIERA" elite-skill flag, exactly mirroring the
+  `_sp_qs_season`/`QS`/`K+` template (RP thresholds derived the same empirical-percentile way,
+  not ported from the SP numbers — the qualified-RP pool runs slightly better at the
+  top-fifth mark for both K% and SIERA). **Caveat unchanged:** this absolute-threshold claim
+  isn't what the backtest tested (the backtest is a *relative* predictive-validity check) —
+  included on the same low-risk logic as `QS`/`K+` (display-only, trade-surfaces-only,
+  trivially reversible), not because the backtest speaks to it directly. `QS` stays SP-only
+  (structural — a quality start has no relief analog); `_pitcher_skill_context` (renamed from
+  `_sp_skill_context`, in `fantasy/analytics.py`) mirrors the SP/RP split and now also explains
+  `SI` (it previously only explained `QS`/`K+` — a gap from the original build, fixed here).
+- **`siera_regression_badge`, `SI+`/`SI-` (green/red)** (`fantasy/scoring.py`, alongside
   `compute_siera_offset`/`siera_regression_flag`/`_SIERA_OFFSET`/`_SREG_ERA` — the exact same
   de-biased-gap pattern as `compute_xera_offset`/`pitcher_regression_flag`) — a SEPARATE
   buy-low/sell-high flag from the existing xERA-based `$`/`▼`/`▽` badge, not a repointing of
-  it: the backtest never showed SIERA beating xERA (xERA won throughout, even with its unfair
-  lookahead advantage), so there's no evidence to justify swapping xERA out of the trusted,
-  already-depended-upon badge. Shipped as an independent, lower-confidence chip instead — the
-  same "add a new signal, don't repoint an old one on weak evidence" move `pitcher_bounceback_
-  badge` made. No recency-confirmation layer (that would need its own backtest, same reason
-  `pitcher_recency_flag` stays disabled) — a single season-level read. Text glyphs (`SI+`/
-  `SI-`), not `$`/`▼`/`▽` or `↑`/`↓`, so a row showing all of them doesn't visually collide.
-  Wired into the same surfaces as `pitcher_bounceback_badge` (My Upcoming Starts, FA SP,
-  Today's MLB Games, Weekly Game Plan cards, dashboard My Pitching + FA Radar Starters) —
-  deliberately NOT the tap-to-expand bounce-back context line, and NOT (yet) its own tap-to-
-  expand context entry either (a nice-to-have, not required to ship the badge).
+  it. **Rescoped to a LOW-IP LANE** (`_SREG_MIN_IP=8` to `_SREG_MAX_IP=_XREG_ERA_IP=20`,
+  exclusive) after the original always-on design (any IP ≥ 20, same floor as the `$` badge)
+  turned out to just re-ask the `$` badge's own question on the same rows — pure redundancy,
+  not a second opinion. The rescoped version instead fills a real gap: below the `$` badge's
+  20-IP floor, **no buy/sell signal exists at all today**, even though SIERA's own data floor
+  (`get_bbref_pitcher_battedball`'s `BF>=20`, ~5-7 IP) is available much earlier. Two honesty
+  notes on this specific choice: (1) the backtest's `xERA` arm is *season-total*, not
+  date-ranged, so "SIERA never beat xERA" is closer to "never got a fair fight against xERA"
+  for exactly the fresh-call-up/injury-return case this lane targets — that arm's leakage is
+  worst precisely when a player's season IS mostly the window being predicted; (2) the
+  backtest's *smallest tested bucket* was `BF>=100` (~24 IP) — this lane's actual range
+  (~8-20 IP) was never itself a backtested bucket, so treat it as a reasoned extrapolation
+  from the metric's mechanism + its lower data floor, not a directly validated result. Text
+  glyphs (`SI+`/`SI-`), not `$`/`▼`/`▽` or `↑`/`↓`, so a row showing all of them doesn't
+  visually collide. Applies to SP and RP alike (was never `_is_sp`-gated). Wired into the same
+  surfaces as `pitcher_bounceback_badge` (My Upcoming Starts, FA SP, Today's MLB Games, Weekly
+  Game Plan cards, dashboard My Pitching + FA Radar Starters) — deliberately NOT the
+  tap-to-expand bounce-back context line, and NOT (yet) its own tap-to-expand context entry
+  either (a nice-to-have, not required to ship the badge).
+
+**Badge landscape revision (same session, after Option A shipped):** once live, the pitcher
+buy-low/sell-high space read as crowded — up to four chips could stack on one row (⚠ blowup,
+`$`/`▼`/`▽`, `↑`/`↓` bounce-back, `SI+`/`SI-`), and `SI+`/`SI-` in particular was asking the
+same question as `$`/`▼`/`▽` on the same rows with weaker evidence. Resolved by giving
+`SI+`/`SI-` an exclusive, non-overlapping IP lane (above) rather than cutting it — the
+`$`/`▼`/`▽` badge doesn't fire below 20 IP anyway, so narrowing `SI+`/`SI-` to exactly that
+gap turns a redundant second opinion into the ONLY read available for a thin-sample arm,
+at the cost of the low end of that lane being extrapolated rather than backtested (see above).
+Separately, `SI`/`K+` were extended to relievers (see `pitcher_skill_badges` above) since
+nothing structurally justified withholding a rate-based skill read from RPs — only `QS` has a
+real starter-only rationale. No new badge glyphs were added by either change, so the glossary
+grew by editing two existing entries, not adding new ones.
 
 **Validation status (as of this session, 2022–2025 pooled):** `backtest_siera.py` runs a
 season-halves predictive-validity check (first-half SIERA vs. second-half actual ERA, pooled

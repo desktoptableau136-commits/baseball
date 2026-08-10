@@ -276,14 +276,16 @@ def _serialize(r, role, best_recent_h, best_recent_p, hit_pctile, is_drop=False)
         badges    = sd.hitter_badges(r, hit_pctile, idx_recent=best_recent_h)
         breakdown = sd._hitter_score_breakdown(r, best_recent_h, hit_pctile)
     elif role == "sp":
-        # Season skill (QS / K+) first, then the risk flags (blowup ⚠ / regression $ ▼▽).
+        # Season skill (QS / K+ / SI) first, then the risk flags (blowup ⚠ / regression $ ▼▽).
         # blowup_badge is matchup-neutralized (Team_OPS_Value:-1) so a trade card's badge
         # doesn't flicker based on who's next on the schedule -- mirrors fantasy/trades.py.
-        badges    = sd.sp_skill_badges(r) + sd.blowup_badge({**r, "Team_OPS_Value": -1}) + sd.pitcher_regression_badge(r, idx_recent=best_recent_p)
-        breakdown = sd._pitcher_score_breakdown(r, best_recent_p) + sd._sp_skill_context(r)
+        badges    = sd.pitcher_skill_badges(r) + sd.blowup_badge({**r, "Team_OPS_Value": -1}) + sd.pitcher_regression_badge(r, idx_recent=best_recent_p)
+        breakdown = sd._pitcher_score_breakdown(r, best_recent_p) + sd._pitcher_skill_context(r)
     else:
-        badges    = sd.pitcher_regression_badge(r, idx_recent=best_recent_p)
-        breakdown = sd._pitcher_score_breakdown(r, best_recent_p)
+        # RP get the same K+/SI season-skill badges as SP (own thresholds/floor), just never
+        # QS (structurally SP-only) or ⚠ blowup (no 'next start' framing for a reliever).
+        badges    = sd.pitcher_skill_badges(r) + sd.pitcher_regression_badge(r, idx_recent=best_recent_p)
+        breakdown = sd._pitcher_score_breakdown(r, best_recent_p) + sd._pitcher_skill_context(r)
     badges += sd._il_badge(r)   # injury chip — explains the _tval discount (mirrors the digest cards)
     return {
         "id":        sd._bd_uid("tl", r.get("PlayerName")),
@@ -602,7 +604,7 @@ def _tl_chip(text, color):
 
 def _tl_legend_items():
     """Badge/marker key for the whole page. Trade Lab reuses the digest's tactical badges
-    verbatim (hitter_badges/sp_skill_badges/blowup_badge/pitcher_regression_badge/_il_badge
+    verbatim (hitter_badges/pitcher_skill_badges/blowup_badge/pitcher_regression_badge/_il_badge
     — see _serialize) PLUS two markers unique to this page (the 🎯 need-fit target and the
     ▸/◂ value-asymmetry "arb" marker, see docs/trades.md) and the LIME thin-position chip
     on the Partner Fit board. This is now the ONE place target/send/grab are explained (the
@@ -617,8 +619,9 @@ def _tl_legend_items():
         item('<span style="font-size:12px;">&#127919;</span>', "target &mdash; fills your need"),
         item(f'<span style="color:{YELLOW};font-weight:900;">&#9656;</span>', "send &mdash; your surplus, they value it more"),
         item(f'<span style="color:{GREEN};font-weight:900;">&#9666;</span>', "grab &mdash; their surplus, you value it more"),
-        item(_tl_chip("QS", sd.CYAN), "elite season QS%"),
-        item(_tl_chip("K+", YELLOW), "elite season K rate"),
+        item(_tl_chip("QS", sd.CYAN), "elite season QS% (SP only)"),
+        item(_tl_chip("K+", YELLOW), "elite season K rate (SP or RP, own bars)"),
+        item(_tl_chip("SI", sd.SILVER), "elite underlying skill (in-house SIERA, not FanGraphs')"),
         item(_tl_chip("&#9888;", sd.ORANGE), "low floor / blowup risk"),
         item(_tl_chip("PWR", PURPLE), "power / HR threat"),
         item(_tl_chip("SB", sd.SILVER), "speed / steals"),
