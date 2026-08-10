@@ -404,22 +404,28 @@ session, see "Badge landscape revision" below):**
   `compute_siera_offset`/`siera_regression_flag`/`_SIERA_OFFSET`/`_SREG_ERA` — the exact same
   de-biased-gap pattern as `compute_xera_offset`/`pitcher_regression_flag`) — a SEPARATE
   buy-low/sell-high flag from the existing xERA-based `$`/`▼`/`▽` badge, not a repointing of
-  it. **Rescoped to a LOW-IP LANE** (`_SREG_MIN_IP=8` to `_SREG_MAX_IP=_XREG_ERA_IP=20`,
+  it. **Rescoped to a LOW-IP LANE** (`_SREG_MIN_IP=14` to `_SREG_MAX_IP=_XREG_ERA_IP=20`,
   exclusive) after the original always-on design (any IP ≥ 20, same floor as the `$` badge)
   turned out to just re-ask the `$` badge's own question on the same rows — pure redundancy,
   not a second opinion. The rescoped version instead fills a real gap: below the `$` badge's
   20-IP floor, **no buy/sell signal exists at all today**, even though SIERA's own data floor
-  (`get_bbref_pitcher_battedball`'s `BF>=20`, ~5-7 IP) is available much earlier. Two honesty
-  notes on this specific choice: (1) the backtest's `xERA` arm is *season-total*, not
-  date-ranged, so "SIERA never beat xERA" is closer to "never got a fair fight against xERA"
-  for exactly the fresh-call-up/injury-return case this lane targets — that arm's leakage is
-  worst precisely when a player's season IS mostly the window being predicted; (2) the
-  backtest's *smallest tested bucket* was `BF>=100` (~24 IP) — this lane's actual range
-  (~8-20 IP) was never itself a backtested bucket, so treat it as a reasoned extrapolation
-  from the metric's mechanism + its lower data floor, not a directly validated result. Text
-  glyphs (`SI+`/`SI-`), not `$`/`▼`/`▽` or `↑`/`↓`, so a row showing all of them doesn't
-  visually collide. Applies to SP and RP alike (was never `_is_sp`-gated). Wired into the same
-  surfaces as `pitcher_bounceback_badge` (My Upcoming Starts, FA SP, Today's MLB Games, Weekly
+  (`get_bbref_pitcher_battedball`'s `BF>=20`, ~5-7 IP) is available much earlier. The lane's
+  lower bound was set from an EXTENDED run of `backtest_siera.py` (`--bf-buckets 35,60,85`,
+  ~8/14/20 IP), not the pure mechanism-based extrapolation first shipped: pooled across
+  2022-2025, SIERA's edge over raw ERA actually **reverses** at the very bottom (`BF>=35`,
+  ~8 IP: pooled r SIERA +0.17 vs ERA +0.18) and is noisy/season-inconsistent there (2025 alone
+  showed ERA ahead by 0.12), then resumes a small edge at `BF>=60` (~14 IP: SIERA +0.20 vs
+  ERA +0.18) that strengthens toward the already-shipped `BF>=100` result (+0.24 vs +0.20).
+  `_SREG_MIN_IP` was moved up from an initial 8 to 14 to match where the evidence actually
+  turns supportive, rather than leaving an 8-13 IP sub-range in the lane that the data leans
+  against. One honesty note that still stands: the backtest's `xERA` arm is *season-total*,
+  not date-ranged, so "SIERA never beat xERA" is closer to "never got a fair fight against
+  xERA" for exactly the fresh-call-up/injury-return case this lane targets — that arm's
+  leakage is worst precisely when a player's season IS mostly the window being predicted; no
+  fair small-sample SIERA-vs-xERA comparison has been run. Text glyphs (`SI+`/`SI-`), not
+  `$`/`▼`/`▽` or `↑`/`↓`, so a row showing all of them doesn't visually collide. Applies to SP
+  and RP alike (was never `_is_sp`-gated). Wired into the same surfaces as
+  `pitcher_bounceback_badge` (My Upcoming Starts, FA SP, Today's MLB Games, Weekly
   Game Plan cards, dashboard My Pitching + FA Radar Starters) — deliberately NOT the
   tap-to-expand bounce-back context line, and NOT (yet) its own tap-to-expand context entry
   either (a nice-to-have, not required to ship the badge).
@@ -430,8 +436,11 @@ buy-low/sell-high space read as crowded — up to four chips could stack on one 
 same question as `$`/`▼`/`▽` on the same rows with weaker evidence. Resolved by giving
 `SI+`/`SI-` an exclusive, non-overlapping IP lane (above) rather than cutting it — the
 `$`/`▼`/`▽` badge doesn't fire below 20 IP anyway, so narrowing `SI+`/`SI-` to exactly that
-gap turns a redundant second opinion into the ONLY read available for a thin-sample arm,
-at the cost of the low end of that lane being extrapolated rather than backtested (see above).
+gap turns a redundant second opinion into the ONLY read available for a thin-sample arm. The
+lane's lower bound was initially set by extrapolation (8 IP, SIERA's raw data floor), then
+tightened to 14 IP once an extended backtest run showed the extrapolation didn't hold at the
+very bottom (see above) — a case of validating a shipped judgment call and revising it based
+on what the data actually said, not just leaving the caveat in place.
 Separately, `SI`/`K+` were extended to relievers (see `pitcher_skill_badges` above) since
 nothing structurally justified withholding a rate-based skill read from RPs — only `QS` has a
 real starter-only rationale. No new badge glyphs were added by either change, so the glossary

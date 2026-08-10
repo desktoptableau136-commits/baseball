@@ -1093,15 +1093,17 @@ _SREG_ERA     = 1.00    # |gap| threshold, same ERA-run scale as _XREG_ERA
 # badge and the $/▼/▽ xERA badge own DISJOINT IP ranges and never both fire on one row --
 # once a pitcher clears the $ badge's own floor, xERA (not SIERA) owns the buy/sell read for
 # him (the backtest never showed SIERA beating xERA anywhere it could test a fair fight).
-# _SREG_MIN_IP sits well below that floor because SIERA's own data floor is much lower
-# (get_bbref_pitcher_battedball's BF>=20, ~5-7 IP) -- but NOTE: the backtest's smallest tested
-# bucket was BF>=100 (~24 IP), so this specific sub-20-IP window is a reasoned extrapolation
-# from the metric's mechanism (K/BB/batted-ball mix needs far fewer PA than ERA to reflect
-# true talent) and its lower data floor, NOT a directly backtested result -- there is
-# currently no signal at all below the $ badge's 20-IP floor, so this fills a real gap
-# (fresh call-ups, injury returns) rather than duplicating one, even though the exact IP
-# range it targets wasn't itself in the backtest's sample. See docs/scoring.md.
-_SREG_MIN_IP  = 8
+# _SREG_MIN_IP=14 (~BF 60) is an EXTENDED backtest result, not the original extrapolation
+# down to SIERA's raw ~5-7 IP data floor: a follow-up sanity-check run of backtest_siera.py
+# with lower BF buckets (35/60/85) found SIERA's edge over raw ERA actually REVERSES at the
+# very bottom (BF>=35, ~8 IP: pooled r SIERA 0.17 vs ERA 0.18, noisy and season-inconsistent --
+# 2025 alone showed ERA ahead by 0.12) and only resumes around BF>=60 (~14 IP: SIERA 0.20 vs
+# ERA 0.18). The floor was moved up from an initial 8 to 14 to match where the evidence
+# actually turns supportive, rather than leaving an 8-13 IP sub-range in the lane that the
+# data leans against. Below 14 IP there is still no buy/sell signal of any kind (the $ badge's
+# own floor is 20), so this remains a real gap, just a narrower one than first shipped. See
+# docs/scoring.md.
+_SREG_MIN_IP  = 14
 _SREG_MAX_IP  = _XREG_ERA_IP
 
 
