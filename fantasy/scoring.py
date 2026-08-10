@@ -1077,6 +1077,66 @@ def pitcher_regression_badge(row, idx_recent=None):
     return _hit_badge(glyph, color, tip)
 
 
+# ── SIERA-vs-ERA luck flag (Phase 4 Option A from the SIERA backtest, docs/scoring.md) ──
+# A SEPARATE signal from pitcher_regression_badge above, not a repointing of it: the SIERA
+# backtest (backtest_siera.py) only showed SIERA modestly out-predicting raw ERA, and never
+# showed it beating xERA -- xERA won that comparison throughout, even with its unfair
+# lookahead advantage. So there is no evidence to justify swapping xERA for SIERA inside the
+# existing, already-depended-upon $/▼/▽ badge; this is a new, independent, low-stakes chip
+# instead, mirroring the disabled-pitcher_recency_flag lesson (never repoint a trusted signal
+# on weak evidence -- ship a new one alongside it instead). No recency-confirmation layer
+# (that would need its own backtest, same reason pitcher_recency_flag stays disabled) -- just
+# a two-state season-level flag. _SIERA_OFFSET mirrors _XERA_OFFSET's de-biasing pattern.
+_SIERA_OFFSET = 0.0     # league median (SIERA - ERA) over the qualified YEAR pool; rebound global
+_SREG_ERA     = 1.00    # |gap| threshold, same ERA-run scale as _XREG_ERA
+
+
+def compute_siera_offset(pitchers):
+    """Set the module `_SIERA_OFFSET` = league median (SIERA − ERA) over the qualified YEAR
+    pool, so `siera_regression_flag` measures luck RELATIVE to the systematic offset (same
+    pattern as `compute_xera_offset`)."""
+    global _SIERA_OFFSET
+    gaps = sorted(_n(r.get("SIERA")) - _n(r.get("ERA")) for r in pitchers
+                  if int(_n(r.get("Dataset")) or 0) == YEAR
+                  and _n(r.get("ERA")) > 0 and _n(r.get("SIERA")) > 0 and _n(r.get("IP")) >= _XREG_ERA_IP)
+    if len(gaps) >= 20:
+        _SIERA_OFFSET = gaps[len(gaps) // 2]
+
+
+def siera_regression_flag(row):
+    """'buy' (ERA unluckier than his SIERA-implied skill) / 'sell' (ERA luckier than his
+    SIERA-implied skill) / None. SIERA analog of `pitcher_regression_flag`, de-biased by
+    `_SIERA_OFFSET` the same way."""
+    era, siera, ip = _n(row.get("ERA")), _n(row.get("SIERA")), _n(row.get("IP"))
+    if era <= 0 or siera <= 0 or ip < _XREG_ERA_IP:
+        return None
+    adj = (siera - era) - _SIERA_OFFSET   # + = luckier than typical, − = unluckier
+    if adj >= _SREG_ERA:
+        return "sell"
+    if adj <= -_SREG_ERA:
+        return "buy"
+    return None
+
+
+def siera_regression_badge(row):
+    """Green 'SI+' (buy-low) / red 'SI-' (sell-high) chip for a pitcher whose ERA has diverged
+    from his (in-house-approximated) SIERA, or '' when neither. Display-only (never folded
+    into any score). Text glyphs, not $/▼/▽ or ↑/↓ -- distinct from both pitcher_regression_
+    badge and pitcher_bounceback_badge so a row showing all three doesn't visually collide,
+    even though this shares GREEN/RED with pitcher_regression_badge's buy/sell (same
+    convention: shared hue, distinct glyph, per the CLAUDE.md palette rule)."""
+    era, siera = _n(row.get("ERA")), _n(row.get("SIERA"))
+    flag = siera_regression_flag(row)
+    if not flag:
+        return ""
+    gap = f"ERA {era:.2f} vs SIERA {siera:.2f}"
+    if flag == "buy":
+        return _hit_badge("SI+", GREEN, gap + " &mdash; ERA above his SIERA-implied skill, "
+                                             "positive regression likely (buy-low)")
+    return _hit_badge("SI-", RED, gap + " &mdash; ERA below his SIERA-implied skill, "
+                                        "regression risk (sell-high)")
+
+
 # ── Season starter-skill badges (the SEASON analog of the per-start QS / 5K+ chips) ──
 # qs_badge/k5_badge (send_digest) describe ONE projected outing (streaming surfaces); these
 # read a starter's DURABLE season skill — quality-start reliability + strikeout rate — so
@@ -1087,6 +1147,13 @@ def pitcher_regression_badge(row, idx_recent=None):
 _QS_SEASON_MIN   = 55     # season QS% for the 'reliable QS arm' badge (~top fifth of qualified SP)
 _K_SEASON_MIN    = 0.26   # season K rate for the 'strikeout arm' badge (~top fifth of qualified SP)
 _SP_SKILL_MIN_IP = 30     # IP floor so a small-sample hot start can't false-fire either badge
+# Season SIERA threshold for the 'SI' elite-underlying-skill badge -- top ~fifth of the
+# qualified-SP pool by (lower-is-better) SIERA, same calibration philosophy as QS/K+ above
+# (empirically ~2.93 on a live snapshot; 2.95 rounds that without moving the tier meaningfully).
+# SIERA is an in-house approximation (see fetch_data.get_bbref_pitcher_battedball) -- this
+# badge is Phase-4 Option A from the SIERA backtest (docs/scoring.md's "SIERA" section):
+# display-only, reversible, and NOT folded into pitcher_score/qs_probability/any other score.
+_SIERA_SEASON_MAX = 2.95
 
 
 def _sp_qs_season(row):
@@ -1099,8 +1166,10 @@ def _sp_qs_season(row):
 
 def sp_skill_badges(row, cap=None):
     """Durable season-skill badges for a STARTER: 'QS' (cyan) when he posts quality starts at
-    an elite season clip, 'K+' (yellow) when he's an elite-strikeout arm. Season analog of the
-    per-start qs_badge/k5_badge; shown on the trade surfaces (see the note above)."""
+    an elite season clip, 'K+' (yellow) when he's an elite-strikeout arm, 'SI' (silver) when
+    his (in-house-approximated) SIERA says his underlying skill is elite even if his ERA
+    doesn't yet show it. Season analog of the per-start qs_badge/k5_badge; shown on the trade
+    surfaces (see the note above)."""
     badges = []
     qsp = _sp_qs_season(row)
     if qsp is not None and qsp >= _QS_SEASON_MIN:
@@ -1109,6 +1178,10 @@ def sp_skill_badges(row, cap=None):
         kpct = _n(row.get("Kpct_P"))
         if kpct >= _K_SEASON_MIN:
             badges.append(_hit_badge("K+", YELLOW, f"Strikeout arm &mdash; {kpct*100:.0f}% K rate (top tier)"))
+        siera = _n(row.get("SIERA"))
+        if siera > 0 and siera <= _SIERA_SEASON_MAX:
+            badges.append(_hit_badge("SI", SILVER, f"Elite underlying skill &mdash; {siera:.2f} SIERA "
+                                                     "(in-house approximation, top tier)"))
     return "".join(badges[:cap])
 
 

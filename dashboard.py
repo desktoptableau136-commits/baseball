@@ -427,7 +427,7 @@ def render_tv_games(ctx):
             if p.get("is_p"):
                 row = pit_rows.get(k)
                 return (sd.blowup_badge(row, rec_era.get(k)) + sd.pitcher_regression_badge(row, idx_recent=ctx["best_recent_p"])
-                        + sd.pitcher_bounceback_badge(row, idx_recent=ctx["best_recent_p"])) if row else ""
+                        + sd.pitcher_bounceback_badge(row, idx_recent=ctx["best_recent_p"]) + sd.siera_regression_badge(row)) if row else ""
             row = hit_rows.get(k)
             return sd.hitter_badges(row, hit_pctile, cap=2, idx_recent=ctx.get("best_recent_h")) if row else ""
 
@@ -912,7 +912,7 @@ def render_fa_radar(ctx):
         _l15 = (ctx["p15"].get(r.get("PlayerName", "")) or ctx["rec_p"].get(r.get("PlayerName", ""), {})).get("ERA")
         parts.append(spline(r, r.get("_score", 0), f'{_n(r.get("ERA")):.2f} ERA &middot; QS{qs}%',
                             badges=sd.blowup_badge(r, _l15) + sd.pitcher_regression_badge(r, idx_recent=ctx["best_recent_p"])
-                            + sd.pitcher_bounceback_badge(r, idx_recent=ctx["best_recent_p"])))
+                            + sd.pitcher_bounceback_badge(r, idx_recent=ctx["best_recent_p"]) + sd.siera_regression_badge(r)))
     parts.append(hdr("Relievers"))
     for r in ctx["fa_rp"][:2]:
         parts.append(spline(r, r.get("_rp_score", 0), f'{int(_n(r.get("ESPN_SVHD")) or _n(r.get("SVHD")))} SV+H &middot; {_n(r.get("ERA")):.2f}',

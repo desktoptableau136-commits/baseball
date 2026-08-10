@@ -358,7 +358,7 @@ gets matchup-neutralized rather than removed there (a trade shouldn't flicker ba
 read), except here there's no season-durable core to preserve, so omission is simpler than
 neutralization. Glossary: "Buy-low / sell-high" group, own entry ("↑ / ↓ bounce-back (pitchers)").
 
-### SIERA — data pipeline only, NOT YET wired into scoring
+### SIERA — badges only (Phase 4 Option A shipped), still NOT in any score
 
 `SIERA` (`fetch_data.py`'s `get_bbref_pitcher_battedball`) is an in-house approximation of
 SIERA (Skill-Interactive ERA) — the published Swartz coefficients (confirmed against a
@@ -374,13 +374,39 @@ pitcher row as a season-level value (broadcast across all Dataset rows, same as
 all) holds that ERA needs a much larger sample — on the order of 300+ IP — before it stops
 being dominated by noise, while a batted-ball-mix metric like SIERA stabilizes far faster
 (~200 batters faced). That's appealing for early-season evaluation, where the digest
-currently leans on ERA/xERA. **Deliberately NOT wired into `pitcher_score`'s `RunPrev`
+currently leans on ERA/xERA. **Still deliberately NOT wired into `pitcher_score`'s `RunPrev`
 component** (`fantasy/scoring.py:157-237`, currently a 55/45 ERA/xERA blend), **`rp_score`'s
-own xERA blend, `qs_probability` (ERA-only), any badge, or `_LG`** until a walk-forward
-backtest validates its predictive direction and magnitude — see the `pitcher_recency_flag`
-cautionary precedent just above: an unvalidated signal was shipped into a live flag,
-backtesting later found its direction **inverted**, and it had to be disabled rather than
-repointed because callers already depended on its polarity. SIERA must not repeat that.
+own xERA blend, `qs_probability` (ERA-only), or `_LG`** — that's the Option B path from the
+plan's Phase 4, and the backtest evidence below is too modest to justify touching a score
+every ranking/trade/FA-ordering surface depends on. See the `pitcher_recency_flag` cautionary
+precedent just above: an unvalidated signal was shipped into a live flag, backtesting later
+found its direction **inverted**, and it had to be disabled rather than repointed because
+callers already depended on its polarity. SIERA must not repeat that at the score level.
+
+**Option A (the lower-risk badge path) HAS shipped, based on the backtest result below:**
+- **`sp_skill_badges`'s third chip, `SI` (silver)** (`fantasy/scoring.py`, `_SIERA_SEASON_MAX =
+  2.95`, same `_SP_SKILL_MIN_IP` floor as `QS`/`K+`) — an absolute "top-fifth of the qualified-
+  SP pool by SIERA" elite-skill flag, exactly mirroring the `_sp_qs_season`/`QS`/`K+` template.
+  **Caveat:** this specific absolute-threshold claim isn't what the backtest tested (the
+  backtest is a *relative* predictive-validity check, not a validation of "top-fifth SIERA is
+  individually meaningful") — it's included on the same low-risk logic as `QS`/`K+`
+  (display-only, trade-surfaces-only, trivially reversible), not because the backtest speaks
+  to it directly.
+- **`siera_regression_badge`, `SI+`/`SI-` (green/red)** (`fantasy/scoring.py`, alongside a new
+  `compute_siera_offset`/`siera_regression_flag`/`_SIERA_OFFSET`/`_SREG_ERA` — the exact same
+  de-biased-gap pattern as `compute_xera_offset`/`pitcher_regression_flag`) — a SEPARATE
+  buy-low/sell-high flag from the existing xERA-based `$`/`▼`/`▽` badge, not a repointing of
+  it: the backtest never showed SIERA beating xERA (xERA won throughout, even with its unfair
+  lookahead advantage), so there's no evidence to justify swapping xERA out of the trusted,
+  already-depended-upon badge. Shipped as an independent, lower-confidence chip instead — the
+  same "add a new signal, don't repoint an old one on weak evidence" move `pitcher_bounceback_
+  badge` made. No recency-confirmation layer (that would need its own backtest, same reason
+  `pitcher_recency_flag` stays disabled) — a single season-level read. Text glyphs (`SI+`/
+  `SI-`), not `$`/`▼`/`▽` or `↑`/`↓`, so a row showing all of them doesn't visually collide.
+  Wired into the same surfaces as `pitcher_bounceback_badge` (My Upcoming Starts, FA SP,
+  Today's MLB Games, Weekly Game Plan cards, dashboard My Pitching + FA Radar Starters) —
+  deliberately NOT the tap-to-expand bounce-back context line, and NOT (yet) its own tap-to-
+  expand context entry either (a nice-to-have, not required to ship the badge).
 
 **Validation status (as of this session, 2022–2025 pooled):** `backtest_siera.py` runs a
 season-halves predictive-validity check (first-half SIERA vs. second-half actual ERA, pooled
@@ -391,9 +417,10 @@ SIERA edges out raw ERA at the smallest sample buckets (r=0.24 vs 0.20 at BF≥1
 marginally ahead at BF≥250 (0.34 vs 0.33). **Directionally consistent with the "stabilizes
 faster in smaller samples" claim, but the effect size is small** — a few hundredths of `r`,
 which is within the range survivorship bias and season-to-season noise could produce on
-their own. This is a real, mildly-supportive signal, not a slam-dunk validation — treat it as
-"promising enough to consider Phase-4 badge work, not proof the metric is a must-have."
-Re-run `python backtest_siera.py` before acting on this if it's been a while — see the
+their own. This is a real, mildly-supportive signal, not a slam-dunk validation — "promising
+enough to ship the low-risk badge (Option A, above), not strong enough to touch a score
+(Option B)." Re-run `python backtest_siera.py` periodically and revisit this call if it's been
+a while — see the
 script's own docstring/report output for the full caveats (survivorship bias, the
 season-halves design testing predictive validity rather than the literal 200-BF
 self-reliability claim, and why the xERA comparison arm is leak-contaminated and only
