@@ -358,6 +358,53 @@ gets matchup-neutralized rather than removed there (a trade shouldn't flicker ba
 read), except here there's no season-durable core to preserve, so omission is simpler than
 neutralization. Glossary: "Buy-low / sell-high" group, own entry ("↑ / ↓ bounce-back (pitchers)").
 
+### SIERA — data pipeline only, NOT YET wired into scoring
+
+`SIERA` (`fetch_data.py`'s `get_bbref_pitcher_battedball`) is an in-house approximation of
+SIERA (Skill-Interactive ERA) — the published Swartz coefficients (confirmed against a
+citable source, including the sign conditional on the squared net-groundball term), computed
+off **Baseball-Reference's** batted-ball classifier via `pitching_stats_range()`. **Not
+FanGraphs' current SIERA number** — FanGraphs has recalibrated its formula since without
+publishing the update, and scores batted balls with its own BIS-sourced classifier, not
+Baseball-Reference's, so this will not reproduce their leaderboard figure. Lands on every
+pitcher row as a season-level value (broadcast across all Dataset rows, same as
+`xERA`/`BarrelPctAllowed`) — see `docs/fetch_pipeline.md` for the merge details.
+
+**Motivation:** a walk-forward stabilization argument (the premise behind adding this at
+all) holds that ERA needs a much larger sample — on the order of 300+ IP — before it stops
+being dominated by noise, while a batted-ball-mix metric like SIERA stabilizes far faster
+(~200 batters faced). That's appealing for early-season evaluation, where the digest
+currently leans on ERA/xERA. **Deliberately NOT wired into `pitcher_score`'s `RunPrev`
+component** (`fantasy/scoring.py:157-237`, currently a 55/45 ERA/xERA blend), **`rp_score`'s
+own xERA blend, `qs_probability` (ERA-only), any badge, or `_LG`** until a walk-forward
+backtest validates its predictive direction and magnitude — see the `pitcher_recency_flag`
+cautionary precedent just above: an unvalidated signal was shipped into a live flag,
+backtesting later found its direction **inverted**, and it had to be disabled rather than
+repointed because callers already depended on its polarity. SIERA must not repeat that.
+
+**Validation status (as of this session, 2022–2025 pooled):** `backtest_siera.py` runs a
+season-halves predictive-validity check (first-half SIERA vs. second-half actual ERA, pooled
+across 4 past seasons, stratified by first-half batters-faced bucket) to test whether SIERA's
+early read is a better predictor of future run prevention than raw ERA's early read. Result —
+SIERA edges out raw ERA at the smallest sample buckets (r=0.24 vs 0.20 at BF≥100, r=0.23 vs
+0.19 at BF≥150), the gap narrows to a rounding error at BF≥200 (0.27 vs 0.26), and ERA is
+marginally ahead at BF≥250 (0.34 vs 0.33). **Directionally consistent with the "stabilizes
+faster in smaller samples" claim, but the effect size is small** — a few hundredths of `r`,
+which is within the range survivorship bias and season-to-season noise could produce on
+their own. This is a real, mildly-supportive signal, not a slam-dunk validation — treat it as
+"promising enough to consider Phase-4 badge work, not proof the metric is a must-have."
+Re-run `python backtest_siera.py` before acting on this if it's been a while — see the
+script's own docstring/report output for the full caveats (survivorship bias, the
+season-halves design testing predictive validity rather than the literal 200-BF
+self-reliability claim, and why the xERA comparison arm is leak-contaminated and only
+illustrative — it dominates both other metrics throughout, as expected, since it partially
+sees the future it's "predicting").
+
+**Stabilizes faster than ERA, not instantly:** the `BF >= 20` floor in
+`get_bbref_pitcher_battedball` means the thinnest-sample arms still read `-1` (sentinel, no
+value) especially early in a season — don't expect full coverage in the season's first
+couple weeks.
+
 ### Hitter recency: backtested, validates (unlike the pitcher flag) — stays live
 
 `hitter_recency_flag`/`hitter_recency_severity` (`fantasy/scoring.py`) is the hitter analog of

@@ -32,6 +32,12 @@ _PITCHER_SAVANT = ["xERA", "xwOBA_against", "WhiffPctile", "BarrelPctAllowed", "
 _HITTER_SAVANT  = ["xwOBA", "xBA", "xSLG", "SprintSpeed", "Barrel_Pct", "HardHit_Pct"]
 _HITTER_MODEL   = ["HR_Probability", "wRCplus"]
 
+# Baseball-Reference batted-ball mix -> in-house SIERA approximation (fetch_data.py's
+# get_bbref_pitcher_battedball). A separate source from Savant (above), so it's tracked as its
+# own group -- BBRef and Savant fail independently, and mixing them under one label would hide
+# which one broke.
+_PITCHER_BATTEDBALL = ["SIERA"]
+
 # FA_Matched: True when a free-agent row was actually returned by ESPN's free_agents() pull
 # (fetch_data.py's _FA_PULL_SIZE), so its FreeAgentInjuryStatus is a real, checked status
 # rather than a default blank that reads as "healthy". A drop here means either the FA pull
@@ -121,6 +127,7 @@ def coverage_report(snap):
     rep = {
         "freshness": _freshness(snap),
         "pitcher_savant": _group(pit_y_fp, _PITCHER_SAVANT),
+        "pitcher_battedball": _group(pit_y_fp, _PITCHER_BATTEDBALL),
         "hitter_savant": _group(hit_y_fp, _HITTER_SAVANT),
         "hitter_model": _group(hit_y_fp, _HITTER_MODEL),
         "fa_status": _group(fa_y, _FA_STATUS),
@@ -160,6 +167,7 @@ def worst_status(rep):
     order = {"OK": 0, "n/a": 0, "info": 0, "WARN": 1, "LOW": 2}
     worst = "OK"
     keys = [rep["freshness"]["status"], rep["pitcher_savant"]["status"],
+            rep["pitcher_battedball"]["status"],
             rep["hitter_savant"]["status"], rep["hitter_model"]["status"],
             rep["fa_status"]["status"]]
     keys += [w["status"] for w in rep["recent_windows"].values()]
@@ -196,6 +204,7 @@ def format_report(rep):
                      f"({c['present']}/{c['total']})  {c['status']}")
 
     _grp("PITCHER Statcast (Baseball Savant)", rep["pitcher_savant"])
+    _grp("PITCHER Batted-Ball Mix (Baseball-Reference / in-house SIERA)", rep["pitcher_battedball"])
     _grp("HITTER Statcast (Baseball Savant)", rep["hitter_savant"])
     _grp("HITTER model fields", rep["hitter_model"])
     _grp(f"FA INJURY-STATUS MATCH ({rep['counts']['fa_pool']} free-agent rows -- "

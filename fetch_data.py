@@ -626,6 +626,77 @@ def get_savant_pitcher_whiff(year: int) -> pd.DataFrame:
         return pd.DataFrame(columns=["PlayerName"])
 
 
+def get_bbref_pitcher_battedball(year: int, start: str = None, end: str = None) -> pd.DataFrame:
+    """An IN-HOUSE APPROXIMATION of SIERA -- NOT FanGraphs' published number. FanGraphs has
+    recalibrated its SIERA formula since these published Swartz coefficients without releasing
+    an update, and scores batted balls with its own BIS-sourced classifier, not Baseball-
+    Reference's -- so this will not reproduce FanGraphs' leaderboard figure, even though the
+    coefficients themselves (confirmed against a citable published source) are correct.
+
+    Computed from Baseball-Reference's batted-ball mix via pitching_stats_range() -- the same
+    BBRef endpoint fetch_recent_pitcher_stats already uses (FanGraphs' own leaderboard 403s
+    pybaseball). On this BBRef split page, GB/FB/LD/PU are all RATES (confirmed by reading
+    pybaseball's own source: it strips a '%' and divides by 100), so GB/FB here means
+    GB/(GB+FB), not the classic >1 ratio some other BBRef pages use under the same header.
+
+    `start`/`end` default to a full season but accept overrides so backtest_siera.py can call
+    this for historical half-season windows without a parallel implementation."""
+    try:
+        from pybaseball import pitching_stats_range
+        start = start or f"{year}-03-01"
+        end   = end   or f"{year}-11-01"
+        df = pitching_stats_range(start, end)
+        if df is None or df.empty:
+            return pd.DataFrame(columns=["PlayerName"])
+        name_col = next((c for c in df.columns if c.lower() in ("name", "playername")), None)
+        if name_col and name_col != "PlayerName":
+            df = df.rename(columns={name_col: "PlayerName"})
+        need = ["PlayerName", "BF", "SO", "BB", "HBP", "HR", "GB/FB", "LD", "PU"]
+        if any(c not in df.columns for c in need):
+            return pd.DataFrame(columns=["PlayerName"])
+        df = df[need].copy()
+        for c in need[1:]:
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+        df = df.dropna(subset=need)
+        df = df[df["BF"] >= 20]                        # sample floor, mirrors minBBE=50/minPA=50
+        df = df[(df["LD"] + df["PU"]) <= 1]             # guard vs a scrape/unit glitch
+
+        df["BIP"] = df["BF"] - df["SO"] - df["BB"] - df["HBP"] - df["HR"]
+        df = df[df["BIP"] > 0]
+
+        df["LD_ct"] = df["BIP"] * df["LD"]
+        df["PU_ct"] = df["BIP"] * df["PU"]
+        rest        = df["BIP"] * (1 - df["LD"] - df["PU"])
+        df["GB_ct"] = rest * df["GB/FB"]                # GB/(GB+FB) rate, not the classic ratio
+        df["FB_ct"] = rest * (1 - df["GB/FB"])
+
+        SOp = df["SO"] / df["BF"]
+        BBp = df["BB"] / df["BF"]
+        netGBp = (df["GB_ct"] - df["FB_ct"] - df["PU_ct"]) / df["BF"]
+        sign = netGBp.apply(lambda v: 1 if v > 0 else -1)   # + for GB-heavy, - for FB-heavy
+
+        df["SIERA"] = (6.145 - 16.986 * SOp + 11.434 * BBp - 1.858 * netGBp
+                       + 7.653 * SOp ** 2 + sign * 6.664 * netGBp ** 2
+                       + 10.130 * SOp * netGBp - 5.195 * BBp * netGBp).round(2)
+        df["GBPct"] = (df["GB_ct"] / df["BIP"]).round(4)
+        df["FBPct"] = (df["FB_ct"] / df["BIP"]).round(4)
+        df["LDPct"] = df["LD"].round(4)
+        df["PUPct"] = df["PU"].round(4)
+
+        # Two distinct real players can share an exact name (confirmed live: two separate
+        # "Luis Garcia"s, two separate "Luis Castillo"s in one season pull) -- already a known
+        # ambiguity for merge_on_name's accent-key fallback elsewhere in this file. Keep the
+        # higher-BF row so a journeyman/call-up can't silently clobber an established arm's
+        # SIERA under a shared exact PlayerName string.
+        df = df.sort_values("BF", ascending=False).drop_duplicates("PlayerName")
+        keep = ["PlayerName", "SIERA", "GBPct", "FBPct", "LDPct", "PUPct"]
+        log(f"  Baseball-Reference pitcher batted-ball mix (in-house SIERA approx): {len(df)} pitchers")
+        return df[keep]
+    except Exception as e:
+        log(f"  Baseball-Reference pitcher batted-ball mix FAILED: {e}")
+        return pd.DataFrame(columns=["PlayerName"])
+
+
 def get_statcast_expected_stats(year: int) -> pd.DataFrame:
     """xBA, xSLG, xwOBA from Baseball Savant expected stats."""
     try:
@@ -1165,6 +1236,11 @@ def build_pitcher_data(league):
     wh_p = get_savant_pitcher_whiff(CURRENT_YEAR)   # raw Whiff% — DISPLAY ONLY, not scored
     if not wh_p.empty:
         merged = merge_on_name(merged, wh_p, list(wh_p.columns))   # suffix/accent-safe
+
+    log("Fetching Baseball-Reference pitcher batted-ball mix (in-house SIERA approximation)â€¦")
+    bb_p = get_bbref_pitcher_battedball(CURRENT_YEAR)   # season-long -> broadcasts onto every
+    if not bb_p.empty:                                  # Dataset row for a player, same as xERA
+        merged = merge_on_name(merged, bb_p, list(bb_p.columns))   # suffix/accent-safe
 
     # Derive approximate K% from FantasyPros K and estimated TBF (K/IP * 9 / K9-to-TBF ratio)
     if "K" in merged.columns and "IP" in merged.columns:
