@@ -1077,16 +1077,116 @@ def pitcher_regression_badge(row, idx_recent=None):
     return _hit_badge(glyph, color, tip)
 
 
-# ── Season starter-skill badges (the SEASON analog of the per-start QS / 5K+ chips) ──
+# ── SIERA-vs-ERA luck flag (Phase 4 Option A from the SIERA backtest, docs/scoring.md) ──
+# A SEPARATE signal from pitcher_regression_badge above, not a repointing of it: the SIERA
+# backtest (backtest_siera.py) only showed SIERA modestly out-predicting raw ERA, and never
+# showed it beating xERA -- xERA won that comparison throughout, even with its unfair
+# lookahead advantage. So there is no evidence to justify swapping xERA for SIERA inside the
+# existing, already-depended-upon $/▼/▽ badge; this is a new, independent, low-stakes chip
+# instead, mirroring the disabled-pitcher_recency_flag lesson (never repoint a trusted signal
+# on weak evidence -- ship a new one alongside it instead). No recency-confirmation layer
+# (that would need its own backtest, same reason pitcher_recency_flag stays disabled) -- just
+# a two-state season-level flag. _SIERA_OFFSET mirrors _XERA_OFFSET's de-biasing pattern.
+_SIERA_OFFSET = 0.0     # league median (SIERA - ERA) over the qualified YEAR pool; rebound global
+_SREG_ERA     = 1.00    # |gap| threshold, same ERA-run scale as _XREG_ERA
+# LOW-IP LANE ONLY: [_SREG_MIN_IP, _SREG_MAX_IP). _SREG_MAX_IP = _XREG_ERA_IP (20) so this
+# badge and the $/▼/▽ xERA badge own DISJOINT IP ranges and never both fire on one row --
+# once a pitcher clears the $ badge's own floor, xERA (not SIERA) owns the buy/sell read for
+# him (the backtest never showed SIERA beating xERA anywhere it could test a fair fight).
+# _SREG_MIN_IP=14 (~BF 60) is an EXTENDED backtest result, not the original extrapolation
+# down to SIERA's raw ~5-7 IP data floor: a follow-up sanity-check run of backtest_siera.py
+# with lower BF buckets (35/60/85) found SIERA's edge over raw ERA actually REVERSES at the
+# very bottom (BF>=35, ~8 IP: pooled r SIERA 0.17 vs ERA 0.18, noisy and season-inconsistent --
+# 2025 alone showed ERA ahead by 0.12) and only resumes around BF>=60 (~14 IP: SIERA 0.20 vs
+# ERA 0.18). The floor was moved up from an initial 8 to 14 to match where the evidence
+# actually turns supportive, rather than leaving an 8-13 IP sub-range in the lane that the
+# data leans against. Below 14 IP there is still no buy/sell signal of any kind (the $ badge's
+# own floor is 20), so this remains a real gap, just a narrower one than first shipped. See
+# docs/scoring.md.
+_SREG_MIN_IP  = 14
+_SREG_MAX_IP  = _XREG_ERA_IP
+
+
+def compute_siera_offset(pitchers):
+    """Set the module `_SIERA_OFFSET` = league median (SIERA − ERA) over the qualified YEAR
+    pool (IP >= _XREG_ERA_IP, the SAME reliable population `compute_xera_offset` uses -- a
+    stable estimate of the systematic offset, even though `siera_regression_flag` below
+    applies it to the noisier low-IP population it flags), so `siera_regression_flag`
+    measures luck RELATIVE to the systematic offset (same pattern as `compute_xera_offset`)."""
+    global _SIERA_OFFSET
+    gaps = sorted(_n(r.get("SIERA")) - _n(r.get("ERA")) for r in pitchers
+                  if int(_n(r.get("Dataset")) or 0) == YEAR
+                  and _n(r.get("ERA")) > 0 and _n(r.get("SIERA")) > 0 and _n(r.get("IP")) >= _XREG_ERA_IP)
+    if len(gaps) >= 20:
+        _SIERA_OFFSET = gaps[len(gaps) // 2]
+
+
+def siera_regression_flag(row):
+    """'buy' (ERA unluckier than his SIERA-implied skill) / 'sell' (ERA luckier than his
+    SIERA-implied skill) / None. SIERA analog of `pitcher_regression_flag`, de-biased by
+    `_SIERA_OFFSET` the same way. LOW-IP LANE ONLY ([_SREG_MIN_IP, _SREG_MAX_IP)) -- see the
+    consts above for why: this and the $/▼/▽ xERA badge own disjoint IP ranges on purpose."""
+    era, siera, ip = _n(row.get("ERA")), _n(row.get("SIERA")), _n(row.get("IP"))
+    if era <= 0 or siera <= 0 or ip < _SREG_MIN_IP or ip >= _SREG_MAX_IP:
+        return None
+    adj = (siera - era) - _SIERA_OFFSET   # + = luckier than typical, − = unluckier
+    if adj >= _SREG_ERA:
+        return "sell"
+    if adj <= -_SREG_ERA:
+        return "buy"
+    return None
+
+
+def siera_regression_badge(row):
+    """Green 'SI+' (buy-low) / red 'SI-' (sell-high) chip for a pitcher whose ERA has diverged
+    from his (in-house-approximated) SIERA, or '' when neither. LOW-IP LANE ONLY (below the
+    $/▼/▽ badge's own IP floor -- see `siera_regression_flag`) so it never doubles up with
+    that badge on the same row; applies to SP and RP alike. Display-only (never folded
+    into any score). Text glyphs, not $/▼/▽ or ↑/↓ -- distinct from both pitcher_regression_
+    badge and pitcher_bounceback_badge so a row showing all three doesn't visually collide,
+    even though this shares GREEN/RED with pitcher_regression_badge's buy/sell (same
+    convention: shared hue, distinct glyph, per the CLAUDE.md palette rule)."""
+    era, siera = _n(row.get("ERA")), _n(row.get("SIERA"))
+    flag = siera_regression_flag(row)
+    if not flag:
+        return ""
+    gap = f"ERA {era:.2f} vs SIERA {siera:.2f}"
+    if flag == "buy":
+        return _hit_badge("SI+", GREEN, gap + " &mdash; ERA above his SIERA-implied skill, "
+                                             "positive regression likely (buy-low)")
+    return _hit_badge("SI-", RED, gap + " &mdash; ERA below his SIERA-implied skill, "
+                                        "regression risk (sell-high)")
+
+
+# ── Season pitcher-skill badges (the SEASON analog of the per-start QS / 5K+ chips) ──
 # qs_badge/k5_badge (send_digest) describe ONE projected outing (streaming surfaces); these
-# read a starter's DURABLE season skill — quality-start reliability + strikeout rate — so
-# they belong on trade surfaces (Trade Lab + Trade Radar / Pending Trades / dashboard tile).
-# Kept OFF the digest's My Upcoming Starts / FA SP, where the per-start chips already live,
-# so the two QS meanings never collide. Thresholds grounded in the qualified-SP distribution
-# (~top fifth each); QS is matchup-neutralized so it reads season skill, not this week's opp.
+# read a pitcher's DURABLE season skill — quality-start reliability + strikeout rate + SIERA
+# skill — so they belong on trade surfaces (Trade Lab + Trade Radar / Pending Trades /
+# dashboard tile). Kept OFF the digest's My Upcoming Starts / FA SP, where the per-start
+# chips already live, so the two QS meanings never collide. QS is matchup-neutralized so it
+# reads season skill, not this week's opp.
 _QS_SEASON_MIN   = 55     # season QS% for the 'reliable QS arm' badge (~top fifth of qualified SP)
-_K_SEASON_MIN    = 0.26   # season K rate for the 'strikeout arm' badge (~top fifth of qualified SP)
-_SP_SKILL_MIN_IP = 30     # IP floor so a small-sample hot start can't false-fire either badge
+                          # -- STARTERS ONLY; a quality start has no relief analog
+_K_SEASON_MIN    = 0.26   # season K rate for the SP 'strikeout arm' badge (~top fifth of qualified SP)
+_SP_SKILL_MIN_IP = 30     # IP floor so a small-sample hot start can't false-fire an SP badge
+# Season SIERA threshold for the SP 'SI' elite-underlying-skill badge -- top ~fifth of the
+# qualified-SP pool by (lower-is-better) SIERA, same calibration philosophy as QS/K+ above
+# (empirically ~2.93 on a live snapshot; 2.95 rounds that without moving the tier meaningfully).
+# SIERA is an in-house approximation (see fetch_data.get_bbref_pitcher_battedball) -- this
+# badge is Phase-4 Option A from the SIERA backtest (docs/scoring.md's "SIERA" section):
+# display-only, reversible, and NOT folded into pitcher_score/qs_probability/any other score.
+_SIERA_SEASON_MAX = 2.95
+
+# RP equivalents for K+/SI (no RP QS -- see _QS_SEASON_MIN above). Relievers qualify off the
+# SAME GP-or-IP viable floor rp_score/recalibrate_scores already use (_pit_viable_min("RP", ...)
+# -- NOT the SP 30-IP floor, since a viable reliever banks innings far slower than a viable
+# starter) and get their OWN thresholds rather than the SP numbers ported verbatim: on a live
+# snapshot, the qualified-RP pool runs slightly better than the qualified-SP pool at the
+# top-fifth mark for both stats (~0.275 K% vs SP's 0.26; ~2.89 SIERA vs SP's 2.95) -- reusing
+# the SP bar would make the RP badge fire too easily. Same glyphs/colors as the SP badges
+# (no new chip, so the palette/glossary doesn't grow for this).
+_K_RP_SEASON_MIN     = 0.28
+_SIERA_RP_SEASON_MAX = 2.90
 
 
 def _sp_qs_season(row):
@@ -1097,18 +1197,39 @@ def _sp_qs_season(row):
     return qs_probability({**row, "Team_OPS_Value": -1})   # -1 skips qs_probability's opp-OPS term
 
 
-def sp_skill_badges(row, cap=None):
-    """Durable season-skill badges for a STARTER: 'QS' (cyan) when he posts quality starts at
-    an elite season clip, 'K+' (yellow) when he's an elite-strikeout arm. Season analog of the
-    per-start qs_badge/k5_badge; shown on the trade surfaces (see the note above)."""
+def pitcher_skill_badges(row, cap=None):
+    """Durable season-skill badges for a qualified pitcher: 'QS' (cyan, STARTERS ONLY -- a
+    quality start has no relief analog) when he posts quality starts at an elite season clip,
+    'K+' (yellow) when he's an elite-strikeout arm, 'SI' (silver) when his (in-house-
+    approximated) SIERA says his underlying skill is elite even if his ERA doesn't yet show
+    it. SP and RP share the SAME glyphs/colors but qualify off DIFFERENT floors/thresholds
+    (see _K_RP_SEASON_MIN/_SIERA_RP_SEASON_MAX above) -- a viable reliever isn't a viable
+    starter, and the qualified-RP population sits at a different bar for both stats. Season
+    analog of the per-start qs_badge/k5_badge; shown on the trade surfaces (see the note
+    above)."""
     badges = []
     qsp = _sp_qs_season(row)
     if qsp is not None and qsp >= _QS_SEASON_MIN:
         badges.append(_hit_badge("QS", CYAN, f"Reliable quality starts &mdash; {qsp}% season QS rate (elite)"))
-    if _is_sp(row) and _n(row.get("IP")) >= _SP_SKILL_MIN_IP:
+
+    if _is_sp(row):
+        if _n(row.get("IP")) >= _SP_SKILL_MIN_IP:
+            kpct = _n(row.get("Kpct_P"))
+            if kpct >= _K_SEASON_MIN:
+                badges.append(_hit_badge("K+", YELLOW, f"Strikeout arm &mdash; {kpct*100:.0f}% K rate (top tier)"))
+            siera = _n(row.get("SIERA"))
+            if siera > 0 and siera <= _SIERA_SEASON_MAX:
+                badges.append(_hit_badge("SI", SILVER, f"Elite underlying skill &mdash; {siera:.2f} SIERA "
+                                                         "(in-house approximation, top tier)"))
+    elif (_n(row.get("ESPN_GP")) >= _pit_viable_min("RP", "GP")
+          or _n(row.get("IP")) >= _pit_viable_min("RP", "IP")):
         kpct = _n(row.get("Kpct_P"))
-        if kpct >= _K_SEASON_MIN:
-            badges.append(_hit_badge("K+", YELLOW, f"Strikeout arm &mdash; {kpct*100:.0f}% K rate (top tier)"))
+        if kpct >= _K_RP_SEASON_MIN:
+            badges.append(_hit_badge("K+", YELLOW, f"Strikeout arm &mdash; {kpct*100:.0f}% K rate (top tier, RP)"))
+        siera = _n(row.get("SIERA"))
+        if siera > 0 and siera <= _SIERA_RP_SEASON_MAX:
+            badges.append(_hit_badge("SI", SILVER, f"Elite underlying skill &mdash; {siera:.2f} SIERA "
+                                                     "(in-house approximation, top tier, RP)"))
     return "".join(badges[:cap])
 
 

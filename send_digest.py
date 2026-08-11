@@ -218,10 +218,11 @@ def k5_badge(k, row=None):
     tail = f" &mdash; {stat}" if stat else ""
     return _hit_badge("5K+", YELLOW, f"Projected {k} strikeouts (&ge; 5){tail}")
 
-# Season starter-skill badges (`sp_skill_badges` / `_sp_skill_context` / `_sp_qs_season`)
-# moved DOWN to fantasy/scoring.py (the pure badges + consts) and fantasy/analytics.py (the
-# `_sp_skill_context` "why", which needs `_badge_ctx_wrap`) so the trade engine + trade
-# renderers can reuse them; re-exported here via the facade. See the season-badge note there.
+# Season pitcher-skill badges (`pitcher_skill_badges` / `_pitcher_skill_context` /
+# `_sp_qs_season`) moved DOWN to fantasy/scoring.py (the pure badges + consts) and
+# fantasy/analytics.py (the `_pitcher_skill_context` "why", which needs `_badge_ctx_wrap`) so
+# the trade engine + trade renderers can reuse them; re-exported here via the facade. QS is
+# SP-only; K+/SI cover SP and RP (own thresholds/floor each). See the season-badge note there.
 
 # ── Blowup-risk (low-floor) flag for starters ────────────────────────────────────
 # A DISPLAY-ONLY, skill-based read of how prone a starter is to a disaster outing
@@ -2599,11 +2600,17 @@ def build_glossary_section():
                "winning comfortably."),
 
         _subhead("Trade cards (Trade Radar / Pending Trades / Trade Lab)"),
-        _entry(f'QS / K+ season skill{_hit_badge("QS", CYAN)}{_hit_badge("K+", YELLOW)}',
-               "Marks a starter's <b>durable season skill</b> — not a single projected start: cyan <b>QS</b> = "
-               "posts quality starts at an elite season clip (top-fifth matchup-neutral season QS%); yellow "
-               "<b>K+</b> = an elite-strikeout arm (top-fifth season K rate). The trade-value counterpart to the "
-               "per-start QS / 5K+ chips above — same glyphs, but a player <i>trait</i> you weigh when trading, so "
+        _entry(f'QS / K+ / SI season skill{_hit_badge("QS", CYAN)}{_hit_badge("K+", YELLOW)}{_hit_badge("SI", SILVER)}',
+               "Marks a pitcher's <b>durable season skill</b> — not a single projected start: cyan <b>QS</b> = "
+               "posts quality starts at an elite season clip (top-fifth matchup-neutral season QS%, <b>starters "
+               "only</b> — a quality start has no relief analog); yellow <b>K+</b> = an elite-strikeout arm "
+               "(top-fifth season K rate); silver <b>SI</b> = his (in-house-approximated) <b>SIERA</b> — a "
+               "batted-ball-mix skill metric, not FanGraphs' own SIERA number — says his underlying skill is "
+               "elite even if ERA hasn't caught up yet (top-fifth season SIERA). <b>K+ and SI apply to relievers "
+               "too</b>, each judged against its own reliever-population bar (the qualified-RP pool runs "
+               "slightly better than starters at the top-fifth mark for both) and a floor matching how "
+               "relievers accumulate innings, not the starter one. The trade-value counterpart to the per-start "
+               "QS / 5K+ chips above — same QS/K+ glyphs, but a player <i>trait</i> you weigh when trading, so "
                "they're kept off the streaming lists (My Upcoming Starts / FA SP) where the per-start chips live."),
         _entry(f'Injury{_il_badge({"ESPN_Status": "TEN_DAY_DL"})}{_il_badge({"ESPN_Status": "SIXTY_DAY_DL"})}{_il_badge({"ESPN_Status": "DAY_TO_DAY"})}',
                "On a player line, a red <b>IL-10 / IL-15 / IL-60 / OUT</b> (or orange <b>DTD</b>) chip flags an "
@@ -2660,6 +2667,19 @@ def build_glossary_section():
                "above; this is the corrected, validated replacement.) This is a <b>single-start</b> confidence "
                "read, separate from the season $/▼/▽ trade-value badge and from ⚠ blowup risk — trade cards stay "
                "neutral to it, same as ⚠. <b>Hover</b> for the FIP/xERA numbers."),
+        _entry(f'SI+ / SI- SIERA luck{_hit_badge("SI+", GREEN)}{_hit_badge("SI-", RED)}',
+               "A SEPARATE read from the $/▽/▼ badge above, using the in-house-approximated <b>SIERA</b> instead "
+               "of xERA as the skill anchor — and scoped to a <b>low-innings lane the $ badge doesn't cover</b>: "
+               "it only fires <b>below</b> the $ badge's own IP floor (think fresh call-ups or injury returns — "
+               "a handful of innings, not a full season) and goes quiet once a pitcher clears that floor and the "
+               "$/▽/▼ badge takes over, so the two never both fire on one row. Green <b>SI+</b> = ERA running "
+               "above what his SIERA says he deserves (buy-low); red <b>SI-</b> = ERA running below it "
+               "(sell-high, regression risk). Not a repointing of the xERA badge — backtesting only ever "
+               "compared SIERA to a full-<b>season</b> xERA number that partly &ldquo;sees&rdquo; the very "
+               "outcome it's predicting, so that comparison was never a fair one for exactly this early window; "
+               "SIERA did modestly out-predict raw ERA at small samples, which is the case this badge targets. "
+               "Applies to starters and relievers alike. No recency-confirmation layer (unlike $/▽/▼) — a single "
+               "low-sample read. Display-only. <b>Hover</b> for the ERA/SIERA numbers."),
 
         _subhead("Weekly Game Plan"),
         _entry("&#127942; Win the week",
@@ -2693,6 +2713,15 @@ def build_glossary_section():
     pitching = _group("Pitching metrics", [
         _entry("xERA / xwOBA-against", "Baseball Savant “deserved” run prevention from contact quality — "
                "strips out luck and defense. Lower is better; blended with actual results in the scores."),
+        _entry("SIERA", "An <b>in-house approximation</b> of Skill-Interactive ERA, not FanGraphs' own SIERA "
+               "number (their formula's been recalibrated since without a published update, and it scores "
+               "batted balls with a different classifier than the Baseball-Reference data this is built from). "
+               "It weighs a pitcher's ground ball / fly ball / line drive / pop-up mix plus how strikeouts and "
+               "walks interact, instead of counting every ball in play the same way — the idea being it should "
+               "reflect true skill on a smaller sample than raw ERA needs. Backtesting found a real but modest "
+               "edge over ERA at predicting future results in smaller samples, not enough to feed the 0–100 "
+               "score — it powers two badges only (<b>SI</b> season-skill and <b>SI+</b>/<b>SI-</b> luck, see "
+               "Badges &amp; icons) and nothing else. Lower is better."),
         _entry("Whiff percentile", "Where a pitcher's swing-and-miss rate ranks league-wide (0–100). "
                "A skill signal that leads strikeout results."),
         _entry("Barrel% / HardHit% allowed", "Share of batted balls against that are barrels (ideal "
@@ -2786,6 +2815,9 @@ def build_glossary_section():
                "matchup lists both probables (yours in blue, your opponent's in red)."),
         _entry("Baseball Savant (via pybaseball)", "Statcast: contact quality, expected stats (xERA, "
                "xwOBA, xBA/xSLG), sprint speed and whiff percentiles."),
+        _entry("Baseball-Reference (via pybaseball)", "Batted-ball mix (ground ball / fly ball / line "
+               "drive / pop-up rates) behind the in-house SIERA approximation — a separate source from "
+               "Baseball Savant above, since FanGraphs' own leaderboard blocks this kind of automated pull."),
     ])
 
     return (
@@ -3441,7 +3473,7 @@ def build_todays_games_section(todays_games, my_team, opp_team, max_games=4,
             if not row:
                 return ""
             return (blowup_badge(row, recent_era.get(key)) + pitcher_regression_badge(row, idx_recent=idx_recent_p)
-                    + pitcher_bounceback_badge(row, idx_recent=idx_recent_p))
+                    + pitcher_bounceback_badge(row, idx_recent=idx_recent_p) + siera_regression_badge(row))
         row = hit_rows.get(key)
         return hitter_badges(row, hit_pctile, idx_recent=idx_recent) if row else ""
 
@@ -3550,6 +3582,7 @@ def prepare_scoring(pitchers, hitters):
     compute_score_calibration(pitchers, hitters)  # re-anchor SP/RP/hitter score scale (after benchmarks)
     compute_league_averages(hitters, pitchers)   # league-avg reference points → _LG
     compute_xera_offset(pitchers)                # de-bias the pitcher buy/sell (ERA vs xERA) flag
+    compute_siera_offset(pitchers)               # de-bias the SIERA-vs-ERA luck flag (siera_regression_flag)
     # League percentile pools (qualified YEAR pools per type). The pitcher pool spans
     # ALL starters+relievers: a traded arm's K/W/ERA/WHIP/SV+H is measured vs the
     # whole pitcher population, not just relievers.
@@ -4281,7 +4314,7 @@ def build_game_plan(matchup, winprob_ctx, per_cat, winprob_rf, winprob_weeks,
                             badges += k5_badge(k, r)
                     if role == "sp":
                         badges += (blowup_badge(r) + pitcher_regression_badge(r, idx_recent=best_recent_p)
-                                   + pitcher_bounceback_badge(r, idx_recent=best_recent_p))
+                                   + pitcher_bounceback_badge(r, idx_recent=best_recent_p) + siera_regression_badge(r))
                     bd = _pitcher_score_breakdown(r, best_recent_p)
                     score_val = _score_p(r, best_recent_p)
                 uid = _bd_uid("gp", r.get("PlayerName", "")) if bd else None
@@ -4791,6 +4824,7 @@ def build_email(snap, override_team=None):
                 start_badges.append(blowup_badge(r, p15r.get("ERA")))
                 start_badges.append(pitcher_regression_badge(r, idx_recent=best_recent_p))
                 start_badges.append(pitcher_bounceback_badge(r, idx_recent=best_recent_p))
+                start_badges.append(siera_regression_badge(r))
                 start_badge = "".join(start_badges)
                 proj_line_s = _proj_line_html(r)
                 _mus_bd = (_pitcher_score_breakdown(r, best_recent_p)
@@ -5025,6 +5059,7 @@ def build_email(snap, override_team=None):
                 pickup_badges.append(blowup_badge(r, p15r.get("ERA")))
                 pickup_badges.append(pitcher_regression_badge(r, idx_recent=best_recent_p))
                 pickup_badges.append(pitcher_bounceback_badge(r, idx_recent=best_recent_p))
+                pickup_badges.append(siera_regression_badge(r))
                 pickup_badge = "".join(pickup_badges)
                 # Two-start flag always shows — a 2-start FA is a top streaming target
                 _n_starts_fa = _starts_this_week(r, today_str, week_end_str)

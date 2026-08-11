@@ -1496,18 +1496,20 @@ def _trade_score_reveal(score, breakdown_html, uid):
 
 def _trade_skill_badges(r, hit_pctile=None):
     """The Trade Lab's durable tactical skill badges, echoed onto a trade-card line so every
-    trade surface speaks the same badge language: PWR/SB for hitters, QS/K+ (season skill) +
-    ⚠ (blowup floor) for starters. Deliberately WITHOUT the $/▼ buy-low/sell-high chip — the
-    card renders its own side-aware directional version from _tsell/_tbuy just below, so
-    folding in the generic one would double it. RP carry no season-skill badge (SP-only)."""
+    trade surface speaks the same badge language: PWR/SB for hitters, QS/K+/SI (season skill)
+    + ⚠ (blowup floor, SP only) for pitchers. Deliberately WITHOUT the $/▼ buy-low/sell-high
+    chip — the card renders its own side-aware directional version from _tsell/_tbuy just
+    below, so folding in the generic one would double it. RP get the same K+/SI skill badges
+    as SP (own thresholds/floor — see pitcher_skill_badges), just never ⚠ (no 'next start'
+    framing for a reliever) and never QS (structurally SP-only)."""
     if r.get("_tptype") == "hit":
         return hitter_badges(r, hit_pctile, regression=False)
     if _is_sp(r):
         # Trade evaluation stays matchup-neutral (durable skill only) -- a trade card's badge
         # shouldn't flicker based on who's next on the schedule (mirrors _sp_qs_season's
         # Team_OPS_Value:-1 strip for the same reason).
-        return sp_skill_badges(r) + blowup_badge({**r, "Team_OPS_Value": -1})
-    return ""
+        return pitcher_skill_badges(r) + blowup_badge({**r, "Team_OPS_Value": -1})
+    return pitcher_skill_badges(r)
 
 
 def _trade_player_line(r, hi_cats, hi_color, side, show_pos=False,
@@ -1554,7 +1556,7 @@ def _trade_player_line(r, hi_cats, hi_color, side, show_pos=False,
     if r.get("_tptype") == "hit":
         bd = _hitter_score_breakdown(r, best_recent_h, hit_pctile)
     else:
-        bd = _pitcher_score_breakdown(r, best_recent_p) + _sp_skill_context(r)   # + QS/K+ "why"
+        bd = _pitcher_score_breakdown(r, best_recent_p) + _pitcher_skill_context(r)   # + QS/K+/SI "why"
     uid = _bd_uid("trade", nm) if bd else None
     score_html, reveal = _trade_score_reveal(int(round(r["_tscore"])), bd, uid)
     return (f'<div style="margin:3px 0;font-size:12px;color:{TEXT};white-space:nowrap;">'
