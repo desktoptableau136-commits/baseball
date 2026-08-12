@@ -23,6 +23,7 @@ import os
 import re
 import subprocess
 import sys
+from collections import Counter
 from datetime import datetime, timedelta
 from pathlib import Path
 from urllib.parse import quote
@@ -509,6 +510,51 @@ def opponent_week_intel(pitchers, hitters, opp_team, best_recent_h, today_str, w
     hot = sorted(opp_hit, key=_recent_ops, reverse=True)[:3]
     return {"n_starters": len(opp_sp), "n_starts": n_starts,
             "two_start": two_start, "hot_hitters": [(r, _recent_ops(r)) for r in hot]}
+
+_DAYPARTS = [("night", range(0, 6)), ("early-morning", range(6, 10)),
+             ("midday", range(10, 15)), ("evening", range(15, 20)),
+             ("late-night", range(20, 24))]
+
+def _opp_timing_tell(transactions, opp_key, min_n=10):
+    """A 'when do they strike' read on an opponent's FA/waiver-add history (uses the
+    full 5+ week transactions window, not just this matchup). Only returns a string
+    when there's a real concentration -- most teams have no strong tell and get None,
+    which the caller renders as no line at all rather than manufacturing noise."""
+    events = [t for t in (transactions or [])
+              if " ".join((t.get("FantasyTeam") or "").split()) == opp_key
+              and t.get("TransactionType") in ("FA ADDED", "WAIVER ADDED")]
+    dts = []
+    for t in events:
+        try:
+            dt = datetime.fromisoformat(t["TransactionDate"])
+        except Exception:
+            continue
+        if dt.tzinfo is not None and _ET is not None:
+            dt = dt.astimezone(_ET)
+        dts.append(dt)
+    n = len(dts)
+    if n < min_n:
+        return None
+
+    # 1) exact-hour spike -- the most specific, most actionable tell (e.g. "always ~10am")
+    h, hc = Counter(d.hour for d in dts).most_common(1)[0]
+    if hc >= 4 and hc / n >= 0.35:
+        h12 = h % 12 or 12
+        ampm = "am" if h < 12 else "pm"
+        return f"often strikes ~{h12}{ampm} ET ({hc} of {n} recent adds)"
+
+    # 2) daypart lean (broader bucket, needs a bigger share to mean something)
+    daypart_of = {h: label for label, hrs in _DAYPARTS for h in hrs}
+    label, dc = Counter(daypart_of.get(d.hour, "?") for d in dts).most_common(1)[0]
+    if dc >= 6 and dc / n >= 0.45:
+        return f"{label}-leaning ({dc} of {n} recent adds)"
+
+    # 3) day-of-week lean
+    day, dwc = Counter(d.strftime("%a") for d in dts).most_common(1)[0]
+    if dwc >= 5 and dwc / n >= 0.32:
+        return f"{day}-heavy ({dwc} of {n} recent adds)"
+
+    return None
 
 # ── TEAM LOGOS ────────────────────────────────────────────────────────────────
 
@@ -5695,11 +5741,17 @@ def build_email(snap, override_team=None):
                 f'<div style="margin:3px 0;"><span style="color:{RED};">Weak:</span> '
                 f'<span style="color:{TEXT};">{" · ".join(_weak)}</span></div>'
             )
-        # Wire activity: how many FA adds this team made in the recent transaction window
+        # Wire activity: how many FA adds this team made in the last 7 days. transactions
+        # now carries 5+ weeks of history (widened for FA-timing analysis elsewhere), so
+        # this needs its own explicit recency cutoff -- it used to rely on recent_activity()'s
+        # ~4-day implicit window, which would otherwise make "very active" fire on nearly
+        # every team once the full history is counted.
+        _wire_cutoff = (datetime.strptime(today_str, "%Y-%m-%d") - timedelta(days=7)).strftime("%Y-%m-%d")
         _opp_adds = sum(
             1 for t in snap.get("transactions", [])
             if " ".join((t.get("FantasyTeam") or "").split()) == _opp_key
             and t.get("TransactionType") == "FA ADDED"
+            and t.get("TransactionDate", "") >= _wire_cutoff
         )
         if _opp_adds >= 4:
             _wire = f'<span style="color:{YELLOW};font-weight:700;">very active</span> — {_opp_adds} pickups in recent days; expect streaming'
@@ -5707,6 +5759,9 @@ def build_email(snap, override_team=None):
             _wire = f'{_opp_adds} recent pickup{"s" if _opp_adds != 1 else ""} — moderately active'
         else:
             _wire = 'quiet — mostly letting it ride'
+        _opp_tell = _opp_timing_tell(snap.get("transactions", []), _opp_key)
+        if _opp_tell:
+            _wire += f' — <span style="color:{ACCENT};">{_opp_tell}</span>'
         _lines.append(
             f'<div style="margin:3px 0;"><span style="color:{MUTED};">Wire:</span> '
             f'<span style="color:{TEXT};">{_wire}</span></div>'
