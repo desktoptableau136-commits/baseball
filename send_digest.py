@@ -23,6 +23,7 @@ import os
 import re
 import subprocess
 import sys
+from collections import Counter
 from datetime import datetime, timedelta
 from pathlib import Path
 from urllib.parse import quote
@@ -481,9 +482,10 @@ def my_upcoming_starts(pitchers, my_team, week_end=None):
     ]
     return sorted(sp, key=lambda r: r.get("PSP_Date", ""))
 
-def opponent_week_intel(pitchers, hitters, opp_team, best_recent_h, today_str, week_end_str):
+def opponent_week_intel(pitchers, hitters, opp_team, best_recent_h, best_recent_p, today_str, week_end_str):
     """Scouting data on what the opponent brings this week: their upcoming starts,
-    two-start pitchers, and hottest bats (by recent OPS). Returns a dict or None."""
+    two-start pitchers, hottest bats (by recent OPS), and best arms (by canonical
+    pitcher score) to actually watch out for. Returns a dict or None."""
     if not opp_team:
         return None
     opp_key = " ".join(opp_team.split())
@@ -498,6 +500,15 @@ def opponent_week_intel(pitchers, hitters, opp_team, best_recent_h, today_str, w
     n_starts  = sum(_starts_this_week(r, today_str, week_end_str) or 1 for r in opp_sp)
     two_start = [r for r in opp_sp if _starts_this_week(r, today_str, week_end_str) >= 2]
 
+    hot_arms = sorted(opp_sp, key=lambda r: _score_p(r, best_recent_p), reverse=True)[:2]
+    hot_arms_fmt = []
+    for r in hot_arms:
+        try:
+            day = datetime.strptime(r.get("PSP_Date", ""), "%Y-%m-%d").strftime("%a")
+        except Exception:
+            day = ""
+        hot_arms_fmt.append((r, day, qs_probability(r)))
+
     def _recent_ops(r):
         rr = best_recent_h.get(r.get("PlayerName", "")) or {}
         return _n(rr.get("OPS")) or _n(r.get("OPS"))
@@ -508,7 +519,66 @@ def opponent_week_intel(pitchers, hitters, opp_team, best_recent_h, today_str, w
                and _recent_ops(r) > 0]
     hot = sorted(opp_hit, key=_recent_ops, reverse=True)[:3]
     return {"n_starters": len(opp_sp), "n_starts": n_starts,
-            "two_start": two_start, "hot_hitters": [(r, _recent_ops(r)) for r in hot]}
+            "two_start": two_start, "hot_hitters": [(r, _recent_ops(r)) for r in hot],
+            "hot_arms": hot_arms_fmt}
+
+_DAYPARTS = [("night", range(0, 6)), ("early-morning", range(6, 10)),
+             ("midday", range(10, 15)), ("evening", range(15, 20)),
+             ("late-night", range(20, 24))]
+
+# Where a calendar weekday falls in a Mon-Sun matchup (weekday(): Mon=0 ... Sun=6), used as
+# a proxy for "early/mid/late in the matchup week" -- exact matchup-day history isn't stored
+# per past week, only the current matchup_start_date, so this assumes every past matchup also
+# ran Mon-Sun (true for the current one; NOT verified for a 14-day All-Star/playoff matchup
+# that may have shifted the cadence). Uneven bucket sizes (2/3/2 days) get their own baseline
+# below so a lift check stays fair across buckets.
+_WEEK_POSITION = {0: "early", 1: "early", 2: "mid", 3: "mid", 4: "mid", 5: "late", 6: "late"}
+_WEEK_BASELINE = {"early": 2 / 7, "mid": 3 / 7, "late": 2 / 7}
+
+def _opp_timing_tell(transactions, opp_key, min_n=10):
+    """A 'when do they strike' read on an opponent's FA/waiver-add history (uses the
+    full 5+ week transactions window, not just this matchup). Two INDEPENDENT signals,
+    each gated on a real concentration and joined when both fire (neither one crowds out
+    the other): WHEN in the day (an exact-hour spike, else a broader daypart lean) and
+    WHERE in the matchup week (early/mid/late -- Mon/Tue vs Wed-Fri vs Sat/Sun). Returns
+    None when nothing clears its bar, which the caller renders as no line at all rather
+    than manufacturing noise."""
+    events = [t for t in (transactions or [])
+              if " ".join((t.get("FantasyTeam") or "").split()) == opp_key
+              and t.get("TransactionType") in ("FA ADDED", "WAIVER ADDED")]
+    dts = []
+    for t in events:
+        try:
+            dt = datetime.fromisoformat(t["TransactionDate"])
+        except Exception:
+            continue
+        if dt.tzinfo is not None and _ET is not None:
+            dt = dt.astimezone(_ET)
+        dts.append(dt)
+    n = len(dts)
+    if n < min_n:
+        return None
+
+    parts = []
+
+    # WHEN in the day -- exact-hour spike (most specific), else a broader daypart lean
+    h, hc = Counter(d.hour for d in dts).most_common(1)[0]
+    if hc >= 4 and hc / n >= 0.35:
+        h12 = h % 12 or 12
+        ampm = "am" if h < 12 else "pm"
+        parts.append(f"often strikes ~{h12}{ampm} ET ({hc} of {n})")
+    else:
+        daypart_of = {hr: label for label, hrs in _DAYPARTS for hr in hrs}
+        label, dc = Counter(daypart_of.get(d.hour, "?") for d in dts).most_common(1)[0]
+        if dc >= 6 and dc / n >= 0.45:
+            parts.append(f"{label}-leaning ({dc} of {n})")
+
+    # WHERE in the matchup week -- early/mid/late, needs real lift over its own baseline
+    label, wc = Counter(_WEEK_POSITION[d.weekday()] for d in dts).most_common(1)[0]
+    if wc >= 5 and (wc / n) / _WEEK_BASELINE[label] >= 1.5:
+        parts.append(f"{label}-week leaning ({wc} of {n})")
+
+    return " · ".join(parts) if parts else None
 
 # ── TEAM LOGOS ────────────────────────────────────────────────────────────────
 
@@ -5653,7 +5723,7 @@ def build_email(snap, override_team=None):
 
     # Opponent scouting block (placed right after the matchup panel)
     _opp_name  = matchup.get("opp_team", "") if matchup else ""
-    _opp_intel = opponent_week_intel(pitchers, hitters, _opp_name, best_recent_h, today_str, week_end_str)
+    _opp_intel = opponent_week_intel(pitchers, hitters, _opp_name, best_recent_h, best_recent_p, today_str, week_end_str)
     opp_preview_section = ""
     if _opp_intel and (_opp_intel["n_starters"] or _opp_intel["hot_hitters"]):
         _opp_key   = " ".join(_opp_name.split())
@@ -5674,11 +5744,23 @@ def build_email(snap, override_team=None):
                 f'<span style="color:{TEXT};font-weight:600;">{_opp_intel["n_starts"]} starts</span> '
                 f'<span style="color:{MUTED};">from {_opp_intel["n_starters"]} SP this week</span>{_two_html}</div>'
             )
-        if _opp_intel["hot_hitters"]:
-            _hh = " · ".join(
-                f'{r.get("PlayerName","")} <span style="color:{MUTED};">({ops:.3f})</span>'
-                for r, ops in _opp_intel["hot_hitters"]
+        if _opp_intel["hot_arms"]:
+            _harm = " · ".join(
+                f'{r.get("PlayerName","")} <span style="color:{MUTED};">'
+                f'({day}{f", {round(qsp)}% QS" if qsp is not None else ""})</span>'
+                for r, day, qsp in _opp_intel["hot_arms"]
             )
+            _lines.append(
+                f'<div style="margin:3px 0;"><span style="color:{MUTED};">Hot arms:</span> '
+                f'<span style="color:{TEXT};">{_harm}</span></div>'
+            )
+        if _opp_intel["hot_hitters"]:
+            def _hb_fmt(r, ops):
+                _hb_cats = player_cat_strengths(r, hit_pctile, _FA_HIT_CATS, set())
+                _hb_tag = (f' <span style="color:{SILVER};font-size:10px;">{"/".join(_hb_cats)}</span>'
+                           if _hb_cats else "")
+                return f'{r.get("PlayerName","")} <span style="color:{MUTED};">({ops:.3f})</span>{_hb_tag}'
+            _hh = " · ".join(_hb_fmt(r, ops) for r, ops in _opp_intel["hot_hitters"])
             _lines.append(
                 f'<div style="margin:3px 0;"><span style="color:{MUTED};">Hot bats:</span> '
                 f'<span style="color:{TEXT};">{_hh}</span></div>'
@@ -5695,24 +5777,64 @@ def build_email(snap, override_team=None):
                 f'<div style="margin:3px 0;"><span style="color:{RED};">Weak:</span> '
                 f'<span style="color:{TEXT};">{" · ".join(_weak)}</span></div>'
             )
-        # Wire activity: how many FA adds this team made in the recent transaction window
-        _opp_adds = sum(
-            1 for t in snap.get("transactions", [])
+        # Wire activity, split into two reads:
+        #   Habits  -- recon: their OVERALL pace (excludes the current matchup) + the
+        #              _opp_timing_tell "when do they strike" read. This is the scouting
+        #              report -- who this manager generally is.
+        #   This week -- how they're actually tracking in THIS matchup, judged against
+        #              their own baseline (picking up the pace / slower than usual / in
+        #              line), not a bare count. Scoped to matchup_start_date rather than a
+        #              flat trailing window so it resets cleanly at the matchup boundary and
+        #              self-scales for a 14-day All-Star/playoff matchup.
+        _matchup_start_str = matchup_start_date.strftime("%Y-%m-%d")
+        _opp_all_adds = [
+            t for t in snap.get("transactions", [])
             if " ".join((t.get("FantasyTeam") or "").split()) == _opp_key
             and t.get("TransactionType") == "FA ADDED"
-        )
-        if _opp_adds >= 4:
-            _wire = f'<span style="color:{YELLOW};font-weight:700;">very active</span> — {_opp_adds} pickups in recent days; expect streaming'
-        elif _opp_adds >= 1:
-            _wire = f'{_opp_adds} recent pickup{"s" if _opp_adds != 1 else ""} — moderately active'
-        else:
-            _wire = 'quiet — mostly letting it ride'
+        ]
+        _opp_adds = sum(1 for t in _opp_all_adds if t.get("TransactionDate", "") >= _matchup_start_str)
+        _opp_rate = _opp_adds / max(1, days_elapsed + 1)
+        _opp_s = "s" if _opp_adds != 1 else ""
+
+        _opp_baseline_n = sum(1 for t in _opp_all_adds if t.get("TransactionDate", "") < _matchup_start_str)
+        _all_tx_dates = [t.get("TransactionDate", "") for t in snap.get("transactions", []) if t.get("TransactionDate")]
+        try:
+            _hist_start_date = datetime.fromisoformat(min(_all_tx_dates)).date() if _all_tx_dates else matchup_start_date
+        except Exception:
+            _hist_start_date = matchup_start_date
+        _baseline_days = max(1, (matchup_start_date - _hist_start_date).days)
+        _has_baseline = _opp_baseline_n >= 3 and _baseline_days >= 10
+        _opp_baseline_rate = _opp_baseline_n / _baseline_days if _has_baseline else None
+
+        _habits = (f'~{_opp_baseline_rate:.1f} pickups/day overall ({_opp_baseline_n} adds over {_baseline_days} days)'
+                   if _has_baseline else 'not enough history yet to gauge usual pace')
+        _opp_tell = _opp_timing_tell(snap.get("transactions", []), _opp_key)
+        if _opp_tell:
+            _habits += f' · <span style="color:{ACCENT};">{_opp_tell}</span>'
         _lines.append(
-            f'<div style="margin:3px 0;"><span style="color:{MUTED};">Wire:</span> '
-            f'<span style="color:{TEXT};">{_wire}</span></div>'
+            f'<div style="margin:3px 0;"><span style="color:{MUTED};">Habits:</span> '
+            f'<span style="color:{TEXT};">{_habits}</span></div>'
+        )
+
+        _this_week = f'{_opp_adds} pickup{_opp_s} this matchup ({_opp_rate:.1f}/day)'
+        if _has_baseline:
+            if _opp_baseline_rate <= 0:
+                _pace, _pcolor = ('more active than usual', YELLOW) if _opp_adds > 0 else ('consistent with their usual quiet approach', MUTED)
+            else:
+                _ratio = _opp_rate / _opp_baseline_rate
+                if _ratio >= 1.5:
+                    _pace, _pcolor = 'picking up the pace', YELLOW
+                elif _ratio <= 0.5:
+                    _pace, _pcolor = 'slower than usual', MUTED
+                else:
+                    _pace, _pcolor = 'about their usual pace', TEXT
+            _this_week += f' — <span style="color:{_pcolor};font-weight:700;">{_pace}</span>'
+        _lines.append(
+            f'<div style="margin:3px 0;"><span style="color:{MUTED};">This week:</span> '
+            f'<span style="color:{TEXT};">{_this_week}</span></div>'
         )
         opp_preview_section = (
-            section_head("Opponent This Matchup", f"{_logo_html}Scouting {_opp_name} — starts, hot bats, roto strengths &amp; wire activity")
+            section_head("Opponent This Matchup", f"{_logo_html}Scouting {_opp_name} — starts, hot arms &amp; bats, roto strengths &amp; activity habits")
             + f'<div style="background:{SURFACE2};border:1px solid {BORDER};border-radius:8px;'
               f'padding:10px 14px;margin-bottom:24px;font-size:12px;">{"".join(_lines)}</div>'
         )

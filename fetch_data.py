@@ -916,16 +916,23 @@ def get_statcast_contact() -> pd.DataFrame:
 
 # â”€â”€ TRANSACTIONS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
+_TX_HISTORY_SIZE = 200      # espn_api recent_activity() defaults to 25 (~4 days at this
+                            # league's transaction volume); 200 reaches back 5+ weeks, giving
+                            # enough sample to spot per-manager FA/waiver timing patterns.
+
 def get_transactions(league) -> list:
     try:
-        activities = league.recent_activity()
+        activities = league.recent_activity(size=_TX_HISTORY_SIZE)
     except Exception:
         return []
     rows = []
     for act in activities:
         for item in act.actions:
             team_obj, tx_type, player_obj = item
-            ts = datetime.fromtimestamp(act.date / 1000).strftime("%Y-%m-%d %H:%M:%S")
+            # tz-aware UTC (not local machine time) so timestamps are comparable across
+            # runs regardless of whether fetch_data ran on GitHub Actions (UTC) or the
+            # user's local ET box -- readers convert to ET for display, same as refreshed_at.
+            ts = datetime.fromtimestamp(act.date / 1000, tz=timezone.utc).isoformat()
             rows.append({
                 "FantasyTeam":        team_obj.team_name if team_obj else "N/A",
                 "TransactionType":    tx_type,
