@@ -469,6 +469,128 @@ def roster_alerts(pitchers, hitters, my_team):
             seen.add(name)
     return alerts
 
+
+# Availability/role news keywords that make a blurb ACTIONABLE for the digest -- a lineup or
+# roster decision to weigh TODAY -- as opposed to the routine Rotowire game recaps ("went
+# 1-for-3 with a homer"), which are informative in the score-pill dropdown but are NOT
+# surfaced as alerts. Lowercase substring match on the headline. Deliberately targets
+# availability + role, never bare stat words ("save" recaps use "recorded a save"; we match
+# "save chances"/"will close" instead) to keep the false-positive rate low.
+_NEWS_ACTIONABLE_KW = (
+    # Lineup / availability today. Note the many ways a scratch is phrased -- "not in", "out
+    # of", "absent from", "isn't in", "held out of" the lineup -- so catch the variants, not
+    # just one. Bare "in the lineup" is deliberately NOT here (a healthy regular's routine
+    # daily lineup post): only the NEGATIVE/deviation forms below are actionable.
+    "not in the lineup", "out of the lineup", "absent from", "isn't in the lineup",
+    "out of the starting", "not in the starting", "not starting", "isn't starting",
+    "won't start", "will not start", "scratched", "held out", "benched",
+    "getting the day off", "gets the day off", "get the day off", "day off", "resting",
+    "will sit", "did not play", "won't be in the lineup", "left the game", "left early",
+    "exited", "exits", "leaves the game", "carted off", "removed from the game",
+    # Injury / status changes
+    "placed on the", "to the injured list", "injured list", "il stint", "10-day",
+    "15-day", "60-day", "day-to-day", "day to day", "week-to-week", "ruled out",
+    "questionable", "game-time decision", "expected to miss", "will miss", "shut down",
+    "dealing with", "diagnosed with", "underwent", "undergo", "surgery", "mri",
+    "soreness", "tightness", "discomfort", "stiffness", "nursing", "progressing",
+    "fatigue", "dead arm", "left the game with", "exited with",
+    "fractured", "strained", "sprained", "aggravated", "reaggravated", "concussion",
+    "setback", "sidelined", "won't play", "will not play", "won't return", "out for",
+    "suspended", "restricted list", "paternity", "bereavement",
+    "unlikely to pitch", "won't pitch again", "out for the season", "season-ending",
+    "ejected", "removed from",
+    # Return / roster moves
+    "activated", "reinstated", "cleared to return", "back in the lineup",
+    "return to the lineup", "returns to the lineup", "expected to return",
+    "targeting a return", "set to return", "rehab assignment", "begin a rehab",
+    "recall", "optioned", "called up", "promoted", "demoted",
+    "for assignment", "off waivers", "acquired", "traded", "no longer listed",
+    # Role changes (pitching)
+    "closer role", "as the closer", "will close", "closing", "save chances",
+    "ninth-inning", "high-leverage", "moved to the bullpen", "to the rotation",
+    "join the rotation", "won't pitch", "pushed back", "skipped his",
+)
+
+# A body-part parenthetical -- "(elbow)", "(left calf)", "(right arm fatigue)" -- is Rotowire's
+# convention for an INJURY-STATUS headline, so any news with one is actionable regardless of the
+# verb. This single regex generalizes the whole injury-update class (rehab progressions, setbacks,
+# return timelines) without enumerating every phrasing. Game recaps don't carry these (a pitcher's
+# W-L record parenthetical like "(2-2)" has no body-part word, so it won't match).
+_NEWS_BODYPART_RE = re.compile(
+    r'\([^)]*\b(elbow|shoulder|knee|back|neck|hamstring|calf|forearm|finger|abdomen|oblique|'
+    r'wrist|groin|ankle|foot|hip|quad|quadriceps|thumb|ribs?|side|biceps|triceps|lat|toe|heel|'
+    r'hand|arm|shin|glute|adductor|intercostal|achilles|concussion|illness|leg|pectoral|'
+    r'hip flexor|knee|elbow)\b[^)]*\)', re.I)
+
+# Pitcher-ONLY positive signal: a confirmed/scheduled START. A hitter's daily "is starting at SS"
+# post is routine noise (deliberately NOT actionable), but a pitcher starts only every ~5 days, so
+# a start confirmation IS actionable for streaming. Gated to pitchers in roster_news_alerts so it
+# never fires on a hitter's lineup blurb.
+_NEWS_PITCHER_POS_KW = (
+    "will start", "gets the start", "get the start", "make his next start", "make the start",
+    "next start", "lined up to start", "slated to start", "scheduled to start",
+    "will take the mound", "take the ball", "gets the ball", "named the starter",
+    "return to the rotation", "back in the rotation",
+)
+_NEWS_ACT_MAX_HOURS = 36    # only surface availability/role news this fresh as an alert
+
+
+def _news_hours_ago(published):
+    """Hours since an ISO-UTC stamp (read-time relative), or None if unparseable."""
+    if not published:
+        return None
+    try:
+        dt = datetime.fromisoformat(published)
+    except Exception:
+        return None
+    now = datetime.now(dt.tzinfo) if dt.tzinfo else datetime.now()
+    secs = (now - dt).total_seconds()
+    return secs / 3600.0 if secs >= 0 else 0.0
+
+
+def _news_is_actionable(headline, is_pitcher=False):
+    """True when a news headline is an AVAILABILITY / role / roster change worth an alert (vs a
+    routine game recap). `is_pitcher=True` additionally accepts pitcher start confirmations
+    (`_NEWS_PITCHER_POS_KW`), which are noise for a hitter's daily lineup but signal for a SP."""
+    h = (headline or "").lower()
+    if _NEWS_BODYPART_RE.search(headline or ""):     # injury body-part parenthetical
+        return True
+    if any(kw in h for kw in _NEWS_ACTIONABLE_KW):
+        return True
+    if is_pitcher and any(kw in h for kw in _NEWS_PITCHER_POS_KW):
+        return True
+    return False
+
+
+def roster_news_alerts(pitchers, hitters, my_team, max_hours=_NEWS_ACT_MAX_HOURS):
+    """Fresh, ACTIONABLE (availability/role) news for MY roster -- the shared source for both
+    the Briefing 'Act today' list and the Roster Alerts box. One item per player (the freshest
+    actionable blurb within max_hours). Reads the per-run news map installed by set_player_news
+    (via analytics.player_news_for), so it degrades to [] when news wasn't fetched. Returns a
+    list of {name, headline, published, type}, freshest first."""
+    my_key = " ".join(my_team.split())
+    seen, out = set(), []
+    # Pitchers first with is_pitcher=True so a two-way player (Ohtani) keeps the pitcher lane's
+    # start-confirmation signal; `seen` dedups him out of the hitter pass.
+    for r, is_pit in ([(x, True) for x in pitchers] + [(x, False) for x in hitters]):
+        if " ".join((r.get("FantasyTeam") or "").split()) != my_key or int(r.get("Dataset", 0) or 0) != YEAR:
+            continue
+        name = r.get("PlayerName", "")
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        for it in player_news_for(name):   # newest-first from fetch
+            if not _news_is_actionable(it.get("headline", ""), is_pitcher=is_pit):
+                continue
+            hrs = _news_hours_ago(it.get("published"))
+            if hrs is not None and hrs > max_hours:
+                continue
+            out.append({"name": name, "headline": it.get("headline", ""),
+                        "published": it.get("published", ""), "type": it.get("type", "")})
+            break   # freshest actionable item per player
+    out.sort(key=lambda x: x.get("published", ""), reverse=True)
+    return out
+
 def my_upcoming_starts(pitchers, my_team, week_end=None):
     my_key = " ".join(my_team.split())
     today_str = datetime.now().strftime("%Y-%m-%d")
@@ -1049,7 +1171,7 @@ def build_pitcher_hot_cold_section(pitchers, my_team, best_recent_p=None, move_r
             _bd_uid("phc", r["name"]), 7)
         rows_html += (
             f'<tr style="{bg}">'
-            f'<td style="{TD_S}font-weight:600;">{team_logo(r["team"])}{r["name"]}{r["inj"]}{pitcher_regression_badge(r["srow"], idx_recent=best_recent_p)}{_move_badge(r["name"], move_registry)}</td>'
+            f'<td style="{TD_S}font-weight:600;">{team_logo(r["team"])}{r["name"]}{r["inj"]}{pitcher_regression_badge(r["srow"], idx_recent=best_recent_p)}{_news_badge(r["name"])}{_move_badge(r["name"], move_registry)}</td>'
             f'<td style="{TDC}color:{MUTED};">{r["pos"]}</td>'
             f'<td style="{TDC}">{r["season_era"]:.2f}</td>'
             f'<td style="{TDC}">{whiff_cell}</td>'
@@ -2614,6 +2736,16 @@ def build_glossary_section():
                "player (30/15/7-day), tagged next to the value (e.g. “15d”) — so a player can never read hot "
                "here and cold there. The colored value beside the icon is the recent stat itself, shown for "
                "context; the icon and color are driven by the Score delta, not that raw number."),
+        _entry('News flag'
+               + ''.join(f' <span style="font-size:9px;vertical-align:middle;padding:0 3px;border-radius:3px;'
+                         f'border:1px solid rgba({c},0.55);background:rgba({c},0.14);">&#128240;</span>'
+                         for c in ("59,130,246", "200,208,218", "100,116,139")),
+               "Flags a player with <b>recent news</b> (the same ESPN app blurbs — a scratched lineup, an IL "
+               "move, a closer-role change, or a game recap). Tap the player's <b>score badge</b> to read the "
+               "latest headlines in the breakdown. The pill is <b>colored by freshness</b>: bright blue = hot off "
+               "the wire (≤ 24h), silver = recent (≤ 3 days), muted = older. Purely a &ldquo;there's news here&rdquo; "
+               "affordance — it changes no score or ranking. (The fresh, <i>actionable</i> availability/role items "
+               "for your own roster also surface up top in Roster Alerts and the email's Act-today list.)"),
         _entry(f'Recommended-move clipboard{_hit_badge("&#128203;", TAN, "example")}',
                "Marks a player who's already part of a system-generated suggestion elsewhere in this digest — "
                "an FA named as an <b>Add</b> in the Week-at-a-Glance bullets or a Weekly Game Plan card, or a "
@@ -3269,7 +3401,7 @@ def _brief_cat_list(cats, limit=3):
 
 def render_briefing(my_team, today, matchup, classification, starts, today_str,
                     week_end_str, sr_emerging, alerts, my_row, n_teams, tune_in="",
-                    pending_incoming=None, win_week_pct=None):
+                    pending_incoming=None, win_week_pct=None, news_alerts=None):
     """Short, skimmable inline email body ("The Briefing"). Returns an HTML string."""
     my_team = " ".join((my_team or "").split())    # collapse ESPN's double-space for display
     # %-d is not portable (Windows), so build the day number by hand.
@@ -3341,6 +3473,10 @@ def render_briefing(my_team, today, matchup, classification, starts, today_str,
         label = g["verdict"][0] if g.get("verdict") else "REVIEW"
         col = {"ACCEPT": GREEN, "COUNTER": YELLOW, "DECLINE": RED}.get(label, ACCENT)
         items.append((col, _pending_headline(g, brief=True)))
+    # Fresh availability/role news for my roster (scratched today, IL move, closer role) —
+    # right behind trades, since it's a lineup decision for TODAY. Up to 2 to avoid clutter.
+    for na in (news_alerts or [])[:2]:
+        items.append((RED, f"📰 <b>{na.get('name','')}</b>: {na.get('headline','')}"))
     upcoming = [s for s in (starts or [])
                 if today_str <= s.get("PSP_Date", "") <= week_end_str]
     two_start = [s for s in upcoming if _starts_this_week(s, today_str, week_end_str) >= 2]
@@ -4489,6 +4625,7 @@ def build_email(snap, override_team=None):
     # helpers (see the block above build_email) so the dashboard and Trade Lab
     # derive the exact same values.
     hit_pctile, pit_pctile = prepare_scoring(pitchers, hitters)
+    set_player_news(snap.get("player_news", {}))   # per-run news map for _news_context + Briefing/Alerts
     idx = build_recent_indexes(pitchers, hitters, recent_pitching, recent_hitting)
     rec_p, rec_h = idx["rec_p"], idx["rec_h"]
     p15 = idx["p15"]
@@ -4620,6 +4757,7 @@ def build_email(snap, override_team=None):
                         else round(_my_week_roto_raw, 1))
     my_season_pseudo_roto = sum(n - rank + 1 for rank in cats.values() if rank is not None)
     alerts    = roster_alerts(pitchers, hitters, my_team)
+    news_alerts = roster_news_alerts(pitchers, hitters, my_team)   # fresh availability/role news; feeds Roster Alerts + Briefing
     starts    = my_upcoming_starts(pitchers, my_team)
 
     # Grade real pending trade offers ONCE (my team only — snapshot stores only my trades);
@@ -4781,7 +4919,7 @@ def build_email(snap, override_team=None):
     # ── Alerts ─────────────────────────────────────────────────────────────────
     # (Incoming trade offers surface HIGHER — in Week at a Glance + the Briefing "Act today"
     # list — since they're time-sensitive; they don't clutter this roster-injury box.)
-    if alerts:
+    if alerts or news_alerts:
         inj_notes = fetch_injury_notes()
         items_html = []
         for a in alerts:
@@ -4809,6 +4947,22 @@ def build_email(snap, override_team=None):
                 f'<strong style="color:{TEXT};">{a["name"]}</strong>'
                 f' <span style="color:{status_color};font-weight:600;">{_fmt_status(a["status"])}</span>'
                 f'{meta_html}</div>'
+            )
+        # Fresh availability/role news, deduped against the injury rows above (an injured
+        # player's terse status line already covers him; news adds the specific blurb for
+        # everyone else — a scratched-today bat, a new closer, an IL move not yet in the enum).
+        _alert_names = {a["name"] for a in alerts}
+        for na in news_alerts:
+            if na["name"] in _alert_names:
+                continue
+            age = _news_age_str(na.get("published"))
+            age_html = (f'<span style="color:{MUTED};font-size:10px;margin-left:8px;">{age}</span>'
+                        if age else "")
+            items_html.append(
+                f'<div style="padding:5px 0;border-bottom:1px solid {BORDER};font-size:12px;">'
+                f'<span style="color:{ACCENT};">&#128240;</span> '
+                f'<strong style="color:{TEXT};">{na["name"]}</strong>'
+                f' <span style="color:{SILVER};">{na["headline"]}</span>{age_html}</div>'
             )
         alert_section = (
             f'<div style="background:{SURFACE};border:1px solid {BORDER};border-left:3px solid {YELLOW};'
@@ -4906,7 +5060,7 @@ def build_email(snap, override_team=None):
                     _bd_uid("mus", name), 9)
                 rows += (
                     f'<tr style="{bg}">'
-                    f'<td style="{_tds}font-weight:600;">{team_logo(r.get("Team"))}{name}{inj_tag(r)}{start_badge}{_move_badge(name, move_registry)}</td>'
+                    f'<td style="{_tds}font-weight:600;">{team_logo(r.get("Team"))}{name}{inj_tag(r)}{start_badge}{_news_badge(name)}{_move_badge(name, move_registry)}</td>'
                     f'<td style="{_tdc}">{proj_line_s}</td>'
                     f'<td style="{_tdc}">{opp_logo(ha)}{ha}'
                     f'{"&nbsp;<span style=\"color:#888;font-size:11px\">(proj.)</span>" if r.get("PSP_Projected") else ""}'
@@ -4987,7 +5141,7 @@ def build_email(snap, override_team=None):
                 _bd_uid("myrp", r.get("PlayerName", "")), 10)
             return (
                 f'<tr style="{bg}">'
-                f'<td style="{TD_S}font-weight:600;">{team_logo(r.get("Team"))}{r.get("PlayerName","")}{inj_tag(r)}{ds_badge}{pitcher_regression_badge(r, idx_recent=best_recent_p)}{_move_badge(r.get("PlayerName",""), move_registry)}</td>'
+                f'<td style="{TD_S}font-weight:600;">{team_logo(r.get("Team"))}{r.get("PlayerName","")}{inj_tag(r)}{ds_badge}{pitcher_regression_badge(r, idx_recent=best_recent_p)}{_news_badge(r.get("PlayerName",""))}{_move_badge(r.get("PlayerName",""), move_registry)}</td>'
                 f'<td style="{TDC}color:{MUTED};">{r.get("Position","")}</td>'
                 f'<td style="{TDC}">{v(svhd, 0)}</td>'
                 f'<td style="{TDC}">{v(k, 0)}</td>'
@@ -5156,7 +5310,7 @@ def build_email(snap, override_team=None):
                     _bd_uid("fasp", r.get("PlayerName", "")), 10)
                 rows += (
                     f'<tr style="{bg}">'
-                    f'<td style="{name_border}{_tds}font-weight:600;">{team_logo(r.get("Team"))}{r.get("PlayerName","")}{inj_tag(r)}{two_start_html}{pickup_badge}{_move_badge(r.get("PlayerName",""), move_registry)}</td>'
+                    f'<td style="{name_border}{_tds}font-weight:600;">{team_logo(r.get("Team"))}{r.get("PlayerName","")}{inj_tag(r)}{two_start_html}{pickup_badge}{_news_badge(r.get("PlayerName",""))}{_move_badge(r.get("PlayerName",""), move_registry)}</td>'
                     f'<td style="{_tdc}">{proj_line_str}</td>'
                     f'<td style="{_tdc}">{opp_logo(ha)}{ha}'
                     f'{"&nbsp;<span style=\"color:#888;font-size:11px\">(proj.)</span>" if r.get("PSP_Projected") else ""}'
@@ -5212,7 +5366,7 @@ def build_email(snap, override_team=None):
                 _bd_uid("farp", r.get("PlayerName", "")), 11)
             return (
                 f'<tr style="{bg}">'
-                f'<td style="{TD_S}font-weight:600;">{team_logo(r.get("Team"))}{r.get("PlayerName","")}{inj_tag(r)}{ds_badge}{pitcher_regression_badge(r, idx_recent=best_recent_p)}{_move_badge(r.get("PlayerName",""), move_registry)}</td>'
+                f'<td style="{TD_S}font-weight:600;">{team_logo(r.get("Team"))}{r.get("PlayerName","")}{inj_tag(r)}{ds_badge}{pitcher_regression_badge(r, idx_recent=best_recent_p)}{_news_badge(r.get("PlayerName",""))}{_move_badge(r.get("PlayerName",""), move_registry)}</td>'
                 f'<td style="{TDC}color:{MUTED};">{r.get("Position","")}</td>'
                 f'<td style="{TDC}">{v(svhd, 0)}</td>'
                 f'<td style="{TDC}">{v(k, 0)}</td>'
@@ -5954,6 +6108,7 @@ def build_email(snap, override_team=None):
             n_teams=len(standings), tune_in=_tune_in,
             pending_incoming=incoming_pending,
             win_week_pct=(round(winprob_joint[0] * 100) if winprob_percat else None),
+            news_alerts=news_alerts,
         )
     except Exception as _e:
         print(f"  WARNING: briefing build failed ({_e}); body falls back to full digest.")
