@@ -4502,6 +4502,15 @@ def build_action_plan(matchup, winprob_ctx, per_cat, winprob_rf, winprob_weeks,
             except Exception:
                 return d[5:] if d else "?"
 
+        def _day_before(d):
+            # Add a streamer the DAY BEFORE he pitches so a rival can't grab him first
+            # (clamped to today — never earlier than now).
+            try:
+                dt = datetime.strptime(d, "%Y-%m-%d") - timedelta(days=1)
+                return max(dt.strftime("%Y-%m-%d"), today_str)
+            except Exception:
+                return d
+
         adds_used  = 0
         hold_names = set()
 
@@ -4604,10 +4613,12 @@ def build_action_plan(matchup, winprob_ctx, per_cat, winprob_rf, winprob_weeks,
                         _rec(d.get("PlayerName", ""), f"Action Plan &mdash; drop to stream {nm}")
                         brief = f'add {nm}, drop {d.get("PlayerName","")}'
                 _rec(nm, "Action Plan &mdash; stream add")
-                label = "Today" if day <= today_str else _short_day(day)
+                add_day = _day_before(day)
+                label = "Today" if add_day <= today_str else _short_day(add_day) + " (day before)"
                 html = f'<span style="color:{GREEN};font-weight:700;">Add</span> {arm_html}{drop_html}'
             else:
-                label = f'{_short_day(prev["last"])} &middot; after {prev["name"]}&rsquo;s start'
+                add_day = _day_before(day)
+                label = (f'{_short_day(add_day)} (day before)' if add_day > today_str else "Today")
                 _rec(nm, f"Action Plan &mdash; stream add (drop {prev['name']})")
                 brief = f'drop {prev["name"]}, add {nm}'
                 html = (f'<span style="color:{RED};font-weight:700;">Drop</span> '
@@ -4682,7 +4693,9 @@ def build_action_plan(matchup, winprob_ctx, per_cat, winprob_rf, winprob_weeks,
         return (
             f'<div style="margin-bottom:11px;">'
             f'<div style="color:{ACCENT};font-size:10px;font-weight:700;text-transform:uppercase;'
-            f'letter-spacing:.6px;margin-bottom:4px;">Streaming queue</div>{rows}</div>')
+            f'letter-spacing:.6px;margin-bottom:4px;">Streaming queue'
+            f'<span style="color:{MUTED};font-weight:400;text-transform:none;letter-spacing:0;">'
+            f' &mdash; grab each arm the day before he pitches so a rival can&rsquo;t</span></div>{rows}</div>')
 
     if is_sunday:
         body = (strip +
