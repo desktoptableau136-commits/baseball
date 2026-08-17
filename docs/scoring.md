@@ -97,7 +97,8 @@ Three parts:
 - **Part C — Streaming queue (the DATED SP chain).** The novel piece: fills my thin (0-start)
   game-days from `fa_sp` within the ~7-day probable horizon, cycling arms through ONE roster slot —
   the first streamer takes an open slot or a `_take_drop`, and each subsequent add drops the previous
-  streamer once his last window start passes ("Thu Aug 20 · after X's start: drop X, add Y"). Capped
+  streamer once his last window start passes. Each add is timed the **day before** the arm pitches
+  (`_day_before`, clamped to today) so a rival can't claim him first ("Wed Aug 19 (day before) · add Y"). Capped
   at `_GAMEPLAN_MAX_STREAM` (3) and the shared `_GAMEPLAN_WEEKLY_MOVE_CAP` (7) add budget. Arm choice
   per thin day: least blowup-risk, then two-start preferred, then highest `qs_probability`. Emits a
   `rotation_note` instead when every available day is already covered. A mid-matchup reassess note
