@@ -751,6 +751,9 @@ def roto_score_week(league, week: int) -> pd.DataFrame:
     boxes = league.box_scores(week)
     rows = []
     for b in boxes:
+        # Skip playoff bye / unfilled bracket slots (one side None).
+        if b.home_team is None or b.away_team is None:
+            continue
         for side, opp in [("home", "away"), ("away", "home")]:
             team  = getattr(b, f"{side}_team").team_name
             stats = getattr(b, f"{side}_stats")
@@ -1620,6 +1623,11 @@ def get_all_matchups(league) -> dict:
     _flip = {"W": "L", "L": "W", "T": "T"}
 
     for b in boxes:
+        # Playoff brackets include bye / unfilled slots where one side is None
+        # (a team on a bye, or an eliminated seed's empty slot). Skip those —
+        # there is no head-to-head to compute.
+        if b.home_team is None or b.away_team is None:
+            continue
         home_name  = b.home_team.team_name
         away_name  = b.away_team.team_name
         home_stats = getattr(b, "home_stats", {}) or {}
@@ -1763,21 +1771,32 @@ def get_matchup_dates(league) -> dict:
     playoff_sps       = sum(len(v) for v in matchup_periods.values() if len(v) > 1)
     playoff_days      = playoff_sps * 7
 
-    # How many regular matchup periods remain from this one onward?
-    remaining_regular = regular_mp_count - int(current_week) + 1
-    remaining_daily   = int(final_sp) - matchup_start_sp + 1
-    expected_days     = max(0, remaining_regular) * 7 + playoff_days
-    extra_days        = max(0, remaining_daily - expected_days)
-    period_days       = 7 + min(extra_days, 7)
+    def _mp_entry(period):
+        return matchup_periods.get(str(period)) or matchup_periods.get(int(period)) or []
+
+    def _period_days_for(period, start_sp):
+        """Length in days of matchup `period`. PREFER ESPN's explicit multi-week
+        encoding — a PLAYOFF period lists >1 weekly scoring periods (e.g. period 20 ->
+        [20, 21]) so len==2 -> 14 days directly. The old surplus heuristic below CANNOT
+        recover this: when every remaining bracket round is 14 days the surplus spreads
+        evenly and nets 0, collapsing the current period back to the base 7. Fall back to
+        the heuristic only for the DEGENERATE All-Star case, where ESPN encodes a single
+        14-day break as a one-entry list (len==1) that the explicit path can't detect."""
+        weeks = len(_mp_entry(period))
+        if weeks > 1:
+            return weeks * 7
+        remaining_regular = regular_mp_count - int(period) + 1
+        remaining_daily   = int(final_sp) - start_sp + 1
+        expected_days     = max(0, remaining_regular) * 7 + playoff_days
+        extra_days        = max(0, remaining_daily - expected_days)
+        return 7 + min(extra_days, 7)
+
+    period_days       = _period_days_for(current_week, matchup_start_sp)
     end_date          = start_date + timedelta(days=period_days - 1)
 
     # Next matchup: advance one period forward
     next_start_sp     = matchup_start_sp + period_days
-    next_remaining    = int(final_sp) - next_start_sp + 1
-    next_regular      = remaining_regular - 1
-    next_expected     = max(0, next_regular) * 7 + playoff_days
-    next_extra        = max(0, next_remaining - next_expected)
-    next_period_days  = 7 + min(next_extra, 7)
+    next_period_days  = _period_days_for(int(current_week) + 1, next_start_sp)
     next_end          = end_date + timedelta(days=next_period_days)
 
     # Count actual MLB game days in the matchup window (excludes All-Star break etc.)
@@ -2413,6 +2432,9 @@ def get_all_prev_matchups(league) -> dict:
     _flip = {"W": "L", "L": "W", "T": "T"}
 
     for b in boxes:
+        # Skip playoff bye / unfilled bracket slots (one side None); see get_all_matchups.
+        if b.home_team is None or b.away_team is None:
+            continue
         home_name  = b.home_team.team_name
         away_name  = b.away_team.team_name
         home_stats = getattr(b, "home_stats", {}) or {}
