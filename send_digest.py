@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """
 send_digest.py — Guerrero Warfare Daily Fantasy Baseball Digest
 Reads data/snapshot.json (or runs fetch_data.py to refresh it), builds an
@@ -924,14 +924,14 @@ def inj_tag(r):
 
 def _move_badge(name, move_registry):
     """Clipboard chip marking a player as involved in a system-generated recommended move
-    (an ADD suggested in the Week-at-a-Glance bullets / Weekly Game Plan cards, or the
+    (an ADD suggested in the Week-at-a-Glance bullets / Action Plan cards, or the
     ROSTERED player named as that move's suggested drop) -- so spotting him later in an FA
     table or a My-roster table (Upcoming Starts / My RP / Recent Form) reminds the reader
     he's already part of a suggestion, without re-reading those sections. `move_registry`
     is `{PlayerName: [reason, ...]}`, built once in build_email from `_roster_suggestion`'s
     and `build_game_plan`'s own move records (not re-parsed from their rendered HTML) --
     see the "moves" return value on both. A player can be named by more than one
-    suggestion (e.g. both the Week-at-a-Glance bullet AND a Game Plan card point at the
+    suggestion (e.g. both the Week-at-a-Glance bullet AND a Action Plan card point at the
     same drop); the tooltip lists every reason. '' when the player isn't involved in
     anything, or `move_registry` is falsy (older callers that don't build one). Colored
     TAN (its own hue, reserved solely for this badge) and appended LAST after every other
@@ -1418,7 +1418,7 @@ def _matchup_swing(cat_probs_by_cat):
     """{cat: (p_win, p_tie)} -> {cat: leverage}. Leverage = how much winning-the-week odds
     move if THIS category alone flips from a sure win to a sure loss, holding every other
     category's odds fixed -- the swing-sensitivity read that tells you which toss-ups are
-    worth spending a move on (feeds the Weekly Game Plan contest/concede read). Near-zero
+    worth spending a move on (feeds the Action Plan contest/concede read). Near-zero
     for a category that's already locked or already conceded (forcing it W vs L barely
     changes an outcome that was never in doubt); largest for genuine coin-flip cats."""
     cats = list(cat_probs_by_cat.keys())
@@ -1500,7 +1500,7 @@ def _pickup_contrib(cand_row, role, remaining_frac, today_str, week_end_str, wee
     """Per-category production delta a free-agent pickup would add to MY remaining
     projected total this matchup, role-aware. Returns {cat: delta} (empty when the
     candidate contributes nothing this week). Extracted from pickup_win_delta so
-    _move_win_delta (the Weekly Game Plan's matchup-level move ranking) shares the exact
+    _move_win_delta (the Action Plan's matchup-level move ranking) shares the exact
     same contribution math — a move's flagged category and its ranked matchup-lift can
     never disagree about what the add actually produces.
       - SP  (role 'sp'):  remaining K/QS/W from actual remaining starts × per-start rate
@@ -1588,7 +1588,7 @@ def pickup_win_delta(cand_row, ctx, remaining_frac, today_str, week_end_str,
 def _move_win_delta(cand_row, role, winprob_ctx, per_cat, remaining_frac,
                     today_str, week_end_str, weeks_played=None,
                     team_game_dates=None, opp_starter_by_date=None, pitchers_by_name=None):
-    """The Weekly Game Plan's matchup-LEVEL ranking signal — distinct from
+    """The Action Plan's matchup-LEVEL ranking signal — distinct from
     pickup_win_delta's single-category chip. Folds the candidate's _pickup_contrib deltas
     into a COPY of `per_cat` (the {cat: (p_win, p_tie)} map from _winprob_joint — never
     mutated, so the ranking can't drift from the win-the-week chip the reader already
@@ -2748,7 +2748,7 @@ def build_glossary_section():
                "for your own roster also surface up top in Roster Alerts and the email's Act-today list.)"),
         _entry(f'Recommended-move clipboard{_hit_badge("&#128203;", TAN, "example")}',
                "Marks a player who's already part of a system-generated suggestion elsewhere in this digest — "
-               "an FA named as an <b>Add</b> in the Week-at-a-Glance bullets or a Weekly Game Plan card, or a "
+               "an FA named as an <b>Add</b> in the Week-at-a-Glance bullets or Your Action Plan, or a "
                "ROSTERED player named as that move's suggested <b>Drop</b>. Hover (or the tooltip on mobile) "
                "names the specific suggestion(s); a player flagged by more than one lists all of them. Purely "
                "informational — it doesn't change any score, ranking, or recommendation, just saves a trip "
@@ -2883,7 +2883,7 @@ def build_glossary_section():
                "Applies to starters and relievers alike. No recency-confirmation layer (unlike $/▽/▼) — a single "
                "low-sample read. Display-only. <b>Hover</b> for the ERA/SIERA numbers."),
 
-        _subhead("Weekly Game Plan"),
+        _subhead("Your Action Plan"),
         _entry("&#127942; Win the week",
                "The 12 per-category win probabilities (same calibrated model as the Category Pulse % chips) "
                "collapsed into <b>one</b> number: the odds you take more categories than your opponent this "
@@ -2891,12 +2891,12 @@ def build_glossary_section():
                "almost all of them), so a great week realistically reads &asymp;90%, not 100% &mdash; that's "
                "expected, not a bug. Categories aren't perfectly independent (a strong pitching week correlates "
                "K/QS/W/ERA/WHIP), so treat it as a well-calibrated <i>modeled</i> odds, not a guarantee. Shown "
-               "on the Category Pulse summary, in The Briefing, atop the Weekly Game Plan, and on the dashboard. "
+               "on the Category Pulse summary, in The Briefing, atop Your Action Plan, and on the dashboard. "
                "The trophy is deliberately its own glyph, distinct from the crossed-swords Contest bucket below "
                "and from the Trade Lab's 🎯 target marker — this is the one whole-week number, not a "
                "per-category or per-player flag."),
         _entry("&#128274; Locked &middot; &#9876; Contest &middot; &#9995; Concede",
-               "The Weekly Game Plan's category triage: <b>Locked</b> = win odds &ge; 85%, already yours, no "
+               "The Action Plan's category triage: <b>Locked</b> = win odds &ge; 85%, already yours, no "
                "action needed. <b>Contest</b> = a real toss-up where winning it would meaningfully swing the "
                "week (its <i>leverage</i> &mdash; how much the week's odds move if it flips from a sure win to a "
                "sure loss &mdash; clears the bar) &mdash; these are the categories worth spending a move on, "
@@ -3401,7 +3401,8 @@ def _brief_cat_list(cats, limit=3):
 
 def render_briefing(my_team, today, matchup, classification, starts, today_str,
                     week_end_str, sr_emerging, alerts, my_row, n_teams, tune_in="",
-                    pending_incoming=None, win_week_pct=None, news_alerts=None):
+                    pending_incoming=None, win_week_pct=None, news_alerts=None,
+                    plan_brief=""):
     """Short, skimmable inline email body ("The Briefing"). Returns an HTML string."""
     my_team = " ".join((my_team or "").split())    # collapse ESPN's double-space for display
     # %-d is not portable (Windows), so build the day number by hand.
@@ -3551,6 +3552,7 @@ def render_briefing(my_team, today, matchup, classification, starts, today_str,
         f'<div style="font-size:11px;color:{MUTED};margin-bottom:15px;letter-spacing:.3px;">'
         f'The Briefing · {date_str}</div>'
         f'{act_html}'
+        f'{plan_brief or ""}'
         # Matchup
         f'<div style="margin-bottom:13px;">'
         f'<div style="font-size:10px;font-weight:700;letter-spacing:.7px;color:{MUTED};'
@@ -4152,7 +4154,7 @@ def _matchup_closing_note(is_final_day):
         f'</div>'
     )
 
-# ── Weekly Game Plan (Win-the-Week odds + ranked moves) ──────────────────────────
+# ── Action Plan (Win-the-Week odds + ranked moves) ──────────────────────────
 # See docs/scoring.md for the joint-probability model. Part A classifies every category
 # as Locked / Contest / Concede from the calibrated per-cat win% + swing leverage
 # (_matchup_swing); Part B ranks FA candidates (from the ALREADY-BUILT fa_sp/fa_rp/fa_hit
@@ -4166,33 +4168,41 @@ _GAMEPLAN_CONCEDE_PCT  = 15   # cat win% <= this -> ✋ Concede (don't spend a m
 _GAMEPLAN_MIN_LEVERAGE = 8    # min swing leverage (win-the-week percentage points) for a
                               # toss-up cat to count as ⚔️ Contest rather than ✋ Concede —
                               # a toss-up cat that barely moves the week isn't worth a move
-_GAMEPLAN_MAX_HIT_MOVES = 2   # top-N ranked hitter move cards (left column)
-_GAMEPLAN_MAX_PIT_MOVES = 2   # top-N ranked pitcher move cards (right column, SP+RP combined)
-_GAMEPLAN_MAX_MOVES = _GAMEPLAN_MAX_HIT_MOVES + _GAMEPLAN_MAX_PIT_MOVES  # total cards, for the subtitle
-_GAMEPLAN_WEEKLY_MOVE_CAP = 7 # reference only (this league's typical add/drop cadence,
-                              # same number the FA-SP per-day cap rationale already cites)
-                              # — NOT a live remaining-moves counter (no snapshot field
-                              # tracks weekly transaction usage), so the subtitle names it
-                              # as a budget reference, never a claimed "N left" count.
+_GAMEPLAN_MAX_HOLD_ADDS = 2   # top-N durable (add-and-keep) waiver claims shown "for today"
+_GAMEPLAN_MAX_STREAM    = 3   # max SP streamers cycled through the dated queue
+_PLAN_SIT_MAX_SCORE     = 48  # a cold bat is a "sit" suggestion only when his recent score is
+                              # below ~median (calibrated p50->50) — a star dipping below his
+                              # OWN elite baseline reads cold-vs-himself but is never a bench
+_GAMEPLAN_WEEKLY_MOVE_CAP = 7 # this league's weekly add/drop budget — the sequenced plan
+                              # caps its total adds here so it never outlines more moves than
+                              # you can actually make in a week. NOT a live remaining-moves
+                              # counter (no snapshot field tracks usage this week).
 
-def build_game_plan(matchup, winprob_ctx, per_cat, winprob_rf, winprob_weeks,
+def build_action_plan(matchup, winprob_ctx, per_cat, winprob_rf, winprob_weeks,
                     pitchers, hitters, fa_sp, fa_rp, fa_hit, pos_data,
                     my_team, today_str, week_end_str, is_sunday=False,
                     league_active_roster_max=26, league_il_roster_max=2,
                     best_recent_p=None, best_recent_h=None, hit_pctile=None,
-                    team_game_dates=None, opp_starter_by_date=None, pitchers_by_name=None):
-    """Returns `(html, moves)`. `html` is The Weekly Game Plan: a contest/concede category
-    read (Part A) plus up to _GAMEPLAN_MAX_HIT_MOVES ranked hitter move cards +
-    _GAMEPLAN_MAX_PIT_MOVES ranked pitcher move cards (Part B), laid out in two columns,
-    each showing the matchup-win-% it buys. '' when there's no live matchup or no usable
-    win-prob context (mirrors the other matchup-dependent sections' guard). `moves` is a
-    structured list of `{"name": PlayerName, "reason": str}` records for every add/drop
-    shown on a card -- feeds build_email's `_move_badge` registry, same shape/purpose as
-    `_roster_suggestion`'s `moves` return."""
+                    team_game_dates=None, opp_starter_by_date=None, pitchers_by_name=None,
+                    starts=None):
+    """The daily Action Plan — a sequenced, next-few-days move list. Returns
+    `(digest_html, brief_html, moves)`:
+      - `digest_html`: a prominent always-visible card (rendered near the TOP of the digest,
+        not a buried band) — a contest/concede strategy strip + a dated timeline of concrete
+        moves ("Today: add X, drop Y" · "Wed: drop X, add Z for his Fri start") + daily
+        start/sit calls. Replaces the old buried Action Plan.
+      - `brief_html`: a compact plain-text version for The Briefing (the inline email body),
+        so the same plan is the first thing seen every morning.
+      - `moves`: `{"name","reason"}` records for every add/drop, feeding build_email's
+        `_move_badge` registry (same shape/purpose as `_roster_suggestion`'s return).
+    Returns `("", "", [])` when there's no live matchup or usable win-prob context (mirrors
+    the other matchup-dependent sections' guard). Streaming/start-sit read `starts`
+    (my_upcoming_starts) and the probable-starter horizon is ~7 days, so the dated queue
+    covers the front of a 14-day playoff matchup and notes a mid-matchup reassess for the back."""
     if not matchup or not per_cat:
-        return "", []
+        return "", "", []
 
-    moves = []   # populated inside _build_cards below (empty when is_sunday or no cards)
+    moves = []   # every add/drop recorded here -> build_email move_registry
 
     # ---- Part A: contest / concede read ---------------------------------------
     swing = _matchup_swing(per_cat)
@@ -4243,8 +4253,18 @@ def build_game_plan(matchup, winprob_ctx, per_cat, winprob_rf, winprob_weeks,
         f'</tr></table></div>'
     )
 
-    # ---- Part B: top-N ranked moves, by MATCHUP-level win% lift -----------------
-    cards_html = ""
+    # ---- Part B: the sequenced move plan (built into these containers below) ----
+    # Initialized at function level so is_sunday (which skips the build block) still
+    # renders cleanly with an empty plan.
+    hold_adds   = []   # [{html, add, drop, cat}] durable "add & keep" claims, done TODAY
+    stream_seq  = []   # [{label, html, brief}] the dated SP streaming chain
+    lineup_start = []  # [html] hot bats to lock in daily
+    lineup_sit   = []  # [html] cold bats to bench when a better option exists
+    start_names = []   # [(name, emoji)] plain form for the Briefing
+    sit_names   = []   # [(name, emoji)] plain form for the Briefing
+    sit_dated    = []  # [(label, html)] dated low-floor SP sit warnings
+    plan_drops   = set()  # players the plan already drops -> never also tell me to "sit" them
+    rotation_note = ""  # set when the rotation is already well-covered (no streaming)
     if not is_sunday:
         my_norm  = " ".join(my_team.split())
         full_pit = [r for r in pitchers
@@ -4341,7 +4361,7 @@ def build_game_plan(matchup, winprob_ctx, per_cat, winprob_rf, winprob_weeks,
                          else _blend(pending_add, hitter_score, best_recent_h))
             return (add_score - cand_score) >= _UPGRADE_MARGIN
 
-        # A Game Plan drop candidate must clear one of two eligibility paths (never an
+        # An Action Plan drop candidate must clear one of two eligibility paths (never an
         # active save/hold-role arm, never protected): Path A (absolute) -- genuinely
         # fringe, _drop_eligibility_score (season score, recency-discounted for hitters —
         # see send_digest.py near _UPGRADE_MARGIN) below _DROP_SEASON_FLOOR, so a real
@@ -4464,140 +4484,290 @@ def build_game_plan(matchup, winprob_ctx, per_cat, winprob_rf, winprob_weeks,
         scored_hit = _score_candidates(hit_candidates)
         scored_pit = _score_candidates(pit_candidates)
 
-        _CIRCLED = ["①", "②", "③", "④", "⑤"]
+        # ================= BUILD THE SEQUENCED PLAN =========================
+        def _rec(name, reason):
+            if name:
+                moves.append({"name": name, "reason": reason})
 
-        def _build_cards(scored_list, cap):
-            nonlocal slots_left
-            cards = []
-            for (lift, r, role, best_cat, cb, ca, wb, wa) in scored_list:
-                if len(cards) >= cap:
-                    break
-                hold = _is_hold(r, role)
-                tag_lbl, tag_col = ("hold", ACCENT) if hold else ("streamer", MUTED)
-                cat_lbl_early = _CAT_LABELS_MAP.get(best_cat, best_cat)
-                if r.get("PlayerName"):
-                    moves.append({"name": r["PlayerName"],
-                                   "reason": f"Weekly Game Plan &mdash; +{round(lift)}% {cat_lbl_early} "
-                                             f"odds ({tag_lbl})"})
-                # Resolve the drop BEFORE building the card. _take_drop only offers players
-                # clearing Path A (fringe) or Path B (outclassed at a shared spot by this add)
-                # -- when slots_left covers the add, no drop is needed at all. When neither an
-                # open slot nor an eligible drop exists, the card still renders (the pickup idea
-                # is still worth surfacing -- ranked purely by matchup lift) with an advisory
-                # line instead of a specific drop, rather than disappearing entirely.
+        def _short_day(d):
+            try:
+                dt = datetime.strptime(d, "%Y-%m-%d")
+                return dt.strftime("%a %b ") + str(dt.day)
+            except Exception:
+                return d[5:] if d else "?"
+
+        def _wkday(d):
+            try:
+                return datetime.strptime(d, "%Y-%m-%d").strftime("%a")
+            except Exception:
+                return d[5:] if d else "?"
+
+        adds_used  = 0
+        hold_names = set()
+
+        # ---- (1) Today's durable claims: best add-&-keep pieces --------------
+        # Top hitter/reliever/SP HOLD candidates by matchup lift (a HOLD is a durable
+        # upgrade over my starter quality, not a one-week streamer — streamers are the
+        # dated SP queue below). Each is paired with a safe drop and done TODAY.
+        hold_pool = sorted(
+            [(lift, r, role, bc) for (lift, r, role, bc, cb, ca, wb, wa) in (scored_hit + scored_pit)
+             if _is_hold(r, role)],
+            key=lambda x: -x[0])
+        for (lift, r, role, bc) in hold_pool:
+            if len(hold_adds) >= _GAMEPLAN_MAX_HOLD_ADDS or adds_used >= _GAMEPLAN_WEEKLY_MOVE_CAP:
+                break
+            nm = r.get("PlayerName", "")
+            if slots_left > 0:
+                slots_left -= 1
+                drop_html = f'<span style="color:{GREEN};font-size:11px;">&#10003; open roster spot</span>'
+                drop_nm = ""
+            else:
+                d = _take_drop(r)
+                if d is None:
+                    drop_html = f'<span style="color:{MUTED};font-size:11px;">free a bench spot first</span>'
+                    drop_nm = ""
+                else:
+                    drop_html = _render_drop(d, add_row=r)
+                    drop_nm = d.get("PlayerName", "")
+                    plan_drops.add(drop_nm)
+                    _rec(drop_nm, f"Action Plan &mdash; drop for {nm}")
+            _rec(nm, f"Action Plan &mdash; add (+{round(lift)}% {_CAT_LABELS_MAP.get(bc, bc)}, hold)")
+            hold_names.add(nm)
+            badges = hitter_badges(r, hit_pctile, idx_recent=best_recent_h) if role == "hit" else ""
+            html = (
+                f'<span style="color:{GREEN};font-weight:700;">Add</span> {team_logo(r.get("Team"))}'
+                f'<span style="color:{TEXT};font-weight:700;">{nm}</span> '
+                f'<span style="color:{MUTED};font-size:11px;">({_pos_disp(r)})</span>{badges} '
+                f'&middot; {drop_html}'
+                f'<div style="margin-top:1px;color:{MUTED};font-size:10.5px;">'
+                f'&#8594; +{round(lift)}% {_CAT_LABELS_MAP.get(bc, bc)} odds &middot; keep all matchup</div>'
+            )
+            hold_adds.append({"html": html, "add": nm, "drop": drop_nm, "cat": _CAT_LABELS_MAP.get(bc, bc)})
+            adds_used += 1
+
+        # ---- (2) SP streaming queue (dated chain) ---------------------------
+        my_by_day = {}
+        for s in (starts or []):
+            dd = s.get("PSP_Date", "")
+            if dd and dd != "1999-01-01":
+                my_by_day[dd] = my_by_day.get(dd, 0) + 1
+
+        def _qsp(r):
+            return qs_probability(r) or 0
+
+        def _two(r):
+            return _starts_this_week(r, today_str, week_end_str) >= 2
+
+        fa_stream_all = [r for r in (fa_sp or [])
+                         if today_str <= (r.get("PSP_Date") or "") <= week_end_str
+                         and r.get("PlayerName") not in hold_names]
+        stream_days = sorted({(r.get("PSP_Date") or "") for r in fa_stream_all})
+        used_stream = set()
+        prev = None
+        covered_days = 0
+        for day in stream_days:
+            if my_by_day.get(day, 0) >= 1:
+                covered_days += 1
+                continue
+            if len(stream_seq) >= _GAMEPLAN_MAX_STREAM or adds_used >= _GAMEPLAN_WEEKLY_MOVE_CAP:
+                break
+            pool = [r for r in fa_stream_all
+                    if r.get("PlayerName") not in used_stream and (r.get("PSP_Date") or "") == day]
+            if not pool:
+                continue
+            arm = min(pool, key=lambda r: (_is_blowup_risk(r), not _two(r), -_qsp(r)))
+            nm = arm.get("PlayerName", "")
+            used_stream.add(nm)
+            wstarts = sorted([x for x in (arm.get("PSP_Dates") or [arm.get("PSP_Date")])
+                              if x and today_str <= x <= week_end_str])
+            starts_txt = ", ".join(_wkday(x) for x in wstarts) or _wkday(day)
+            qc = GREEN if _qsp(arm) >= 55 else (YELLOW if _qsp(arm) >= 40 else MUTED)
+            arm_meta = (f'<span style="color:{MUTED};font-size:11px;">(SP &middot; starts {starts_txt}'
+                        + (f' &middot; QS <span style="color:{qc};font-weight:700;">{int(_qsp(arm))}%</span>' if _qsp(arm) else '')
+                        + ')</span>')
+            arm_html = (f'{team_logo(arm.get("Team"))}<span style="color:{TEXT};font-weight:700;">{nm}</span> {arm_meta}')
+            if _is_blowup_risk(arm):
+                arm_html += f' <span style="color:{ORANGE};font-size:10px;font-weight:700;">&#9888; volatile</span>'
+            if prev is None:
                 if slots_left > 0:
                     slots_left -= 1
-                    drop_html = (f'<span style="color:{GREEN};font-size:11px;">&#10003; roster spot open '
-                                 f'&mdash; no drop needed</span>')
+                    drop_html = f' &middot; <span style="color:{GREEN};font-size:11px;">&#10003; open spot</span>'
+                    brief = f'add {nm}'
                 else:
-                    d = _take_drop(r)
+                    d = _take_drop(arm)
                     if d is None:
-                        drop_html = (f'<span style="color:{MUTED};font-size:11px;">No safe drop right now '
-                                     f'&mdash; worth a manual look at your bench</span>')
+                        drop_html = f' &middot; <span style="color:{MUTED};font-size:11px;">free a bench spot</span>'
+                        brief = f'add {nm}'
                     else:
-                        drop_html = _render_drop(d, add_row=r)
-                        moves.append({"name": d["PlayerName"],
-                                       "reason": f"Weekly Game Plan &mdash; suggested drop for "
-                                                 f"{r.get('PlayerName','')}"})
-                i = len(cards)
-                pos_disp = _pos_disp(r)
-                team_l = team_logo(r.get("Team"))
-                add_line = _move_line(r, role, best_cat)
-                cat_lbl = _CAT_LABELS_MAP.get(best_cat, best_cat)
+                        drop_html = f' &middot; {_render_drop(d, add_row=arm)}'
+                        plan_drops.add(d.get("PlayerName", ""))
+                        _rec(d.get("PlayerName", ""), f"Action Plan &mdash; drop to stream {nm}")
+                        brief = f'add {nm}, drop {d.get("PlayerName","")}'
+                _rec(nm, "Action Plan &mdash; stream add")
+                label = "Today" if day <= today_str else _short_day(day)
+                html = f'<span style="color:{GREEN};font-weight:700;">Add</span> {arm_html}{drop_html}'
+            else:
+                label = f'{_short_day(prev["last"])} &middot; after {prev["name"]}&rsquo;s start'
+                _rec(nm, f"Action Plan &mdash; stream add (drop {prev['name']})")
+                brief = f'drop {prev["name"]}, add {nm}'
+                html = (f'<span style="color:{RED};font-weight:700;">Drop</span> '
+                        f'<span style="color:{TEXT};">{prev["name"]}</span> &middot; '
+                        f'<span style="color:{GREEN};font-weight:700;">add</span> {arm_html}')
+            stream_seq.append({"label": label, "html": html, "brief": brief})
+            adds_used += 1
+            prev = {"name": nm, "last": (wstarts[-1] if wstarts else day)}
 
-                badges = ""
-                if role == "hit":
-                    badges = hitter_badges(r, hit_pctile, idx_recent=best_recent_h)
-                    bd = _hitter_score_breakdown(r, best_recent_h, hit_pctile)
-                    score_val = _blend(r, hitter_score, best_recent_h)
-                else:
-                    pv = _proj_line_vals(r)
-                    if pv:
-                        ip_g, er, k = pv
-                        if _proj_is_qs(ip_g, er):
-                            badges += qs_badge(ip_g, er, r)
-                        if k >= 5:
-                            badges += k5_badge(k, r)
-                    if role == "sp":
-                        badges += (blowup_badge(r) + pitcher_regression_badge(r, idx_recent=best_recent_p)
-                                   + pitcher_bounceback_badge(r, idx_recent=best_recent_p) + siera_regression_badge(r))
-                    bd = _pitcher_score_breakdown(r, best_recent_p)
-                    score_val = _score_p(r, best_recent_p)
-                uid = _bd_uid("gp", r.get("PlayerName", "")) if bd else None
-                score_html, reveal = _trade_score_reveal(int(round(score_val)), bd, uid)
+        if not stream_seq and fa_stream_all and covered_days:
+            rotation_note = "Rotation is covered on every day an arm is available &mdash; no streaming needed."
 
-                num = _CIRCLED[i] if i < len(_CIRCLED) else str(i + 1)
-                cards.append(
-                    f'<div style="background:{SURFACE};border:1px solid {BORDER};border-radius:8px;'
-                    f'padding:10px 14px;margin-bottom:10px;">'
-                    f'<div style="font-size:11.5px;color:{ACCENT};font-weight:800;margin-bottom:5px;'
-                    f'overflow:hidden;">'
-                    f'<span style="float:right;color:{tag_col};font-size:9.5px;font-weight:700;'
-                    f'text-transform:uppercase;border:1px solid {tag_col};border-radius:3px;'
-                    f'padding:1px 6px;">{tag_lbl}</span>'
-                    f'{num} +{round(lift)}% {cat_lbl} odds</div>'
-                    f'<div style="font-size:12.5px;"><span style="color:{GREEN};font-weight:700;">Add</span> {team_l}'
-                    f'<span style="color:{TEXT};font-weight:700;">{r.get("PlayerName","")}</span> '
-                    f'<span style="color:{MUTED};">({pos_disp})</span> {score_html}{badges}</div>'
-                    f'<div style="margin-top:2px;">{add_line}</div>'
-                    f'<div style="margin-top:6px;font-size:12px;">{drop_html}</div>'
-                    f'<div style="margin-top:6px;font-size:11px;color:{MUTED};clear:both;'
-                    f'border-top:1px solid {BORDER};padding-top:6px;">'
-                    f'&#8594; lifts your <span style="color:{TEXT};">{cat_lbl}</span> win '
-                    f'{cb}% &#8594; {ca}%, matchup {wb}% &#8594; <span style="color:{TEXT};font-weight:700;">{wa}%</span>'
-                    f'</div>{reveal}</div>'
-                )
-            return cards
+        # ---- (3) daily start / sit ------------------------------------------
+        # Same recent-form read as the Recent Form sections (_hitter_recent_form).
+        hot, cold = [], []
+        for r in full_hit:
+            if _on_il(r) or r.get("PlayerName") in plan_drops:
+                continue   # a player I'm dropping is not a "sit" call
+            _rec_row, sea, rs, win, tag = _hitter_recent_form(r, best_recent_h)
+            if rs <= 0:
+                continue
+            if tag in ("hot", "warm"):
+                hot.append((rs - sea, r, rs))
+            elif tag in ("cold", "cool") and rs < _PLAN_SIT_MAX_SCORE:
+                # Only suggest benching a bat whose recent form is weak in ABSOLUTE terms
+                # (recent score below ~median) — a star merely dipping below his own elite
+                # baseline (Olson at rs~70) is cold-vs-himself but never a sit.
+                cold.append((rs - sea, r, rs))
+        hot.sort(key=lambda x: -x[0])
+        cold.sort(key=lambda x: x[0])
+        for _dlt, r, rs in hot[:3]:
+            nm = r.get("PlayerName", "")
+            start_names.append((nm, _FORM_EMOJI.get("hot", "")))
+            lineup_start.append(
+                f'{team_logo(r.get("Team"))}<span style="color:{TEXT};font-weight:600;">{nm}</span>'
+                f' <span style="color:{GREEN};font-size:10px;">{_FORM_EMOJI.get("hot","")}{int(rs)}</span>')
+        for _dlt, r, rs in cold[:2]:
+            nm = r.get("PlayerName", "")
+            sit_names.append((nm, _FORM_EMOJI.get("cold", "")))
+            lineup_sit.append(
+                f'{team_logo(r.get("Team"))}<span style="color:{TEXT};font-weight:600;">{nm}</span>'
+                f' <span style="color:{ACCENT};font-size:10px;">{_FORM_EMOJI.get("cold","")}{int(rs)}</span>')
+        for s in (starts or []):
+            d = s.get("PSP_Date", "")
+            if d and today_str <= d <= week_end_str and _is_blowup_risk(s):
+                sit_dated.append((_short_day(d),
+                    f'Weigh benching <span style="color:{TEXT};font-weight:600;">{s.get("PlayerName","")}</span>'
+                    f' <span style="color:{ORANGE};font-size:10px;font-weight:700;">&#9888; low floor</span>'))
 
-        hit_cards = _build_cards(scored_hit, _GAMEPLAN_MAX_HIT_MOVES)
-        pit_cards = _build_cards(scored_pit, _GAMEPLAN_MAX_PIT_MOVES)
+    # ================= RENDER ================================================
+    def _plan_block(label, rows, accent=ACCENT):
+        if not rows:
+            return ""
+        inner = "".join(
+            f'<div style="padding:3px 0;font-size:12.5px;color:{TEXT};line-height:1.5;">'
+            f'<span style="color:{accent};margin-right:6px;">&#9656;</span>{h}</div>'
+            for h in rows)
+        return (
+            f'<div style="margin-bottom:11px;">'
+            f'<div style="color:{accent};font-size:10px;font-weight:700;text-transform:uppercase;'
+            f'letter-spacing:.6px;margin-bottom:3px;">{label}</div>{inner}</div>')
 
-        def _empty_col_note(note):
-            # Same card weight/border as an actual move card (not a stray trailing line)
-            # so an empty column reads as an intentional, labeled answer -- "no moves
-            # cleared the bar" -- rather than content that silently went missing.
-            return (
-                f'<div style="background:{SURFACE};border:1px solid {BORDER};border-radius:8px;'
-                f'padding:12px 14px;text-align:center;">'
-                f'<div style="font-size:11.5px;color:{TEXT};font-weight:700;">'
-                f'&#128269; No moves clear the bar</div>'
-                f'<div style="font-size:10.5px;color:{MUTED};margin-top:4px;line-height:1.4;">{note}</div>'
-                f'</div>'
-            )
+    def _timeline(items):
+        if not items:
+            return ""
+        rows = "".join(
+            f'<div style="padding:4px 0;border-left:2px solid {BORDER};padding-left:10px;margin-left:2px;">'
+            f'<div style="color:{MUTED};font-size:9.5px;font-weight:700;text-transform:uppercase;'
+            f'letter-spacing:.4px;">{it["label"]}</div>'
+            f'<div style="font-size:12.5px;color:{TEXT};line-height:1.5;margin-top:1px;">{it["html"]}</div></div>'
+            for it in items)
+        return (
+            f'<div style="margin-bottom:11px;">'
+            f'<div style="color:{ACCENT};font-size:10px;font-weight:700;text-transform:uppercase;'
+            f'letter-spacing:.6px;margin-bottom:4px;">Streaming queue</div>{rows}</div>')
 
-        if hit_cards or pit_cards:
-            hit_body = "".join(hit_cards) if hit_cards else _empty_col_note(
-                "Every hitter candidate's cost was a real rostered player.")
-            pit_body = "".join(pit_cards) if pit_cards else _empty_col_note(
-                "Every pitcher candidate's cost was a real rostered player.")
-            cards_html = (
-                f'<table style="width:100%;border-collapse:collapse;"><tr>'
-                f'<td style="width:50%;vertical-align:top;padding-right:6px;">'
-                f'<div style="font-size:9px;color:{MUTED};font-weight:700;text-transform:uppercase;'
-                f'letter-spacing:.5px;margin-bottom:6px;">Hitters</div>{hit_body}</td>'
-                f'<td style="width:50%;vertical-align:top;padding-left:6px;">'
-                f'<div style="font-size:9px;color:{MUTED};font-weight:700;text-transform:uppercase;'
-                f'letter-spacing:.5px;margin-bottom:6px;">Pitchers</div>{pit_body}</td>'
-                f'</tr></table>'
-            )
-        else:
-            cards_html = (
-                f'<div style="background:{SURFACE};border:1px solid {BORDER};border-radius:8px;'
-                f'padding:12px 14px;margin-bottom:18px;text-align:center;">'
-                f'<div style="font-size:12.5px;color:{TEXT};font-weight:700;">'
-                f'&#128269; No moves clear the bar</div>'
-                f'<div style="font-size:11px;color:{MUTED};margin-top:4px;line-height:1.4;">'
-                f'Every candidate&rsquo;s cost was a real rostered player, not fringe bench depth '
-                f'&mdash; check back as starts/waivers firm up.</div>'
-                f'</div>'
-            )
+    if is_sunday:
+        body = (strip +
+                f'<div style="font-size:12.5px;color:{MUTED};line-height:1.6;">'
+                f'Matchup ends today &mdash; set your final lineup (start your live bats &amp; any '
+                f'pitcher going today); a waiver move can no longer swing a category.</div>')
+        digest_html = section_head("Your Action Plan", "final day &mdash; lineup only") + body
+        brief_html = ""
+        return digest_html, brief_html, moves
 
-    sub = (f'Final odds for the week &mdash; too late for a move to swing it'
-           if is_sunday else
-           f'up to {_GAMEPLAN_MAX_MOVES} ranked moves ({_GAMEPLAN_MAX_HIT_MOVES} hitter, '
-           f'{_GAMEPLAN_MAX_PIT_MOVES} pitcher) &middot; weekly add/drop budget ~{_GAMEPLAN_WEEKLY_MOVE_CAP}')
+    # --- lineup block (start / sit + dated sit warnings) ---
+    lineup_rows = []
+    if lineup_start:
+        lineup_rows.append(f'<span style="color:{GREEN};font-weight:700;">Start (hot):</span> ' + " &nbsp; ".join(lineup_start))
+    if lineup_sit:
+        lineup_rows.append(f'<span style="color:{ACCENT};font-weight:700;">Coldest bats</span>'
+                           f'<span style="color:{MUTED};font-size:11px;"> — bench if you have a hotter option:</span> '
+                           + " &nbsp; ".join(lineup_sit))
+    seen_sit = set()
+    for lbl, h in sit_dated:
+        key = (lbl, h)
+        if key in seen_sit:
+            continue
+        seen_sit.add(key)
+        lineup_rows.append(f'<span style="color:{MUTED};font-size:11px;">{lbl}:</span> {h}')
 
-    return section_head("Weekly Game Plan", sub) + strip + cards_html, moves
+    today_block  = _plan_block("Do today", [h["html"] for h in hold_adds], accent=GREEN)
+    stream_block = _timeline(stream_seq)
+    if rotation_note and not stream_block:
+        stream_block = (f'<div style="margin-bottom:11px;font-size:11.5px;color:{MUTED};">'
+                        f'<span style="color:{GREEN};">&#10003;</span> {rotation_note}</div>')
+    lineup_block = _plan_block("Set your lineup", lineup_rows, accent=ACCENT)
+
+    if not (today_block or stream_block or lineup_block):
+        body_inner = (f'<div style="font-size:12px;color:{MUTED};">No roster moves clear the bar right now '
+                      f'&mdash; ride your lineup and check back as waivers/probables firm up.</div>')
+    else:
+        reassess = ""
+        if week_end_str and today_str:
+            try:
+                hz = (datetime.strptime(today_str, "%Y-%m-%d") + timedelta(days=7)).strftime("%Y-%m-%d")
+                if hz < week_end_str:
+                    reassess = (f'<div style="margin-top:6px;font-size:10.5px;color:{MUTED};border-top:1px solid {BORDER};'
+                                f'padding-top:6px;">Probable starters firm up ~7 days out &mdash; reassess the back half '
+                                f'around {_short_day(hz)}.</div>')
+            except Exception:
+                reassess = ""
+        body_inner = today_block + stream_block + lineup_block + reassess
+
+    digest_html = (section_head("Your Action Plan", "the next few days &mdash; sequenced moves &amp; lineup")
+                   + strip + body_inner)
+
+    # --- compact Briefing version ---
+    def _plain(s):
+        return re.sub(r"<[^>]+>", "", s).replace("&middot;", "·").replace("&mdash;", "—").replace("&rsquo;", "’").replace("&#8594;", "").replace("&nbsp;", " ").strip()
+
+    brief_lines = []
+    for h in hold_adds[:2]:
+        line = f'Add <b>{h["add"]}</b>' + (f', drop {h["drop"]}' if h["drop"] else '') + f' ({h["cat"]})'
+        brief_lines.append((GREEN, line))
+    for it in stream_seq[:2]:
+        lbl = _plain(it["label"])
+        brief_lines.append((ACCENT, f'{lbl}: {it["brief"]}'))
+    if start_names or sit_names:
+        parts = []
+        if start_names:
+            parts.append("Start " + ", ".join(f'{nm} {em}'.strip() for nm, em in start_names[:3]))
+        if sit_names:
+            parts.append("coldest " + ", ".join(f'{nm} {em}'.strip() for nm, em in sit_names[:2]))
+        brief_lines.append((MUTED, " · ".join(parts)))
+
+    if brief_lines:
+        rows = "".join(
+            f'<div style="padding:3px 0;font-size:13px;line-height:1.5;color:{TEXT};">'
+            f'<span style="color:{col};">•</span> {txt}</div>'
+            for col, txt in brief_lines)
+        brief_html = (
+            f'<div style="background:{SURFACE};border:1px solid {BORDER};border-left:3px solid {ACCENT};'
+            f'border-radius:6px;padding:11px 13px;margin-bottom:16px;">'
+            f'<div style="color:{ACCENT};font-size:10px;font-weight:700;letter-spacing:.7px;'
+            f'text-transform:uppercase;margin-bottom:5px;">&#128203; Your plan &middot; next few days</div>{rows}</div>')
+    else:
+        brief_html = ""
+
+    return digest_html, brief_html, moves
 
 def build_email(snap, override_team=None):
     my_team       = override_team if override_team else snap.get("my_team", MY_TEAM)
@@ -4692,7 +4862,7 @@ def build_email(snap, override_team=None):
     winprob_weeks = max(1.0, (current_week_num or 1) - winprob_rf)
     # Joint win-the-week probability + per-category (p_win, p_tie) map — built ONCE here
     # from the SAME winprob_ctx as everything else above, so the Category Pulse 🏆 chip,
-    # the Briefing line, and the Weekly Game Plan can never disagree with each other.
+    # the Briefing line, and the Action Plan can never disagree with each other.
     winprob_joint, winprob_percat = _winprob_joint(winprob_ctx, winprob_rf)
 
     # Category classification (used by the pickup steering AND the FA "Cats" column).
@@ -4724,7 +4894,8 @@ def build_email(snap, override_team=None):
         league_il_roster_max=league_il_roster_max,
         pos_data=pos_data, lineup_eff=(snap.get("lineup_efficiency_current") or {} if not override_team else {}),
     )
-    game_plan, _gp_moves = build_game_plan(
+    starts    = my_upcoming_starts(pitchers, my_team)   # needed by the Action Plan (streaming/start-sit)
+    action_plan_html, action_plan_brief, _ap_moves = build_action_plan(
         matchup, winprob_ctx, winprob_percat, winprob_rf, winprob_weeks,
         pitchers, hitters, fa_sp, fa_rp, fa_hit, pos_data,
         my_team, today_str, week_end_str, is_sunday=is_sunday,
@@ -4732,10 +4903,10 @@ def build_email(snap, override_team=None):
         league_il_roster_max=league_il_roster_max,
         best_recent_p=best_recent_p, best_recent_h=best_recent_h, hit_pctile=hit_pctile,
         team_game_dates=snap.get("team_game_dates"), opp_starter_by_date=snap.get("opp_starter_by_date"),
-        pitchers_by_name=pitchers_by_name,
+        pitchers_by_name=pitchers_by_name, starts=starts,
     )
     move_registry = {}
-    for _m in (_rs_moves + _gp_moves):
+    for _m in (_rs_moves + _ap_moves):
         move_registry.setdefault(_m["name"], []).append(_m["reason"])
 
     # hit_pctile / pit_pctile / positional scarcity already set by prepare_scoring above.
@@ -4758,7 +4929,6 @@ def build_email(snap, override_team=None):
     my_season_pseudo_roto = sum(n - rank + 1 for rank in cats.values() if rank is not None)
     alerts    = roster_alerts(pitchers, hitters, my_team)
     news_alerts = roster_news_alerts(pitchers, hitters, my_team)   # fresh availability/role news; feeds Roster Alerts + Briefing
-    starts    = my_upcoming_starts(pitchers, my_team)
 
     # Grade real pending trade offers ONCE (my team only — snapshot stores only my trades);
     # the section render, the Briefing "Act today" list, and the Week-at-a-Glance headline
@@ -6053,6 +6223,7 @@ def build_email(snap, override_team=None):
     top_sections = [
         build_prev_matchup_recap(prev_matchup, team_logos=team_logos) if is_monday and prev_matchup.get("week") != (matchup or {}).get("week") else "",  # 2a MONDAY RECAP
         week_overview,                                                                    # 2  WEEK INTELLIGENCE
+        action_plan_html,                                                                 # 2b ACTION PLAN (sequenced next-few-days moves + lineup) — was buried Game Plan
         build_category_pulse(matchup, weekly_avgs=weekly_avgs, days_elapsed=days_elapsed, remaining_proj=pit_proj, is_sunday=is_sunday, weekly_std=weekly_std, matchup_days=matchup_period_days, game_days_elapsed=game_days_elapsed, matchup_game_days=matchup_game_days), # 3
         opp_preview_section,                                                              # 3b OPPONENT SCOUTING (below Category Pulse)
         todays_games_section,                                                             # 3c TODAY'S MLB GAMES (matchup overlap — what to tune into)
@@ -6068,8 +6239,8 @@ def build_email(snap, override_team=None):
         build_hot_cold_section(hitters, my_team, best_recent_h, hit_pctile, move_registry),  # 9
         pos_section,                                                                      # 10 Positional Breakdown (moved to bottom of My Roster)
     ] if p)
-    # game_plan (html) was already computed earlier, above the FA/roster tables, so its
-    # "moves" could feed move_registry before any of them rendered — reused here.
+    # The old Action Plan section is gone — its brain now powers the Action Plan
+    # card (2b, top of digest). Its move records still feed move_registry (built above).
     transactions_band = "\n".join(p for p in [
         _matchup_closing_note(today_str == week_end_str),                                 # end-of-matchup: pickups can't swing today's closing matchup
         pending_section,                                                                  # 10b Pending Trades (real offers — Accept/Counter/Decline)
@@ -6078,7 +6249,6 @@ def build_email(snap, override_team=None):
         fa_hit_section,                                                                   # 13
         build_trade_radar(pitchers, hitters, roto, my_team, best_recent_p, best_recent_h,
                           pos_data, hit_pctile, pit_pctile, team_logos=team_logos),       # 13b Trade Radar
-        game_plan,                                                                        # 10a Weekly Game Plan (moved to bottom of Transactions)
     ] if p)
     season_band = "\n".join(p for p in [
         cat_section,                                                                      # 14
@@ -6109,6 +6279,7 @@ def build_email(snap, override_team=None):
             pending_incoming=incoming_pending,
             win_week_pct=(round(winprob_joint[0] * 100) if winprob_percat else None),
             news_alerts=news_alerts,
+            plan_brief=action_plan_brief,
         )
     except Exception as _e:
         print(f"  WARNING: briefing build failed ({_e}); body falls back to full digest.")

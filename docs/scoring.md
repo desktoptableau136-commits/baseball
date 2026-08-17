@@ -42,7 +42,7 @@ send_digest.py (~line 1140).
   calibrated `_cat_win_prob` per category, and returns `(joint_tuple, per_cat_map)`. Because it's fed
   the identical context as the cards, the joint number can **never disagree** with what the reader
   sees on the Category Pulse grid. `build_email` builds this ONCE (`winprob_joint`, `winprob_percat`)
-  right after `winprob_weeks`; every consumer (the 🏆 chip, the Briefing line, `build_game_plan`, the
+  right after `winprob_weeks`; every consumer (the 🏆 chip, the Briefing line, `build_action_plan`, the
   dashboard) reads that single result — nobody recomputes it per-render.
 - **Independence caveat (ship "modeled odds," not a guarantee):** categories aren't truly
   independent — a strong pitching week correlates K/QS/W/ERA/WHIP — so the joint is mildly
@@ -61,15 +61,20 @@ send_digest.py (~line 1140).
   `cat_probs` during its own card loop — a SEPARATE, redundant call to `_matchup_win_prob` on the
   identical inputs, not a second data source, so it can't drift even though it isn't literally the
   same Python call as `build_email`'s `winprob_joint`); The Briefing's "This matchup" line
-  (`render_briefing(win_week_pct=...)`); the Weekly Game Plan header (below); and the dashboard's
+  (`render_briefing(win_week_pct=...)`); Your Action Plan header (below); and the dashboard's
   Category Pulse tile subtitle (`dashboard._pulse_cell` returns each cell's `(p_win, p_tie)` as a
   third tuple element, `render_category_pulse` collects them and calls `sd._matchup_win_prob`
   directly — same pattern, dashboard has no `build_email` context to import).
 
-### The Weekly Game Plan (`build_game_plan`)
-A digest section (top of the TRANSACTIONS band) that turns the win-prob machinery into a coach's
-read instead of a report. Two parts, both gated on `matchup` + a non-empty `winprob_percat` (mirrors
-every other matchup-dependent section's empty-state guard).
+### Your Action Plan (`build_action_plan`)
+The always-visible card rendered right below Matchup at a Glance (top of the digest, section 2b) —
+it REPLACED the old buried Action Plan section. Turns the win-prob machinery into a sequenced,
+next-few-days coach's plan. Returns `(digest_html, brief_html, moves)`; `brief_html` is a compact
+plain-text version threaded into The Briefing (inline email body) via `render_briefing(plan_brief=…)`,
+and `moves` feed `move_registry` exactly as the old game plan did. Gated on `matchup` + a non-empty
+`winprob_percat` (mirrors every other matchup-dependent section's empty-state guard); `is_sunday`
+collapses it to a final-lineup note. Called ONCE, early (needs `starts`, moved up above the call).
+Three parts:
 - **Part A — contest/concede strip.** Every category lands in exactly one bucket, from
   `winprob_percat` + `_matchup_swing`:
   - **🔒 Locked** (`p_win% >= _GAMEPLAN_LOCK_PCT` = 85) — already yours, no action.
@@ -83,18 +88,30 @@ every other matchup-dependent section's empty-state guard).
     function classifies a category's own closeness (margin-based); this one classifies whether the
     category is worth ACTING on, using leverage against the whole week. Don't conflate the two or
     reuse one's thresholds for the other.
-- **Part B — up to `_GAMEPLAN_MAX_HIT_MOVES` (2) hitter + `_GAMEPLAN_MAX_PIT_MOVES` (2) pitcher
-  ranked move cards, in two side-by-side columns.** Candidates come ONLY from the already-built
-  `fa_sp`/`fa_rp`/`fa_hit` pools passed in from `build_email` (never rebuilt), so the plan can't
-  recommend a player the FA tables don't also list. The FA pool is split into a **hitter** candidate
-  list (`fa_hit`) and a **pitcher** list (`fa_sp` + `fa_rp` combined) BEFORE scoring — `_score_candidates`
-  runs once per list, and `_build_cards` independently caps+renders each (own `①②` numbering per
-  column, sharing the same `slots_left`/`_used_drops` state so the two columns' drop picks still
-  never collide). `_GAMEPLAN_MAX_MOVES` = the sum (4), kept only for the section subtitle. Ranking
-  within each column is by **matchup-level lift** (`_move_win_delta`), not a single category's swing:
+- **Part B — Do today (durable claims).** Up to `_GAMEPLAN_MAX_HOLD_ADDS` (2) add-and-keep waiver
+  claims. Candidates come ONLY from the already-built `fa_sp`/`fa_rp`/`fa_hit` pools passed in from
+  `build_email` (never rebuilt), scored once by `_score_candidates` and filtered to `_is_hold` (a
+  durable upgrade — see the `streamer` vs `hold` rule below); each is paired with a safe drop
+  (`_take_drop`, shared `slots_left`/`_used_drops` state) and recorded in `moves`. Ranking is by
+  **matchup-level lift** (`_move_win_delta`), not a single category's swing:
+- **Part C — Streaming queue (the DATED SP chain).** The novel piece: fills my thin (0-start)
+  game-days from `fa_sp` within the ~7-day probable horizon, cycling arms through ONE roster slot —
+  the first streamer takes an open slot or a `_take_drop`, and each subsequent add drops the previous
+  streamer once his last window start passes ("Thu Aug 20 · after X's start: drop X, add Y"). Capped
+  at `_GAMEPLAN_MAX_STREAM` (3) and the shared `_GAMEPLAN_WEEKLY_MOVE_CAP` (7) add budget. Arm choice
+  per thin day: least blowup-risk, then two-start preferred, then highest `qs_probability`. Emits a
+  `rotation_note` instead when every available day is already covered. A mid-matchup reassess note
+  ("probables firm up ~7 days out") caps the card, since a 14-day playoff matchup outruns the horizon.
+- **Part D — Set your lineup (start/sit).** Hot bats to lock in (recent-form `hot`/`warm` via
+  `_hitter_recent_form`) and the coldest bats to bench — the SIT list is gated on ABSOLUTE weakness
+  (`_PLAN_SIT_MAX_SCORE` = 48, recent score below ~median) so a star dipping below his OWN elite
+  baseline reads cold-vs-himself but is never suggested as a bench, and never a player the plan
+  already drops (`plan_drops`). Framed softly ("bench if you have a hotter option"), plus dated
+  low-floor SP sit warnings (`_is_blowup_risk` on my own upcoming starts). The ranking machinery below
+  is unchanged from the old game plan and still feeds Part B/C:
   - **`_pickup_contrib(cand_row, role, remaining_frac, today_str, week_end_str, weeks_played, team_game_dates=None, opp_starter_by_date=None, pitchers_by_name=None)`** →
     `{cat: delta}` — the role-aware remaining-production estimate, extracted out of
-    `pickup_win_delta` (the FA-table "Cats" column's swing chip) so both the chip and the Game Plan
+    `pickup_win_delta` (the FA-table "Cats" column's swing chip) so both the chip and the Action Plan
     ranking share the exact same contribution math and can't disagree about what an add actually
     produces. SP uses actual remaining starts × per-start rate; RP rate-paces the season total by
     `weeks_played` × `remaining_frac`. **hit rate-paces by `weeks_played` × a quality-weighted
@@ -114,21 +131,21 @@ every other matchup-dependent section's empty-state guard).
     `_cat_win_prob`, then reruns `_matchup_win_prob` on the copy. Unlike `pickup_win_delta`, this does
     **not** gate on `_PICKUP_WINDELTA_MIN`/`_PICKUP_CONTESTED_MAX` — a candidate whose only
     production lands in an already-locked/conceded category naturally yields ~0 matchup lift and
-    sorts itself out; `build_game_plan` additionally skips any candidate whose `best_cat` is in the
+    sorts itself out; `build_action_plan` additionally skips any candidate whose `best_cat` is in the
     Locked set outright (avoids a spurious "+0%" card).
   - **`streamer` vs `hold` tag:** `hold` when the candidate's SEASON blended score beats my starter
     quality at his position (`pos_data[pos]["my_avg"]`, the same top-K-starter average
     `_roster_suggestion`'s BAT bullet uses) by `>= _UPGRADE_MARGIN` — a durable upgrade. Otherwise
     `streamer` (an SP picked up for this week's start(s), or a bat whose edge is this week/recent-form
-    only). Concrete rule, no fuzziness — see `_is_hold` inside `build_game_plan`. **Rendered top-right
+    only). Concrete rule, no fuzziness — see `_is_hold` inside `build_action_plan`. **Rendered top-right
     of the card header**, beside the `① +N% {cat} odds` line (an `overflow:hidden` header div
     contains the `float:right` tag so it can't leak into the row below) — moved off the drop line
     (where it used to sit floated beside "Drop {player}") so the hold/streamer read is the first
     thing seen, before the drop cost.
   - **Drop selection** mirrors `_roster_suggestion`'s `_take_drop`/`_used_drops` PATTERN (transaction-
     aware via a `pending_add` coverage check, IL-slot-safe) but is its OWN local instance inside
-    `build_game_plan` — not literally shared state with `_roster_suggestion` (that function's surplus
-    definition also folds in bench-leakage `lineup_eff`, which the Game Plan doesn't thread through).
+    `build_action_plan` — not literally shared state with `_roster_suggestion` (that function's surplus
+    definition also folds in bench-leakage `lineup_eff`, which the Action Plan doesn't thread through).
     The dedupe guarantee ("two cards never suggest dropping the same player") holds WITHIN the Game
     Plan's own cards via its own `_used_drops`; it does not cross-dedupe against the separate
     Week-at-a-Glance bullets. As of the recency/same-position revision below, **both** functions now
@@ -353,7 +370,7 @@ in spirit, but by omission rather than input-stripping since there's nothing to 
 badge is never called there). SP-only (`_is_sp` gate, mirrors `blowup_badge`).
 
 **Wired:** My Upcoming Starts + FA SP (`_sp_badge_context` also explains it in the tap-to-expand
-dropdown), Today's MLB Games, Weekly Game Plan cards, dashboard My Pitching (8px) + FA Radar
+dropdown), Today's MLB Games, Action Plan cards, dashboard My Pitching (8px) + FA Radar
 Starters. **Deliberately NOT wired:** Trade Radar / Pending Trades / Trade Lab (`fantasy/trades.py`,
 `trade_lab.py`) — stays out of the season-value trade engine entirely, same reasoning as why ⚠
 gets matchup-neutralized rather than removed there (a trade shouldn't flicker based on a next-start
@@ -428,7 +445,7 @@ session, see "Badge landscape revision" below):**
   `$`/`▼`/`▽` or `↑`/`↓`, so a row showing all of them doesn't visually collide. Applies to SP
   and RP alike (was never `_is_sp`-gated). Wired into the same surfaces as
   `pitcher_bounceback_badge` (My Upcoming Starts, FA SP, Today's MLB Games, Weekly
-  Game Plan cards, dashboard My Pitching + FA Radar Starters) — deliberately NOT the
+  Action Plan, dashboard My Pitching + FA Radar Starters) — deliberately NOT the
   tap-to-expand bounce-back context line, and NOT (yet) its own tap-to-expand context entry
   either (a nice-to-have, not required to ship the badge).
 
@@ -514,12 +531,12 @@ The buy/sell badge above can't say whether a *recent* hot/cold stretch is backed
 - **DISTINCT from `⚠` (blowup-risk):** `▼`/`▽` sell-high = MEAN regression / luck (ERA better than deserved, due to rise); `⚠` = single-start TAIL risk / low floor. They share the ERA/xERA input so they can co-fire (a strong "move him" signal) but are not redundant.
 - **PITCHER CONFIRMATION (`pitcher_recency_flag`, session addendum — brings pitchers to parity with the hitter confirmation arrow above):** pitchers previously had NO recency check at all, so a pitcher's sell-high badge was always a bare season-level prediction — exactly the "reads as already-declining when it's really just a forecast" problem that motivated the hollow/solid glyph split. `_effective_era_recent(season_row, recent_row)` regresses the recent-window row's ERA toward the season `xERA` anchor, IP-weighted (`_PIT_RECENCY_PRIOR_IP`=25.0 — the IP analog of `_HIT_REG_PRIOR_AB`), gated on `recent_row IP ≥ _PIT_RECENCY_MIN_IP` (8). `pitcher_recency_flag(season_row, recent_row)` compares the regressed value to `xERA`: `gap ≥ _PIT_RECENCY_GAP_ERA` (1.50, ~1.5x the season `_XREG_ERA` bar, same margin-over-season-threshold pattern as the hitter `_HIT_RECENCY_GAP_BA`/`SLG`) → `'declining'` (recent ERA already worse than expected — confirms sell-high); `gap ≤ -1.50` → `'improving'` (confirms buy-low, though buy-low doesn't change glyph); else `'noise'`; `None` below the IP floor or no `xERA`. Sign convention is flipped vs the hitter version because ERA is lower-is-better. `pitcher_regression_badge`'s `idx_recent` param (the `best_recent_p` index) feeds this check: `'declining'` → solid `▼` + `_CONFIRM_DOWN` (`&#9660;&#8600;`); anything else (contradicted, noise, no data, or `idx_recent` omitted) → hollow `▽`. **Tooltip names the recent ERA (`_rec_era_str`, pitcher analog of `_rec_avg_slg_str` above, same file):** every arrow-bearing tooltip (confirmed `▼↘`, standalone early-read arrow) appends the raw recent-window ERA (`"recent ERA 2.10"`) alongside the season xERA anchor, so the hover explains itself with a real number instead of just "already worsening."
 - **STANDALONE EARLY-READ ARROW (pitcher analog of the hitter's bare-arrow 4th case, added same session):** `pitcher_regression_badge` computes `rflag` (via `pitcher_recency_flag`) BEFORE checking whether the season flag fired at all, not just inside the sell branch. When `pitcher_regression_flag(row)` is `None` (no season-level buy/sell) but `rflag` is `'improving'`/`'declining'` on its own (and `xERA > 0`), it renders a bare `_CONFIRM_UP`/`_CONFIRM_DOWN` chip — no `$`/`▼`/`▽` — an early skill-trend signal (recent ERA already diverging from his own `xERA` anchor) ahead of the season aggregate catching up. Same mutual-exclusivity as the hitter version (only one chip family ever fires) and same zero-new-call-site wiring (every call site already threads `idx_recent`, so this activates for free). `_pitcher_badge_context` mirrors the same branch so the tap-to-expand prose matches. Unlike the hitter version, `pitcher_regression_badge`/`_pitcher_badge_context` render ONE glyph for one row (not a badge list), so the standalone case lives as an early-return branch rather than a parallel append.
-- **Digest sites (all pass `idx_recent=best_recent_p`):** Pitcher Recent Form (`r["srow"]`), Today's MLB Games (`build_todays_games_section`'s new `idx_recent_p` param), Weekly Game Plan, My Upcoming Starts + FA SP (appended to the `start_badges`/`pickup_badges` list beside QS/5K+/⚠), My Relief Pitchers + FA RP (name cell), Positional Breakdown (pitcher branch, both the starter and top-FA cells). Tap-to-expand explained in `_sp_badge_context` (SP sites) and `_pitcher_badge_context` (the shared score-breakdown panel, now also threaded `idx_recent` so its prose never disagrees with the glyph). **Dashboard sites (pass `ctx["best_recent_p"]`):** My Pitching (`_reg_chip8`, 8px, updated with its own inline hollow/solid split), FA Radar SP+RP, Weakest Spots (pitcher rows) — `build_context` calls `compute_xera_offset` so `_XERA_OFFSET` is set there too. **Feeds Trade Radar/Trade Lab/Pending Trades** (`_tsell`/`_tbuy` for pitchers AND hitters — `_trade_player_line` and dashboard's `render_trade_radar` both now check `hitter_recency_flag`/`pitcher_recency_flag` against `best_recent_h`/`best_recent_p` before choosing solid vs hollow, same rule as everywhere else). **When adding a pitcher surface**, drop `pitcher_regression_badge(row, idx_recent=best_recent_p)` after the name (best on a YEAR/season row — the flag needs season ERA vs xERA) — omitting `idx_recent` still works but always renders the hollow, unconfirmed `▽`.
+- **Digest sites (all pass `idx_recent=best_recent_p`):** Pitcher Recent Form (`r["srow"]`), Today's MLB Games (`build_todays_games_section`'s new `idx_recent_p` param), Action Plan, My Upcoming Starts + FA SP (appended to the `start_badges`/`pickup_badges` list beside QS/5K+/⚠), My Relief Pitchers + FA RP (name cell), Positional Breakdown (pitcher branch, both the starter and top-FA cells). Tap-to-expand explained in `_sp_badge_context` (SP sites) and `_pitcher_badge_context` (the shared score-breakdown panel, now also threaded `idx_recent` so its prose never disagrees with the glyph). **Dashboard sites (pass `ctx["best_recent_p"]`):** My Pitching (`_reg_chip8`, 8px, updated with its own inline hollow/solid split), FA Radar SP+RP, Weakest Spots (pitcher rows) — `build_context` calls `compute_xera_offset` so `_XERA_OFFSET` is set there too. **Feeds Trade Radar/Trade Lab/Pending Trades** (`_tsell`/`_tbuy` for pitchers AND hitters — `_trade_player_line` and dashboard's `render_trade_radar` both now check `hitter_recency_flag`/`pitcher_recency_flag` against `best_recent_h`/`best_recent_p` before choosing solid vs hollow, same rule as everywhere else). **When adding a pitcher surface**, drop `pitcher_regression_badge(row, idx_recent=best_recent_p)` after the name (best on a YEAR/season row — the flag needs season ERA vs xERA) — omitting `idx_recent` still works but always renders the hollow, unconfirmed `▽`.
 
-### Recommended-move clipboard badge (📋, `_move_badge`) — cross-references Week-at-a-Glance / Weekly Game Plan onto every other player table
+### Recommended-move clipboard badge (📋, `_move_badge`) — cross-references Week-at-a-Glance / Action Plan onto every other player table
 `_move_badge(name, move_registry)` (send_digest.py) → a `TAN`-colored (`#c19a6b`, its own reserved hue) clipboard chip via `_hit_badge`, or `""` when the player isn't involved in anything. Purely informational — never touches a score, ranking, or the drop/eligibility logic in the section above; it only flags that a player is ALSO named somewhere else.
-- **`move_registry` is `{PlayerName: [reason, ...]}`**, built once in `build_email` from two structured return values: `_roster_suggestion` and `build_game_plan` each now return `(html, moves)` instead of just `html` — `moves` is a list of `{"name": PlayerName, "reason": str}` records for every add AND every drop they name (populated inside `_move_tail`/`_build_cards`, right where each function already resolves its own drop — not re-parsed from the rendered HTML). `build_email` merges both `moves` lists into `move_registry` via `setdefault(...).append(...)`, so a player named by more than one suggestion (e.g. both a Week-at-a-Glance bullet AND a Game Plan card point at the same drop) gets every reason listed in one tooltip.
-- **Computed EARLY, before any player-listing table renders.** `_roster_suggestion`/`build_game_plan` are called once, immediately after `category_classification`/`need_cats` — well before My Upcoming Starts, My RP, Recent Form, or the FA tables build their rows (all of which come later in `build_email`'s code, even though some render earlier in the final HTML via the `top_sections`/`myroster_band`/`transactions_band` assembly lists further down). Their returned HTML (`roster_suggestion`, `game_plan`) is reused unchanged at its original later assembly point — **each function is called EXACTLY ONCE**, since both carry internal `_used_drops`/`slots_left` state; a second call could pick a *different* drop and desync the badge registry from what's actually rendered.
+- **`move_registry` is `{PlayerName: [reason, ...]}`**, built once in `build_email` from two structured return values: `_roster_suggestion` and `build_action_plan` each now return `(html, moves)` instead of just `html` — `moves` is a list of `{"name": PlayerName, "reason": str}` records for every add AND every drop they name (populated inside `_move_tail`/`_build_cards`, right where each function already resolves its own drop — not re-parsed from the rendered HTML). `build_email` merges both `moves` lists into `move_registry` via `setdefault(...).append(...)`, so a player named by more than one suggestion (e.g. both a Week-at-a-Glance bullet AND a Action Plan card point at the same drop) gets every reason listed in one tooltip.
+- **Computed EARLY, before any player-listing table renders.** `_roster_suggestion`/`build_action_plan` are called once, immediately after `category_classification`/`need_cats` — well before My Upcoming Starts, My RP, Recent Form, or the FA tables build their rows (all of which come later in `build_email`'s code, even though some render earlier in the final HTML via the `top_sections`/`myroster_band`/`transactions_band` assembly lists further down). Their returned HTML (`roster_suggestion`, `game_plan`) is reused unchanged at its original later assembly point — **each function is called EXACTLY ONCE**, since both carry internal `_used_drops`/`slots_left` state; a second call could pick a *different* drop and desync the badge registry from what's actually rendered.
 - **Wired at 7 call sites, ALWAYS LAST** among that row's badges (after `inj_tag`, QS/5K+/⚠, regression, hitter tactical, two-start — whatever else fires on that row) so it never competes with a higher-priority signal: My Upcoming Starts, My Relief Pitchers, Pitcher Recent Form, Hitter Recent Form, FA SP, FA RP, FA Hitters. `build_hot_cold_section`/`build_pitcher_hot_cold_section` (separate top-level functions, unlike the inline FA/My-roster tables) take an added `move_registry=None` param threaded from their `build_email` call sites.
 - **`dashboard.py`'s `_roster_suggestion` call was updated to unpack the new tuple** (`roster_sugg, _ = sd._roster_suggestion(...)`) — the dashboard's compact Recommended Moves tile doesn't build its own `move_registry` (no FA/roster tables there to badge).
 - **Tap-to-expand explained via `_move_badge_context(name, move_registry)`** (send_digest.py, next to `_move_badge`) — same predicate, same `move_registry` lookup, so the score panel explains the 📋 chip like every other badge instead of leaving it as tooltip-only. Appended (via `_badge_ctx_wrap`, one line per reason) onto the breakdown string at each of the SAME 7 call sites, always after that site's other badge-context calls (`_sp_badge_context`/`_winprob_context`/etc.) so it reads last in the dropdown too, mirroring its always-last position in the name cell.
