@@ -636,6 +636,9 @@ Per-week head-to-head matchup results for every team. Keys are week numbers as s
 **lineup_efficiency** / **lineup_efficiency_current** (dicts — MY team's daily start/sit audit):
 `week, mode` ("prev"/"current"), `week_dates`, `bench[]` (per stranded hitter: name, slash, R/HR/RBI/SB, `net` correction, and per-day `days[]` with the swap target), `gross`/`net` totals, `blowups[]` (active-slot pitcher meltdowns + drop flag). `lineup_efficiency` is the last completed week (Monday recap); `lineup_efficiency_current` is the in-progress week Mon→yesterday (daily-digest Lineup Watch). Both come from `get_lineup_efficiency`, which reads ESPN's historical per-day lineup via `mRoster?scoringPeriodId=<day>`.
 
+**player_news** (dict — `{player_key: [{headline, story, published, type}, ...]}`):
+The per-player ESPN app news blurbs (a scratched lineup, an IL move, a closer-role change, Rotowire game recaps) for my roster + the top-owned free agents, from ESPN's public fantasy news feed. Surfaced as a freshness-colored **📰 badge** on player rows (bright = fresh, muted = old), the latest headlines inside each **tap-to-expand score breakdown**, fresh availability/role items in **Roster Alerts** + the email's **⚡ Act today** list, and a scrollable **Player News** tile on the dashboard.
+
 ---
 
 ## Player Name Patches

@@ -140,6 +140,7 @@ def build_data(snap, my_team):
     # Scoring calibration + percentile pools + recent-form indexes — the SAME shared
     # send_digest helpers build_email uses, so every number (incl. _tval) matches.
     hit_pctile, pit_pctile = sd.prepare_scoring(pitchers, hitters)
+    sd.set_player_news(snap.get("player_news", {}))   # per-run news map baked into serialized dropdown prose
     idx = sd.build_recent_indexes(pitchers, hitters,
                                   snap.get("recent_pitching", []), snap.get("recent_hitting", []))
     best_recent_p, best_recent_h = idx["best_recent_p"], idx["best_recent_h"]

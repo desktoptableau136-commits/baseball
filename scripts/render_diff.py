@@ -46,7 +46,19 @@ RENDERS = [
 
 def _normalize(text):
     # Trade Lab bakes a per-render build timestamp into DATA.
-    return re.sub(r'"builtAt":\s*"[^"]*"', '"builtAt":"X"', text)
+    text = re.sub(r'"builtAt":\s*"[^"]*"', '"builtAt":"X"', text)
+    # Player-news ages ("13h ago") + the freshness pill/hex colors are computed relative to
+    # wall-clock now, so two renders seconds apart legitimately differ when an item ticks past
+    # an hour or a 24h/72h color boundary. Neutralize them so a real refactor diff still shows.
+    #  (a) the whole 📰 row-badge span (its title carries the age, its pill rgba the freshness):
+    text = re.sub(r'<span title="Recent news[^>]*>&#128240;</span>', 'NB', text)
+    #  (b) the dropdown age span (freshness hex + age text):
+    text = re.sub(r'<span style="color:#[0-9a-fA-F]{6};">&middot; (?:\d+[hd] ago|just now)</span>',
+                  'DAGE', text)
+    #  (c) any remaining bare age text (Roster Alerts / dashboard tile plain spans):
+    text = re.sub(r'\b\d+[hd] ago\b', 'AGE', text)
+    text = re.sub(r'\bjust now\b', 'AGE', text)
+    return text
 
 
 def _render():

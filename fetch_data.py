@@ -1038,6 +1038,111 @@ def get_pending_trades(league, my_team_name) -> list:
         return []
 
 
+# â”€â”€ PLAYER NEWS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ESPN's public fantasy news feed -- the per-player blurbs shown in the app ("X is not in
+# the lineup Friday", "moved to the closer role", Rotowire game recaps) -- lives at a
+# PUBLIC endpoint (no espn_s2/SWID cookies), DISTINCT from both the fantasy injuryStatus
+# enum and the MLB injuries API. It is ONE request PER PLAYER, so the pull is SCOPED to my
+# roster + the top-owned free agents: recommended pickups are almost always high-ownership,
+# so this covers the digest's FA suggestions without replicating its scoring in the fetch
+# layer. Threaded so ~85 players resolve in a few seconds. Keyed by _name_key so it joins
+# the same accent/suffix-insensitive way as every other merge. Broad try/except at every
+# level -> {} so a news outage never blocks the snapshot write (same discipline as
+# get_pending_trades / fetch_todays_games). Population-limited (not every player has news),
+# so it is deliberately NOT a data_coverage.py metric.
+_NEWS_FA_POOL      = 50    # top-N free agents (by % owned) to fetch news for, beside my roster
+_NEWS_PER_PLAYER   = 4     # news items kept per player (newest first)
+_NEWS_MAX_AGE_DAYS = 21    # drop items older than this so the snapshot stays lean
+_NEWS_STORY_CHARS  = 400   # trim the Rotowire body to keep the snapshot small
+_NEWS_WORKERS      = 8
+_NEWS_URL = ("https://site.web.api.espn.com/apis/fantasy/v2/games/flb/"
+             "news/players?playerId={pid}&limit={limit}")
+
+
+def _fetch_one_player_news(pid) -> list:
+    """Fetch + trim ONE player's news feed. Returns a list (newest first) or []. Catches its
+    own exceptions so a single bad player can never abort the ThreadPoolExecutor map."""
+    try:
+        resp = requests.get(_NEWS_URL.format(pid=pid, limit=_NEWS_PER_PLAYER),
+                            headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
+        resp.raise_for_status()
+        feed = (resp.json() or {}).get("feed") or []
+    except Exception:
+        return []
+    cutoff = datetime.now(timezone.utc) - timedelta(days=_NEWS_MAX_AGE_DAYS)
+    items = []
+    for it in feed:
+        pub = (it.get("published") or "").strip()
+        # Normalize the trailing ...Z so datetime.fromisoformat parses on every Python.
+        pub_iso = pub.replace("Z", "+00:00") if pub else ""
+        try:
+            if pub_iso and datetime.fromisoformat(pub_iso) < cutoff:
+                continue
+        except Exception:
+            pass
+        head = (it.get("headline") or "").strip()
+        if not head:
+            continue
+        # Drop ESPN's editorial roundup columns ("Fantasy baseball lineup advice for Friday: ...",
+        # "Fantasy baseball closer stock watch: ...") -- they land in a player's feed when he's
+        # merely mentioned, but they aren't player-specific news, so they'd just clutter the
+        # dropdown / trip the row badge without saying anything about THIS player.
+        if head.lower().startswith("fantasy baseball "):
+            continue
+        story = (it.get("story") or it.get("description") or "").strip()
+        if len(story) > _NEWS_STORY_CHARS:
+            story = story[:_NEWS_STORY_CHARS].rstrip() + "..."
+        items.append({
+            "headline":  head,
+            "story":     story,
+            "published": pub_iso,      # ISO-8601 UTC; readers compute age at READ time
+            "type":      (it.get("type") or "").strip(),   # source, e.g. "Rotowire"
+        })
+    items.sort(key=lambda x: x["published"], reverse=True)
+    return items[:_NEWS_PER_PLAYER]
+
+
+def fetch_player_news(league, my_team_name) -> dict:
+    """Player news blurbs for MY roster + the top-owned free agents, keyed by _name_key.
+    See the section header for scope/threading/degradation rationale. The news endpoint keys
+    on ESPN playerId, so targets are built from the `league` roster/FA objects (which carry
+    playerId) rather than the name-keyed pitcher/hitter rows. Broad try/except -> {}."""
+    try:
+        from concurrent.futures import ThreadPoolExecutor
+
+        targets = {}  # pid -> name (dedup by pid; a two-way player resolves once)
+        my_key = " ".join((my_team_name or "").split())
+        for tm in league.teams:
+            if " ".join((tm.team_name or "").split()) == my_key:
+                for pl in tm.roster:
+                    if getattr(pl, "playerId", None):
+                        targets[pl.playerId] = pl.name
+        try:
+            for fa in league.free_agents(size=_NEWS_FA_POOL):
+                if getattr(fa, "playerId", None):
+                    targets.setdefault(fa.playerId, fa.name)
+        except Exception:
+            pass
+        if not targets:
+            return {}
+
+        pids = list(targets)
+        with ThreadPoolExecutor(max_workers=_NEWS_WORKERS) as ex:
+            results = list(ex.map(_fetch_one_player_news, pids))
+
+        out = {}
+        for pid, items in zip(pids, results):
+            if not items:
+                continue
+            key = _name_key(targets[pid])
+            if key and key not in out:   # first (single-mapping) name wins; never overwrite
+                out[key] = items
+        return out
+    except Exception as e:
+        log(f"fetch_player_news failed: {e}")
+        return {}
+
+
 # â”€â”€ PITCHER PIPELINE â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 # ESPN proTeam abbrev (from PRO_TEAM_MAP, e.g. 'ChW'/'Oak') -> the UPPERCASE abbrev the logo
@@ -2513,6 +2618,11 @@ def main():
     _n_inj = sum(1 for r in pitchers + hitters if r.get("InjuryBodyPart"))
     print(f"       {len(_inj_notes)} injured MLB players; detail attached to {_n_inj} rows")
 
+    print("       Fetching player news (my roster + top-owned free agents)...")
+    player_news = fetch_player_news(league, my_team)
+    _n_news_items = sum(len(v) for v in player_news.values())
+    print(f"       {len(player_news)} players with news ({_n_news_items} items)")
+
     # Roster caps: pulled straight from ESPN's league settings (lineupSlotCounts), NOT
     # inferred from any team's current fullness. The old max(per-team total) heuristic had
     # two bugs: (a) it double-counted two-way players -- Ohtani gets a row in BOTH pitchers
@@ -2561,6 +2671,7 @@ def main():
         "lineup_efficiency_current": lineup_efficiency_current,
         "todays_games":              todays_games,
         "pending_trades":            pending_trades,
+        "player_news":               player_news,
     }
 
     # Validate the reader contract BEFORE persisting -- a broken snapshot fails LOUD here

@@ -56,6 +56,7 @@ def build_context(snap, my_team):
     # Scoring calibration + percentile pools + recent-form indexes + claimed set —
     # the SAME shared send_digest helpers build_email uses, so every number matches.
     hit_pctile, pit_pctile = sd.prepare_scoring(pitchers, hitters)
+    sd.set_player_news(snap.get("player_news", {}))   # per-run news map (Latest News tile + dropdowns)
     idx = sd.build_recent_indexes(pitchers, hitters, recent_pitching, recent_hitting)
     rec_p, rec_h, p15 = idx["rec_p"], idx["rec_h"], idx["p15"]
     best_recent_p, best_recent_h = idx["best_recent_p"], idx["best_recent_h"]
@@ -146,6 +147,7 @@ def build_context(snap, my_team):
         matchup_period_days=matchup_period_days, week_end_str=week_end_str, is_sunday=is_sunday,
         n_hot=n_hot, n_cold=n_cold, refreshed_at=snap.get("refreshed_at", ""),
         todays_games=snap.get("todays_games", []),
+        news=sd.roster_news_alerts(pitchers, hitters, my_team),   # fresh availability/role news for the Player News tile
     )
 
 
@@ -587,6 +589,7 @@ def render_pitching(ctx):
                        f'background:rgba({"34,197,94" if _bb_flag=="bounceback" else "239,68,68"},0.12);'
                        f'border:1px solid rgba({"34,197,94" if _bb_flag=="bounceback" else "239,68,68"},0.35);'
                        f'border-radius:3px;padding:0 3px;vertical-align:middle;">{_bb_glyph}</span>')
+        badges += sd._news_badge(r.get("PlayerName", ""))   # 📰 freshness-colored news flag
         rows.append(
             f'<div style="display:flex;justify-content:space-between;gap:6px;padding:2px 0;white-space:nowrap;border-bottom:1px solid {BORDER};">'
             f'<span style="overflow:hidden;text-overflow:ellipsis;">{sd.team_logo(r.get("Team"), 14)}<span style="color:{TEXT};font-weight:600;">{r.get("PlayerName")}</span>{two} '
@@ -898,6 +901,31 @@ def render_moves(ctx):
     return _tile("Recommended Moves", "".join(rows), flex=0.85)
 
 
+def render_news(ctx):
+    """Compact Player News tile — the freshest availability/role headlines for my roster (the
+    SAME sd.roster_news_alerts feed as the digest Briefing + Roster Alerts). Returns '' when
+    there's no actionable news, so the tile collapses cleanly like Today's Games. The tile body
+    clips (overflow:hidden) to the rows that fit — no page scroll."""
+    news = ctx.get("news") or []
+    if not news:
+        return ""
+    rows = []
+    for na in news:
+        age = sd._news_age_str(na.get("published"))
+        age_html = (f'<span style="color:{MUTED};font-size:9px;margin-left:4px;">{age}</span>'
+                    if age else "")
+        rows.append(
+            f'<div style="padding:3px 0;border-bottom:1px solid {BORDER};font-size:11px;line-height:1.35;">'
+            f'<span style="color:{ACCENT};">&#128240;</span> '
+            f'<strong style="color:{TEXT};">{na.get("name","")}</strong> '
+            f'<span style="color:{sd.SILVER};">{na.get("headline","")}</span>{age_html}</div>'
+        )
+    # Scroll in-panel (one of the dashboard's few scroll regions, like Trade Radar / Lineup
+    # Watch) so every news item is reachable without clipping — the tile keeps its fixed height.
+    body = f'<div style="height:100%;overflow-y:auto;">{"".join(rows)}</div>'
+    return _tile("Player News", body, flex=0.8, sub="latest availability & role news")
+
+
 def render_fa_radar(ctx):
     def spline(r, sc, extra, badges=""):
         return (f'<div style="display:flex;justify-content:space-between;gap:6px;white-space:nowrap;padding:2px 0;border-bottom:1px solid {BORDER};">'
@@ -912,11 +940,13 @@ def render_fa_radar(ctx):
         _l15 = (ctx["p15"].get(r.get("PlayerName", "")) or ctx["rec_p"].get(r.get("PlayerName", ""), {})).get("ERA")
         parts.append(spline(r, r.get("_score", 0), f'{_n(r.get("ERA")):.2f} ERA &middot; QS{qs}%',
                             badges=sd.blowup_badge(r, _l15) + sd.pitcher_regression_badge(r, idx_recent=ctx["best_recent_p"])
-                            + sd.pitcher_bounceback_badge(r, idx_recent=ctx["best_recent_p"]) + sd.siera_regression_badge(r)))
+                            + sd.pitcher_bounceback_badge(r, idx_recent=ctx["best_recent_p"]) + sd.siera_regression_badge(r)
+                            + sd._news_badge(r.get("PlayerName", ""))))
     parts.append(hdr("Relievers"))
     for r in ctx["fa_rp"][:2]:
         parts.append(spline(r, r.get("_rp_score", 0), f'{int(_n(r.get("ESPN_SVHD")) or _n(r.get("SVHD")))} SV+H &middot; {_n(r.get("ERA")):.2f}',
-                            badges=sd.pitcher_regression_badge(r, idx_recent=ctx["best_recent_p"])))
+                            badges=sd.pitcher_regression_badge(r, idx_recent=ctx["best_recent_p"])
+                            + sd._news_badge(r.get("PlayerName", ""))))
     parts.append(hdr("Hitters"))
     for r in ctx["fa_hit"][:2]:
         parts.append(spline(r, r.get("_score", 0), f'{_fv(_n(r.get("OPS")),3)} OPS', badges=sd.hitter_badges(r, ctx["hit_pctile"], idx_recent=ctx["best_recent_h"])))
@@ -1103,6 +1133,7 @@ def build_dashboard(snap, my_team):
     t_fa     = render_fa_radar(ctx)
     t_season = render_season(ctx)
     t_trade  = render_trade_radar(ctx)
+    t_news   = render_news(ctx)   # '' when no actionable roster news → column stays 3 tiles
 
     # Desktop 3-col: col1 = Pulse + Weakest Spots/Lineup, col2 = Pitching·Hitting·Trade
     # Radar (Trade Radar took the Opponent This Matchup slot per user preference — opponent
@@ -1112,7 +1143,9 @@ def build_dashboard(snap, my_team):
     # so col1 stays a 3-tile column like the others; '' (no games) collapses cleanly.
     col1 = f'<div class="col">{t_tv}{t_pulse}{t_holes}</div>'
     col2 = f'<div class="col">{t_pitch}{t_hit}{t_trade}</div>'
-    col3 = f'<div class="col">{t_moves}{t_fa}{t_season}</div>'
+    # Player News rides with the actionable roster tiles (Moves) at the top of col3; it's ''
+    # when there's no fresh availability/role news, so the column reverts to 3 tiles cleanly.
+    col3 = f'<div class="col">{t_moves}{t_news}{t_fa}{t_season}</div>'
     grid_desktop = f'<div id="grid">{col1}{col2}{col3}</div>'
 
     # Tablet 2-col, HEIGHT-BALANCED: left = Pulse · Moves · FA; right =
@@ -1120,7 +1153,7 @@ def build_dashboard(snap, my_team):
     # tiles (Pulse + Weakest Spots) sit one-per-column so the columns end at roughly the
     # same height. Season rides 2nd-to-last in the right column, just above the Key panel
     # (per user preference). On a phone the two columns stack top-to-bottom.
-    colt_l = f'<div class="colt">{t_tv}{t_pulse}{t_moves}{t_fa}</div>'
+    colt_l = f'<div class="colt">{t_tv}{t_pulse}{t_moves}{t_news}{t_fa}</div>'
     colt_r = f'<div class="colt">{t_pitch}{t_hit}{t_holes}{t_trade}{t_season}{render_legend_panel()}</div>'
     grid_tablet = f'<div id="gridt">{colt_l}{colt_r}</div>'
 

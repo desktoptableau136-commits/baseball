@@ -114,6 +114,131 @@ def _injury_context(r):
             f'&#129657; Injury: <span style="color:{TEXT};">{txt}</span>{detail_html}</div>')
 
 
+# ── PLAYER NEWS ──────────────────────────────────────────────────────────────
+# The per-player ESPN app news blurbs ("out of the lineup Friday", role changes, Rotowire
+# recaps), fetched into snapshot['player_news'] keyed by _name_key (see docs/fetch_pipeline).
+# Installed per-run into this module-level map by set_player_news -- mutated IN PLACE (never
+# rebound) so the send_digest facade's `from fantasy.analytics import *` binding tracks it
+# across the module boundary, the SAME load-bearing global-state discipline the scoring
+# calibration dicts use. _news_context reads it in the tap-to-expand dropdown; the digest's
+# actionable-news classifier lives in send_digest (it drives the Briefing + Roster Alerts).
+_PLAYER_NEWS = {}          # _name_key -> [ {headline, story, published, type}, ... ]
+_NEWS_CTX_MAX = 3          # headlines shown in the score-pill dropdown
+# Freshness tiers (hours) — drive BOTH the row-badge color and the dropdown age color, so
+# "fresh vs old" reads the same everywhere: bright ACCENT when hot off the wire, SILVER for
+# recent, MUTED once it's aging. A row badge is suppressed entirely past _NEWS_BADGE_MAX_HOURS.
+_NEWS_FRESH_HOURS     = 24
+_NEWS_RECENT_HOURS    = 72
+_NEWS_BADGE_MAX_HOURS = 168   # 7 days — older than this and the row 📰 badge stops showing
+
+
+def set_player_news(news):
+    """Install the per-run player-news map (from snapshot['player_news']). Call ONCE at the
+    top of every snapshot reader (build_email / dashboard.build_context / trade_lab.build_data)
+    before any score breakdown renders. In-place clear+update so the facade star-import binding
+    tracks it -- do NOT rebind _PLAYER_NEWS."""
+    _PLAYER_NEWS.clear()
+    if isinstance(news, dict):
+        _PLAYER_NEWS.update(news)
+
+
+def player_news_for(name):
+    """The raw news list for a player name (via _name_key), or [] -- the shared accessor so
+    send_digest's Briefing / Roster Alerts read the SAME map _news_context renders from."""
+    return _PLAYER_NEWS.get(_badge_name_key(name or "")) or []
+
+
+def _news_hours(published):
+    """Age of an ISO-UTC stamp in hours (read-time relative), or None if missing/unparseable."""
+    if not published:
+        return None
+    try:
+        dt = datetime.fromisoformat(published)
+    except Exception:
+        return None
+    now = datetime.now(dt.tzinfo) if dt.tzinfo else datetime.now()
+    secs = (now - dt).total_seconds()
+    return secs / 3600.0 if secs >= 0 else 0.0
+
+
+def _news_age_str(published):
+    """Relative age of an ISO-UTC timestamp ('3h ago' / '2d ago'), computed at READ time so an
+    old snapshot under --no-refresh still ages correctly. '' on a missing/unparseable stamp."""
+    hrs = _news_hours(published)
+    if hrs is None:
+        return ""
+    if hrs < 1:
+        return "just now"
+    if hrs < 24:
+        return f"{int(hrs)}h ago"
+    return f"{int(hrs // 24)}d ago"
+
+
+def _news_freshness_color(hrs):
+    """Color for a news age (hours) — bright ACCENT when fresh (<=24h, or unknown-but-present),
+    SILVER when recent (<=72h), MUTED once older. Shared by the row badge + the dropdown age."""
+    if hrs is None or hrs <= _NEWS_FRESH_HOURS:
+        return ACCENT
+    if hrs <= _NEWS_RECENT_HOURS:
+        return SILVER
+    return MUTED
+
+
+def _news_badge(name):
+    """A small 📰 row glyph flagging that a player has recent news, COLORED BY FRESHNESS (bright
+    ACCENT <=24h, SILVER <=72h, MUTED beyond) via a tinted pill border/background -- an emoji
+    glyph ignores CSS text color, so freshness rides the pill, not the icon. '' when the player
+    has no news within _NEWS_BADGE_MAX_HOURS or the map is empty. Reads the SAME per-run
+    _PLAYER_NEWS map _news_context renders from, so a badged row always has dropdown detail.
+    Rendered as the last informational badge on a row (before the 📋 move badge)."""
+    if not _PLAYER_NEWS:
+        return ""
+    items = _PLAYER_NEWS.get(_badge_name_key(name or ""))
+    if not items:
+        return ""
+    hrs = None
+    for it in items:                       # freshest item drives the color
+        h = _news_hours(it.get("published"))
+        if h is not None:
+            hrs = h if hrs is None else min(hrs, h)
+    if hrs is not None and hrs > _NEWS_BADGE_MAX_HOURS:
+        return ""
+    col = _news_freshness_color(hrs)
+    rr, gg, bb = int(col[1:3], 16), int(col[3:5], 16), int(col[5:7], 16)
+    age = _news_age_str(items[0].get("published")) or "recent"
+    tip = f"Recent news ({age}) &mdash; tap the score for details"
+    return (f' <span title="{tip}" style="font-size:9px;vertical-align:middle;padding:0 3px;'
+            f'border-radius:3px;border:1px solid rgba({rr},{gg},{bb},0.55);'
+            f'background:rgba({rr},{gg},{bb},0.14);">&#128240;</span>')
+
+
+def _news_context(r):
+    """Latest news blurbs for the tap-to-expand score panel -- the same ESPN app notes, read
+    from the per-run _PLAYER_NEWS map keyed by _badge_name_key. Sits beneath _injury_context.
+    '' when the player has no news (the common case) or news wasn't fetched (empty map). The
+    age is FRESHNESS-COLORED (bright ACCENT fresh -> MUTED old), matching the row 📰 badge."""
+    if not _PLAYER_NEWS:
+        return ""
+    items = _PLAYER_NEWS.get(_badge_name_key(r.get("PlayerName", "")))
+    if not items:
+        return ""
+    rows = []
+    for it in items[:_NEWS_CTX_MAX]:
+        head = (it.get("headline") or "").strip()
+        if not head:
+            continue
+        hrs = _news_hours(it.get("published"))
+        age = _news_age_str(it.get("published"))
+        age_html = (f' <span style="color:{_news_freshness_color(hrs)};">&middot; {age}</span>'
+                    if age else '')
+        rows.append(f'<div style="margin-top:4px;color:{SILVER};">&#128240; {head}{age_html}</div>')
+    if not rows:
+        return ""
+    return (f'<div style="margin-top:6px;">'
+            f'<span style="color:{MUTED};font-size:11px;text-transform:uppercase;letter-spacing:.05em;">'
+            f'Latest news</span>' + "".join(rows) + '</div>')
+
+
 def team_category_ranks(roto_rows):
     """{team_key: {cat: rank}}, n_teams — rank 1 = best in that category. Generalizes
     category_ranks (which returns my team only) to EVERY team, for Trade Radar. Same
@@ -497,7 +622,9 @@ def hitter_badges(row, hit_pctile=None, cap=None, regression=True, idx_recent=No
                     f"before it's shown up enough in his season totals to trip a season-level sell signal. "
                     f"Early skill-trend read, not yet a season call."))
 
-    return "".join(badges[:cap])
+    # News flag is appended AFTER the cap slice so it always shows (like the row's move badge) —
+    # it isn't a tactical badge competing for the cap, it's a "there's news here" affordance.
+    return "".join(badges[:cap]) + _news_badge(row.get("PlayerName", ""))
 
 
 def _pitcher_skill_context(row):
@@ -864,6 +991,7 @@ def _hitter_score_breakdown(r, idx_recent=None, hit_pctile=None):
         html += f'<div style="margin-top:6px;color:{MUTED};">{line}</div>'
     html += _hit_badge_context(r, hit_pctile, idx_recent=idx_recent)
     html += _injury_context(r)
+    html += _news_context(r)
     return html
 
 
@@ -898,6 +1026,7 @@ def _pitcher_score_breakdown(r, idx_recent=None):
             + f'<div style="margin-top:4px;">{narr}</div>')
     html += _pitcher_badge_context(r, idx_recent)
     html += _injury_context(r)
+    html += _news_context(r)
     return html
 
 
